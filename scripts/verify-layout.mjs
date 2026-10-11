@@ -7103,6 +7103,130 @@ function contrastRatio(fg, bg) {
   if (made?.id) await cmd('delete_folder', { id: made.id });
 }
 
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForTimeout(900);
+
+  const targets = await p.evaluate(() => {
+    const out = [];
+    const shown = (el) => {
+      for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) return false;
+      }
+      return true;
+    };
+    const diag = (el, r) => {
+      const chain = [];
+      for (let n = el; n && n !== document.documentElement && chain.length < 4; n = n.parentElement) {
+        chain.push(`${n.tagName.toLowerCase()}.${String(n.className).split(' ')[0]}@${getComputedStyle(n).opacity}`);
+      }
+      const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+      return { chain, hit: hit ? `${hit.tagName.toLowerCase()}.${String(hit.className).split(' ')[0]}` : 'none' };
+    };
+    for (const el of document.querySelectorAll('button, [role="button"], input[type="button"]')) {
+      const r = el.getBoundingClientRect();
+      if (r.width < 20 || r.height < 20) continue;
+      if (r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth) continue;
+      if (!shown(el)) continue;
+      const disabled = (el instanceof HTMLButtonElement && el.disabled) || el.getAttribute('aria-disabled') === 'true';
+      // **选中态优先**：`.nav-btn:hover` 与 `.nav-btn[data-active='true']` 同权重（0,2,0），
+      // 后写的选中态赢 ⇒ 当前选中的那一行 hover 不闪是设计如此（第十三批按实复核过）。
+      // 这一格只豁免"此刻正被选中态涂着"的那几颗，并且下面要求**同型未选中**的那颗必须量到变化，
+      // 免得整族被这一条悄悄放走（假豁免是 ㊻ 那一格栽过的地方）。
+      const selected = el.getAttribute('data-active') === 'true' || el.getAttribute('aria-current') != null
+        || el.getAttribute('aria-pressed') === 'true';
+      el.setAttribute('data-ms-probe', String(out.length));
+      out.push({
+        i: out.length,
+        cls: String(el.className).slice(0, 46),
+        testid: el.getAttribute('data-testid'),
+        disabled,
+        selected,
+        box: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) },
+        ...(disabled ? {} : {}),
+      });
+    }
+    // 第三腿的载荷：默认视图里可能一颗禁用按钮都没有（第十三批实测 0 颗）⇒ 注入一颗，
+    // 并让它和"同型但没禁用"的那一对一起量 —— 只改这一位的 disabled 比特，形状不许变。
+    const victim = out.find((t) => !t.disabled && /(^|\s)btn(\s|$)/.test(t.cls));
+    if (victim) {
+      const el = document.querySelector(`[data-ms-probe="${victim.i}"]`);
+      el.disabled = true;
+      // 注入之后**必须回头把这一位标成禁用**：否则它会被正向那条判成"没有悬停反馈"（本轮真这样红过一次），
+      // 而第三腿又数到 0 颗禁用 ⇒ 两腿同时错，且错得像产品缺陷。
+      victim.disabled = true;
+    }
+    const withDiag = out.map((t) => {
+      const el = document.querySelector(`[data-ms-probe="${t.i}"]`);
+      return el ? { ...t, ...diag(el, t.box) } : t;
+    });
+    return { list: withDiag, injected: Boolean(victim) };
+  });
+  const list = targets.list;
+
+  const clipOf = (b) => ({ x: b.x, y: b.y, width: b.width, height: b.height });
+  const away = async () => { await p.mouse.move(4, 4); await p.waitForTimeout(140); };
+  const shots = async (t) => {
+    await away();
+    const a = await p.screenshot({ clip: clipOf(t.box) });
+    const b = await p.screenshot({ clip: clipOf(t.box) });
+    // 落点取左上角往里 6px：行级按钮的中心在 hover 时正是那簇工具的位置（G115 修的就是这一格）
+    const ok = await p.hover(`[data-ms-probe="${t.i}"]`, { position: { x: 6, y: 6 }, timeout: 4000 })
+      .then(() => true)
+      .catch(() => false);
+    await p.waitForTimeout(180);
+    const c = await p.screenshot({ clip: clipOf(t.box) });
+    return { stable: Buffer.compare(a, b) === 0, hovered: ok, changed: Buffer.compare(a, c) !== 0 };
+  };
+
+  const unstable = [];
+  const unreachable = [];
+  const noHover = [];
+  const disabledChanged = [];
+  const exemptSelected = [];
+  const changedByClass = new Set();
+  const measuredByClass = new Set();
+  let measured = 0;
+  for (const t of list) {
+    const r = await shots(t);
+    measured += 1;
+    const who = `${t.testid || t.cls}`;
+    const base = String(t.cls).split(' ')[0];
+    measuredByClass.add(base);
+    if (!r.stable) unstable.push(`${who} ${JSON.stringify(t.chain)}`);
+    else if (!r.hovered) unreachable.push(who);
+    else if (t.disabled && r.changed) disabledChanged.push(`${who} ${JSON.stringify(t.chain)}`);
+    else if (t.selected) { exemptSelected.push(base); if (r.changed) changedByClass.add(base); }
+    else if (!t.disabled && !r.changed) noHover.push(`${who} hit=${t.hit} ${JSON.stringify(t.chain)}`);
+    else changedByClass.add(base);
+  }
+  await away();
+  // 假豁免的守门：被"选中态优先"放走的每一族，必须在这一族**未选中**的兄弟身上真的量到过变化。
+  // 键必须是**基类**（`nav-btn`），不是 testid（`nav-all`）—— 本轮先错过一次，拿 testid 去查
+  // 一个只会有基类的集合，结果守门自己永远红。
+  const exemptUnguarded = [...new Set(exemptSelected)].filter((base) => !changedByClass.has(base));
+
+  check('63 仪器自检：祖先链可见的按钮量到 ≥12 颗、基线两拍逐字节相同、每一颗都 hover 得着，且第三腿真有注入的禁用载荷',
+    measured >= 12 && unstable.length === 0 && unreachable.length === 0 && targets.injected === true,
+    JSON.stringify({ measured, injected: targets.injected, 在动: unstable.slice(0, 4), 点不着: unreachable.slice(0, 4) }));
+  check('63 §4.9 悬停那一格：每一颗可见按钮 hover 之后它那一格的像素必须变（含画在祖先上的那一份）',
+    noHover.length === 0, JSON.stringify(noHover.slice(0, 8)));
+  check('63 §4.9 选中态优先这一条豁免不许变成假豁免：被它放走的每一族，都要在同型未选中的兄弟身上真的量到过变化',
+    exemptUnguarded.length === 0, JSON.stringify({ 放走: exemptSelected.slice(0, 6), 没被同族量过: exemptUnguarded.slice(0, 6) }));
+  check('63 §4.9 禁用优先：禁用那颗（含注入的那一颗）hover 之后不许有变化（钉住 :hover:not(:disabled)）',
+    disabledChanged.length === 0 && list.some((t) => t.disabled) === true,
+    JSON.stringify({ 变了: disabledChanged.slice(0, 6), 禁用颗数: list.filter((t) => t.disabled).length }));
+  notes.push(`     §4.9 悬停像素差实测：祖先链可见的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.disabled).length} 颗，其中注入 1 颗；选中态豁免 ${exemptSelected.length} 颗），无变化 ${noHover.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗`);
+  check('63 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
