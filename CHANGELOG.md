@@ -4305,6 +4305,68 @@ clippy `-D warnings` 0、fmt 干净（新测试首版有两处 rustfmt 漂移，
 
 **这一批只加判据与一条腿 ⇒ 按口径不升版本（产品代码一行没动）。**
 
+### 门禁补强（2026-10-10 第七批）：§1.6 动效纪律第一次有执行者（与 §4.9 的冲突钉成表）+ ㊹ 补 §4.3「不画百分比」+ CI 那两连红落到"读早了"
+
+同一趟完成度审计里剩下的三件事，加一条 CI 上真实挨过的红。
+
+**① §1.6「只动画 transform 与 opacity（GPU 加速）」** —— 这句话**从来没有执行者**，而它与 §4.9
+自己的悬停规格（"底转 `--sunken`"、120ms 过渡表）**字面冲突**：一份要求只动两样，另一份的交互反馈
+本来就要动画底色。按 §1.4 控件高度 vs §5 的 44pt 那条先例办：**把冲突钉成一张表**，选一个两边都成立、
+又挡得住真危险的读法 —— 禁布局几何（`width/height/top/left/right/bottom/inset/margin*/padding*/
+font-size/line-height/letter-spacing/flex-basis/grid-template-*/gap`）以及 `all`（它会把布局属性悄悄
+带进来），允许 `transform/opacity` + §4.9 要的 `background(-color)/border-color/color/filter/box-shadow`。
+新 `apps/desktop/src/motion.spec.ts` 四条腿：仪器自检（文件数下界 **且** `base.css` 真读进了非空字节）、
+被禁的每一条各自一枚合成样本必须被抓（`@keyframes` 块内部同样要抓）、被允许的每一条必须放行
+（名单不能宽到把 §4.9 的悬停反馈也拦下）、真实源码零命中。
+
+**扫描故意不走 vite 的模块管线**（原先写的 `import.meta.glob` + `?raw`）：做变异自证时，同一份磁盘上
+刚追加过的 `base.css`，glob 先返回**旧内容**、再返回**空串** —— 会把"刚改过的文件"读错读空的仪器
+当不了变异证明的证人。改成 `node:fs` 直接读 `src/` 下每个 .vue/.css，读到的就是这一刻磁盘上的字节；
+本项目不装 `@types/node`（现有源码扫描类 spec 一律走 glob 正是因为这个，见 `uiFeedback.spec.ts` 的注释），
+所以补一份**只覆盖用到的三个函数**的最小声明 `src/nodeBuiltins.d.ts`，新增用法要同步扩那张表。
+
+**变异（真文件、两侧）**：追加 `.zz-mutation { transition: width 120ms var(--ease); }` ⇒ vitest
+**rc=1**、命中点名 `{"file":"./styles/base.css","prop":"width"}`（现场留在 `.logs/motion-mutation-red.txt`）；
+反向对照追加 `transition: background-color …` ⇒ **4/4 绿**（不是"多写一行就红"的那种门禁）；
+还原 `sha256` 逐字节一致（`9a4dd1cf…`）。
+
+**② §4.3「默认不画百分比（总字节数后端拿不到，进度事件里恒为 0）」** —— 这句"零出现"的承诺此前没人钉。
+`verify-layout` 腿 ㊹ 加三条，顺序是**先证明读得到、再证明读到的干净**：正对照（注入 `badge=syncing` 之后
+那一格真渲染，`stripText` 读到「正在同步」，否则"没有百分比"量的是空气）⇒ **假百分号自检**（往同步条里
+塞一枚 `37%` ⇒ 必须被看见；撤掉 ⇒ 必须回到干净）⇒ 才判"进度总量恒为 0 时一个 `%` 都不许有、也不许出现
+`0 / 0`"。三条本轮全 PASS（读数 `{"stripText":"正在同步 正在同步"}`、`{"seen":true,"clean":true}`）。
+
+**③ CI 上「Rust 全量」两连红的根因，这次是真读回来的**（`gates` job 的失败递证据通道第一次派上用场：
+两条 commit 评论各 31 KB、`comment_rc=0` —— 以前只能读到"红在哪一步"）。红的是同一条
+`auto_start_sync.rs::configuring_an_account_starts_the_engine_without_a_restart`（run 38033603471 与
+38037517261，同一个载荷形状 `{phase:"provisioning", badge:"offline", pending_ops:0, last_success_at:None}`），
+而夹在中间的 d908e7e 那一跑是绿的 ⇒ 抖动，不是回归。
+
+**先把载荷复现出来再落笔**（临时探针 `.logs/probe-autostart.rs`，本机实测）：`first_zero=6ms`、
+`put_at=2057ms`、`synced_at=2477ms` —— 账户刚注册时 outbox 本来就是 0，所以旧判据那句
+"本地待办要被这一轮**结清**"**从第一拍就是真**；而徽标只在轮次收尾的成功臂里翻面
+（`apply_round_stats`），PUT 已到服务器、徽标还没翻的这个窗口实测约 **420ms**。旧的等待打在
+`pending_ops == 0` 上 = 等了一个恒真的条件，然后在半路快照上断言 `badge == "synced"`：本机 200ms
+的轮询格常常赶得上收尾，CI 慢一档就赶不上。**等错的东西不是抖动，是判据写错**。
+
+**修法**：等的是**徽标自己**落到已同步（30 秒内落不下来照样红，不放宽判据），另在"已同步那一刻"
+补判 `pending_ops == 0`。变异两刀各自打红：`Badge::Synced` 改 `Offline` ⇒ 红在新那条等待，失败消息
+里带着 `{phase:"online", badge:"offline", last_success_at:Some(…)}` —— 这把"读早了"与"永不收尾"分开
+（正是 CI 那两个形状的区别）；`pending_ops: pending + 1` ⇒ 红在第二判（`pending_ops: 1`）。两刀各自还原
+后 `git diff` 为空；修后同一条测试连跑 **5 次 5/5**，还原后再跑 2/2。
+
+**顺带一条环境账**（这次是自己救自己）：跑 lane 前先量现场，发现 `target/debug/notera-cli.exe` 是
+11:48 编的，而 `apply.rs`/`lib.rs` 是 15:16/15:57 —— `cargo build` 当场重编了 notera-net/webdav/host/cli
+（16.29s），证伪了"正在服务的那份就是当前源码"。纪律原文见 [[lane-hygiene-fresh-binary-and-step-interference]]。
+
+**读数**：`pnpm test` **581/581**（含 motion.spec 那 4 条）、`pnpm typecheck` 0 错、`eslint .` 0 项；
+`cargo fmt --all --check` 干净、`clippy --workspace --all-targets` 0；`arch-check` **34/34**（先按 G97
+的看守收了一次残骸：192 项 / 61.0 MB ⇒ 删 7 项 ⇒ 55.5 MB，那条预算守卫才过）；整条 `verify-layout`
+**661 项 PASS / 0 FAIL**（`LANE_RC=0`，`.logs/layout-s51.txt`；658 + ㊹ 新增的 3 条）。
+
+**这一批改的是判据与工装（新增两条 spec 文件、腿 ㊹ 加三条、一条测试的等待条件），产品代码一行没动
+⇒ 按口径不升版本。**
+
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
 
 **结局先说**：这一版把浮层量回了视口（390 与 1440 实测 `inside=true`、腿 52 单跑 5/5），

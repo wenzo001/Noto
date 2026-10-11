@@ -4758,6 +4758,30 @@ function contrastRatio(fg, bg) {
   check('㊹ 回包里缺那两格（对面是个没升级的核心）⇒ 也只能当未知，不许把缺位读成 0',
     legacy.card === true && legacy.backlog === null, JSON.stringify({ card: legacy.card, onScreen: legacy.backlog }));
 
+  // §4.3「默认不画百分比。总字节数后端拿不到（进度事件里恒为 0）」——"零出现"承诺，此前没人钉过。
+  // 仪器两段：① 正对照（正在同步那一格真渲染了，否则"没有百分比"读的是空气）；
+  // ② **假百分号自检**：往同步条里塞一枚 `37%` ⇒ 读取器必须看见；撤掉 ⇒ 必须回到干净。
+  const syncing = await visit({ ...BASE, badge: 'syncing', phase: 'running', progress: { done: 0, total: 0 } }, ACC);
+  const stripText = await syncing.p.evaluate(() => document.querySelector('[data-testid="syncbar"]')?.innerText?.replace(/\s+/g, ' ') ?? '');
+  check('㊹ 仪器自检：正在同步那一格真渲染了（否则下面那条"没有百分比"是空判据）',
+    stripText.includes('正在同步'), JSON.stringify({ stripText: stripText.slice(0, 80) }));
+  const withFake = await syncing.p.evaluate(() => {
+    const bar = document.querySelector('[data-testid="syncbar"]');
+    const span = document.createElement('span');
+    span.id = 'zz-fake-percent';
+    span.textContent = '37%';
+    bar.appendChild(span);
+    const seen = bar.innerText.includes('%');
+    span.remove();
+    return { seen, clean: !bar.innerText.includes('%') };
+  });
+  check('㊹ 仪器自检：塞进去的假百分号必须被看见、撤掉后必须恢复干净（读的是这一格的真文字）',
+    withFake.seen === true && withFake.clean === true, JSON.stringify(withFake));
+  check('㊹ 进度总量恒为 0 时，同步条上一个「%」都不许有（§4.3：默认不画百分比）',
+    !stripText.includes('%') && !/0\s*\/\s*0/.test(stripText), JSON.stringify({ stripText: stripText.slice(0, 120) }));
+  await syncing.p.close();
+  await syncing.c.close();
+
   const allErrors = [seven.errs, zero.errs, noAcc.errs, legacy.errs].flat();
   check('㊹ 这一腿 console error 为零（四种注入形状都不许把界面弄出报错）', allErrors.length === 0, allErrors.slice(0, 3).join(' | '));
 

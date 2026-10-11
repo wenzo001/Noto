@@ -93,15 +93,19 @@ async fn configuring_an_account_starts_the_engine_without_a_restart() {
         log.iter().take(6).map(|r| format!("{} {}", r.method, r.path)).collect::<Vec<_>>()
     );
 
-    // 起跑还不算"有始有终"：本地待办要被这一轮**结清**，否则用户看到的还是"待发操作 N"。
-    let drained = wait_until(30, || app.sync_status().unwrap().pending_ops == 0).await;
+    // 起跑还不算"有始有终"，但**别拿 `pending_ops == 0` 当"结清"**：
+    // 这个场景里账户刚注册、outbox 本来就是 0（探针实测首次读到 t=6ms 就是 0），
+    // 而轮次还停在半路（phase=provisioning、badge=offline）。2026-10-10 CI 两连红
+    // 读的就是这个半路快照：PUT 已到服务器、pending=0，但徽标还没翻面 ——
+    // 本机探针实测这个窗口约 420ms，CI 慢一个量级就会大于 200ms 的轮询格。
+    // 等的是**徽标自己**落到已同步（引擎真的收尾了）；30 秒内落不下来照样红。
+    let synced = wait_until(30, || app.sync_status().unwrap().badge == "synced").await;
     let st = app.sync_status().unwrap();
     assert!(
-        drained,
-        "这一轮要把默认本确认掉，待发操作必须归零：实际 pending_ops={}",
-        st.pending_ops
+        synced,
+        "引擎起跑后 30 秒内徽标没有落到已同步（引擎没收尾或收尾失败）：{st:?}"
     );
-    assert_eq!(st.badge, "synced", "结清之后徽标该落在已同步：{st:?}");
+    assert_eq!(st.pending_ops, 0, "已同步那一刻待发操作必须为零：{st:?}");
 }
 
 #[tokio::test(flavor = "current_thread")]
