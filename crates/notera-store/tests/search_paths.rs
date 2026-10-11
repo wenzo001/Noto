@@ -274,6 +274,38 @@ fn soft_deleted_notes_are_not_searchable_and_purge_shrinks_fts() {
     assert!(store.verify().is_empty(), "{:?}", store.verify());
 }
 
+/// §3.3「搜索不搜回收站」的另一半：上面那条走的是 ≥3 字的 FTS 档，这一条钉的是
+/// ≤2 字的 LIKE 档，以及**给界面那句「还有 N 条」用的 `search_total`** —— 同一子句
+/// 在两处读侧都得分支，否则回收站里的笔记会以"计数"的形式漏回屏幕。
+#[test]
+fn like_path_and_total_also_exclude_trash() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let n = store
+        .create_note(&folder, doc_text("这份讲租约与占用"))
+        .unwrap();
+    // 两字 ⇒ LIKE 档（同 `two_char_cjk_query_must_use_like_fallback_and_return_rows`）
+    assert_eq!(store.search(&SearchQuery::new("租约")).unwrap().len(), 1);
+    assert_eq!(store.search_total("租约", 20).unwrap(), 1, "未删时计数在场");
+
+    store.delete_note(&n.id).unwrap();
+    assert!(
+        store.search(&SearchQuery::new("租约")).unwrap().is_empty(),
+        "LIKE 档也不许搜出回收站里的笔记"
+    );
+    assert_eq!(
+        store.search_total("租约", 20).unwrap(),
+        0,
+        "回收站里的笔记不许把「还有 N 条」抬高"
+    );
+
+    // 正对照：还原之后两条都要重新数得着 —— 否则上面两条靠"查询坏掉永远回 0"就能骗过去
+    store.restore_note(&n.id).unwrap();
+    assert_eq!(store.search(&SearchQuery::new("租约")).unwrap().len(), 1);
+    assert_eq!(store.search_total("租约", 20).unwrap(), 1);
+}
+
 #[test]
 fn limit_and_empty_query_behave() {
     let fx = Fix::new();
