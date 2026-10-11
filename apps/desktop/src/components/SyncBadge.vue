@@ -115,6 +115,13 @@ watch(
   cursor: pointer;
 }
 
+/* §4.9 的悬停那一格：这颗是"点一下去设置里配同步"的真按钮（`cursor: pointer` + 键盘可达），
+   以前只画了默认态 —— 腿 63 的像素仪器量出来的（hover 之后那一格一字不差）。
+   底色走 `--hover`，与侧栏那一行的悬停同一个 token；`:not(:disabled)` 保住禁用那一格。 */
+.syncbar__title:hover:not(:disabled) {
+  background: var(--hover);
+}
+
 .syncbar__glyph {
   width: 16px;
   height: 16px;
