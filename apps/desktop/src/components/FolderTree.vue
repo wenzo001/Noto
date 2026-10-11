@@ -228,7 +228,7 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   gap: var(--sp-2);
   min-height: var(--touch);
   text-align: left;
-  padding: 0 var(--sp-2);
+  padding: 0 var(--sp-4);
   border-radius: var(--r-row);
   color: var(--ink);
   cursor: pointer;
@@ -345,7 +345,7 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
 }
 
 .tree__empty {
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
 }
 
 /* 色板住在 AppPopover 的面板里（绝对定位，不占版面），这里只管排布。

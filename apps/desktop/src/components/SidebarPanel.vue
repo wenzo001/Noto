@@ -163,7 +163,7 @@ function selectTrash(): void {
 
 .section-head {
   justify-content: space-between;
-  padding: var(--sp-3) var(--sp-3) var(--sp-1);
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
   min-height: var(--touch);
 }
 
@@ -178,7 +178,7 @@ function selectTrash(): void {
 .side-nav,
 .side-sync,
 .side-foot {
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   display: flex;
   flex-direction: column;
   gap: var(--sp-1);
@@ -198,7 +198,7 @@ function selectTrash(): void {
 .section-head--sync {
   justify-content: flex-start;
   min-height: 0;
-  padding: var(--sp-3) var(--sp-3) var(--sp-1);
+  padding: var(--sp-3) var(--sp-4) var(--sp-1);
 }
 
 .side-foot {
@@ -207,7 +207,7 @@ function selectTrash(): void {
 
 /* 读数那一行：弱化文字也要 ≥4.5:1（§5），所以用 --body 而不是 --mute。 */
 .side-foot__readout {
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-4);
   font-size: var(--text-xs);
   line-height: 1.5;
   color: var(--body);
@@ -219,7 +219,7 @@ function selectTrash(): void {
   justify-content: space-between;
   gap: var(--sp-2);
   min-height: var(--touch);
-  padding: 0 var(--sp-3);
+  padding: 0 var(--sp-4);
   border-radius: var(--r-card);
   color: var(--ink);
   text-align: left;
@@ -246,14 +246,14 @@ function selectTrash(): void {
 }
 
 .new-folder {
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   display: flex;
   flex-direction: column;
   gap: var(--sp-2);
 }
 
 .side-error {
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   color: var(--danger);
   font-size: var(--text-sm);
 }

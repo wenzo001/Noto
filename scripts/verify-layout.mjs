@@ -6800,6 +6800,94 @@ function contrastRatio(fg, bg) {
   await ctx.close();
 }
 
+/**
+ * 60 §1.2「全局边距规则」第一次被量在屏幕上（此前整条门禁里**一个 padding 都没量过**）。
+ *
+ * 规范给的数：桌面侧栏左右 16px（= `--sp-4`）/ 桌面列表栏左右 16px / 编辑器版心左右 40px（= `--sp-10`）
+ * / 移动端左右 16px。审计量出来三栏的内容实际缩进是 **13px**（1px 边框 + `--sp-3` 12px），
+ * 版心是 **24px**（`--sp-6`）—— 登记为缺口 **G114**，这一刀把它们改回 token 说的数。
+ *
+ * ⚠ **判的是"看得见的缩进"**（内容盒子相对**栏的内边缘**，也就是扣掉那 1px 边框），
+ * 不是"某个元素声明了哪个 padding"：规范那句话的主语是用户能看见的留白，
+ * 而一处缩进常常由两三层加起来（行 padding + 胶囊 padding）。
+ * 侧栏那一格量 `.tree__name` **里面第一个元素**：那颗胶囊是通栏的（盒子左缘贴在栏边上），16px 是它自己的
+ * padding —— 第一版量胶囊本身，读出 0 而红（2026-10-11 实测），那量的不是用户看见的数。
+ *
+ * ⚠ 规范里"移动端搜索框距列表顶 10px"这一句**与它自己的 token 网格冲突**：
+ * `--sp-*` 是 4 的倍数（4/8/12/16/24/32/40/48/64），**没有 10 这一档**。
+ * 按 §1.4 vs §5、§1.6 vs §4.9 的同一条先例办：**把冲突钉成断言**，选 8px（`--sp-2`，也是改之前的实际值），
+ * 并把"必须是 8"写死在这里 —— 谁要真去补一个 off-grid 的 10px，这条会红着要人来裁决。
+ */
+{
+  const insetsAt = async (width, height, openNote) => {
+    const ctx = await browser.newContext({ viewport: { width, height } });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForTimeout(800);
+    if (openNote) {
+      const row = p.locator('[data-testid^="note-row-"]').first();
+      if (await row.count()) { await row.click(); await p.waitForTimeout(600); }
+    }
+    const r = await p.evaluate(() => {
+      const inset = (paneSel, innerSel) => {
+        const pane = document.querySelector(paneSel);
+        const inner = pane?.querySelector(innerSel);
+        if (!pane || !inner) return null;
+        const cs = getComputedStyle(pane);
+        const bl = parseFloat(cs.borderLeftWidth) || 0;
+        const br = parseFloat(cs.borderRightWidth) || 0;
+        const a = pane.getBoundingClientRect();
+        const b = inner.getBoundingClientRect();
+        return { l: Math.round((b.left - a.left - bl) * 10) / 10, r: Math.round((a.right - br - b.right) * 10) / 10 };
+      };
+      const list = document.querySelector('.pane--list');
+      const search = list?.querySelector('[data-testid="search-input"]');
+      const header = list?.querySelector('.pane-header');
+      const scroll = document.querySelector('.editor-scroll');
+      const scs = scroll ? getComputedStyle(scroll) : null;
+      return {
+        folder: inset('.pane--sidebar', '.tree__name span'),
+        listHeader: inset('.pane--list', '.pane-title'),
+        listRow: inset('.pane--list', '[data-testid^="note-row-"] .row-item__title, [data-testid^="note-row-"] .row-item__main'),
+        search: search && list ? Math.round((search.getBoundingClientRect().left - list.getBoundingClientRect().left - (parseFloat(getComputedStyle(list).borderLeftWidth) || 0)) * 10) / 10 : null,
+        searchGap: search && header ? Math.round((search.getBoundingClientRect().top - header.getBoundingClientRect().bottom) * 10) / 10 : null,
+        editorPad: scs ? { l: parseFloat(scs.paddingLeft), r: parseFloat(scs.paddingRight) } : null,
+        gutter: scs ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nb-handle-gutter')) : null,
+      };
+    });
+    await p.close();
+    await ctx.close();
+    return { r, errs };
+  };
+
+  const wide = await insetsAt(1440, 900, true);
+  const narrow = await insetsAt(390, 844, false);
+  check('60 仪器自检：两档都真量到了各栏的内容与版心 padding（量不到就是选择器过期，下面全是空判据）',
+    [wide, narrow].every((x) => x.r.folder && x.r.listHeader && x.r.listRow && x.r.search !== null && x.r.searchGap !== null) && wide.r.editorPad !== null,
+    JSON.stringify({ wide: Object.keys(wide.r), narrow: Object.keys(narrow.r) }));
+  const not16 = [];
+  for (const [tag, x] of [['1440', wide], ['390', narrow]]) {
+    for (const [name, v] of Object.entries({ folder: x.r.folder.l, listHeader: x.r.listHeader.l, listRow: x.r.listRow.l, search: x.r.search })) {
+      if (v !== 16) not16.push(`${tag}/${name}=${v}`);
+    }
+  }
+  check('60 §1.2 三栏内容的可见缩进就是 16px（--sp-4），桌面与移动端同一个数', not16.length === 0, JSON.stringify(not16));
+  check('60 §1.2 编辑器版心左右 40px（--sp-10）；左边那一条另加把手道，是规范里"悬浮控件不遮正文"的落点',
+    wide.r.editorPad.r === 40 && wide.r.editorPad.l === 40 + wide.r.gutter,
+    JSON.stringify({ pad: wide.r.editorPad, gutter: wide.r.gutter }));
+  check('60 §1.2 那句"搜索框距列表顶 10px"与 4 倍数网格冲突，钉在 8px（--sp-2）上：改数要先过这条',
+    narrow.r.searchGap === 8 && wide.r.searchGap === 8,
+    JSON.stringify({ narrow: narrow.r.searchGap, wide: wide.r.searchGap, 规范原句: '移动端…搜索框距列表顶 10px（token 网格无 10 这一档）' }));
+  check('60 右侧缩进与左侧同数（列表行不许一边 16 一边挤掉）',
+    wide.r.listRow.r === 16 && narrow.r.listRow.r === 16,
+    JSON.stringify({ wide: wide.r.listRow.r, narrow: narrow.r.listRow.r }));
+  notes.push(`     全局边距实测：1440 侧栏/列表/搜索/版心 = ${wide.r.folder.l}/${wide.r.listHeader.l}/${wide.r.search}/${wide.r.editorPad.r}px；390 = ${narrow.r.folder.l}/${narrow.r.listHeader.l}/${narrow.r.search}px，搜索框距顶 ${narrow.r.searchGap}px`);
+  const errs60 = [...wide.errs, ...narrow.errs];
+  check('60 这一腿 console error 为零', errs60.length === 0, errs60.slice(0, 2).join(' | '));
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

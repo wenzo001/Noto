@@ -434,7 +434,7 @@ function createFrom(tpl: NoteTemplate): void {
   flex-direction: column;
   justify-content: center;
   gap: var(--sp-1);
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line);
   cursor: pointer;
   box-sizing: border-box;
@@ -577,7 +577,7 @@ function createFrom(tpl: NoteTemplate): void {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   background: var(--canvas);
   border: 1px solid var(--danger);
   border-radius: var(--r-card);
@@ -587,7 +587,7 @@ function createFrom(tpl: NoteTemplate): void {
 }
 
 .list-status {
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   font-size: var(--text-sm);
   color: var(--mute);
   text-align: center;

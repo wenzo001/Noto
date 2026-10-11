@@ -9,7 +9,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   /* 左侧多留一条把手道：悬浮控件和指示线画在这条留白里，不遮正文 */
-  padding: var(--sp-6) var(--sp-6) var(--sp-16) calc(var(--sp-6) + var(--nb-handle-gutter));
+  padding: var(--sp-6) var(--sp-10) var(--sp-16) calc(var(--sp-10) + var(--nb-handle-gutter));
   overscroll-behavior: contain;
 }
 

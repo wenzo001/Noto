@@ -52,7 +52,7 @@ defineExpose({ focus, clear });
   position: relative;
   display: flex;
   align-items: center;
-  padding: var(--sp-2) var(--sp-3);
+  padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
