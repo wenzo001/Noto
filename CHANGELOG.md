@@ -4629,6 +4629,15 @@ MS6 触屏回到悬浮 → §5④（`ink 231 > toolsLeft 115`）。
 导入侧 `pickOpenPath` → `plugin:dialog|open`，真壳那侧的执行者是 `verify-tauri-window.mjs:262`。
 教训按进 memory：**grep 没命中 ≠ 功能不存在**，缺口要写成可反驳的形状再落笔。
 
+**CI 那一红是按下来的（不是"下次再说"）**：`gh run list` 读到上一推（第十二批证据那次，run 38112217400）
+PR 门禁 **failure**，红在"前端单测"那一步。CI 自己递回来的日志正文里是
+`src/syncClickGate.spec.ts:82 · Error: Test timed out in 5000ms`，**用时 5621ms**；
+同一批里 `notePinDot.spec.ts` 那条 4320ms —— 只差 0.7 秒一起红。
+本机同一份代码这两条都在 1 秒内过（vitest 72 文件全绿），耗时全在 `mount(App)` 整机挂载，
+与它们断言的东西无关。默认 5000ms 这个上限**低于 CI 的实测点**，属于环境预算而非判据
+⇒ `vitest.config.ts` 的 `testTimeout` 抬到 20000，断言一字未动，两个实测点按实在注释里。
+（这一条不改产品 ⇒ 不升版本。）
+
 **这一批改的是产品行为（hover 那一簇的遮挡与让位真的变了），按口径升 patch ⇒ 0.0.120。**
 
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
