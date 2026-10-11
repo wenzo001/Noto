@@ -3972,6 +3972,17 @@ function contrastRatio(fg, bg) {
   await page.evaluate(() => document.querySelector('#sec-data')?.scrollIntoView({ block: 'start' }));
   await page.waitForTimeout(300);
 
+  /**
+   * 读"之前有几份"必须等**加载那一格收掉**再读。G118 之后加载中读到的 `rows:0` 是"还没读回来"，
+   * 不是"库里真没有" —— 拿它当基准，下一条"点完恰好多一行"在跑过很多遍的库上必然假红
+   * （G117 今天就是这样红的：`rowsBefore:0 → rows:13`）。等条件，不定长睡。
+   */
+  const settledIn = await page.waitForFunction(
+    () => document.querySelector('[data-testid="backup-loading"]') === null,
+    null,
+    { timeout: 15000 },
+  ).then(() => true).catch(() => false);
+
   const empty = await page.evaluate(() => ({
     shown: document.querySelector('[data-testid="backup-empty"]') !== null,
     failed: document.querySelector('[data-testid="backup-failed"]') !== null,
@@ -3993,6 +4004,8 @@ function contrastRatio(fg, bg) {
       ? (empty.shown === true && empty.failed === false && empty.text.includes('还没有备份'))
       : (empty.shown === false && empty.rows > 0),
     JSON.stringify(empty));
+  check('㊳ 基准是等出来的不是撞上的：读"之前有几份"之前，加载那一格必须已经收掉（G117）',
+    settledIn === true, JSON.stringify({ settledIn, empty }));
 
   /**
    * 点一颗并报告"点到了没有"。为什么不用 `page.click` 直接点：
