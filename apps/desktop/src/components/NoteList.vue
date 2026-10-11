@@ -454,7 +454,9 @@ function createFrom(tpl: NoteTemplate): void {
 }
 
 .row-item__title {
-  font-weight: 650;
+  /* §1.5「列表标题」= 13–15 / 20 / 600（以前是 650）。行高这里保留 1.35（=15×1.35=20.25，
+     在规范那一格的容差内），因为下面那段"折两行"的 max-height 是按 em 算的。 */
+  font-weight: 600;
   font-size: var(--text-base);
   /* 标题：**折两行，两行读不完才截断**（§5「文本不许被静默裁掉」，2026-10-09 拍的形状）。
      以前这一格是 `nowrap + ellipsis + max-height:1.35em` —— 一行装不下就吃掉尾巴，而 ㊻ 看不见它：
@@ -534,6 +536,8 @@ function createFrom(tpl: NoteTemplate): void {
 }
 
 .row-item__meta {
+  /* §1.5「次要 / 元信息」= 11–12 / 16–17 / 400；以前行高继承正文的 1.8 ⇒ 12/21.6。 */
+  line-height: 16px;
   display: flex;
   align-items: center;
   gap: var(--sp-2);

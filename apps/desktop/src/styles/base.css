@@ -259,7 +259,10 @@ button {
   background: var(--canvas);
   color: var(--ink);
   font-size: var(--text-sm);
-  font-weight: 550;
+  /* §1.5「按钮标签」= 12–13 / 20 / 600。以前是 550 + 继承 1.8（渲染 13/23.4/550）。
+     44pt 的触摸下限由上面的 min-height 钉着，改行高不会把目标改小。 */
+  font-weight: 600;
+  line-height: 20px;
   cursor: pointer;
   transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease), transform var(--motion-fast) var(--ease);
 }

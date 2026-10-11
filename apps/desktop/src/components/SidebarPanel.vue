@@ -167,12 +167,17 @@ function selectTrash(): void {
   min-height: var(--touch);
 }
 
+/* §1.5「分组标题」那一格：11 / 16 / 600 + letter-spacing 0.8px（原文抄自
+   docs/design/Noto-界面设计规范.from-share.txt，参考实现同名规则在 tokens.design-v2.css:234）。
+   以前这里是 12px（--text-xs）+ 0.08em + 700，行高继承正文的 1.8 ⇒ 渲染成 12/21.6/700。
+   0.08em 是**会随字号缩放**的写法，规范给的是不缩放的 0.8px。 */
 .section-title {
-  font-size: var(--text-xs);
-  letter-spacing: 0.08em;
+  font-size: var(--text-xxs);
+  line-height: 16px;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
   color: var(--mute);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .side-nav,

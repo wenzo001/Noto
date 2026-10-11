@@ -5868,10 +5868,13 @@ function contrastRatio(fg, bg) {
           && (await p.locator('#sec-attachments [data-testid^="attachment-reupload-"]').count()) === 1,
         JSON.stringify({ rows: got.rows.map((r) => r.name) }));
       check('㊿ 加了按钮，那一行的账还是完整的（体积 / 本机 / 服务器 / 引用数一个不许被挤掉）',
-        got.rows.length === 5 && got.rows[0].meta.includes('800 B') && /本机没有这份/.test(got.rows[0].meta)
-          && /服务器有一份/.test(got.rows[0].meta) && /被 2 篇引用/.test(got.rows[0].meta),
-        JSON.stringify({ meta: got.rows[0].meta }));
-      const metaBefore = got.rows[0].meta;
+        got.rows.length === 5 && (got.rows[0]?.meta ?? '').includes('800 B') && /本机没有这份/.test(got.rows[0]?.meta ?? '')
+          && /服务器有一份/.test(got.rows[0]?.meta ?? '')
+          && /被 2 篇引用/.test(got.rows[0]?.meta ?? ''),
+        JSON.stringify({ meta: got.rows[0]?.meta, rowCount: got.rows.length }));
+      // 上面那条自检已经报红了；这里**不许**因为 rows 是空的就抛 ——
+      // 抛出去会把后面 100 多条读数一起带走（第二遍整跑实测崩在这一点，只剩 592 条）。
+      const metaBefore = got.rows[0]?.meta ?? '';
       await btn('attachment-retry-0').click();
       // 在飞时整列的动作都要按住 —— 一颗按钮连点两下会把同一个意图排两次。
       const inFlight = await p.evaluate(() => Array.from(
@@ -7472,6 +7475,137 @@ function contrastRatio(fg, bg) {
     JSON.stringify({ 变了: disabledChanged.slice(0, 6), 禁用颗数: list.filter((t) => t.dis).length }));
   notes.push(`     §4.9 按下实测：身份寻址的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.dis).length} 颗，其中注入 1 颗），全部进入 :active ${actives} 颗，无变化 ${noDelta.length} 颗，没回位 ${notRecovered.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗`);
   check('65 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
+/**
+ * 66 §1.5 字号与行高那张**角色表** —— 逐角色读渲染后的计算值，不读源码里的声明。
+ *
+ * 这一格的来历（G120，2026-10-11）：审计时发现全工程的字号判据只有两处 —— 腿 56（用户缩放档）
+ * 与腿 ㉕（底栏 10px），而规范 §1.5 那张八行的角色表（文档标题/正文/列表标题/列表摘要/
+ * 次要·元信息/分组标题/按钮标签/底栏标签）**没有任何一格被逐角色量过**。第一批拿源码 grep 猜的是
+ * "12px/0.08em/700"，真去量计算值才发现父元素与子元素读出来完全不同（15/400 vs 12/700）——
+ * **按声明猜 ≠ 按渲染量**（同 [[ui-assert-rendered-geometry-not-dom-presence]]）。
+ * 期望值逐字抄自 `docs/design/Noto-界面设计规范.from-share.txt` §1.5（参考实现在
+ * `docs/design/tokens.design-v2.css:234`），**不由被测 CSS 反推**（[[mutation-test-every-gate]]）。
+ *
+ * 量到之后修掉的漂移（本批同时落）：分组标题 12/21.6/700/0.08em ⇒ **11/16/600/0.8px**；
+ * 按钮标签 13/23.4/550 ⇒ 13/20/600；列表标题 15/20.25/650 ⇒ 600；元信息 12/21.6/400 ⇒ 16px。
+ * 根因是一条 `--leading-body: 1.8` 被所有小字号角色继承 —— 正文（15×1.8=27）刚好落在规范的
+ * 27–28 里，于是这条继承**看起来**无害，而 11–13px 的那些角色全被推高 4–5px，没人量过。
+ *
+ * 五条：① 仪器自检（每个角色都必须真的读到元素，且读得出数值 —— 读不到就是选择器过期）；
+ * ② 桌面五个角色的 size/line-height/weight 都在那一格内，分组标题另钉 letter-spacing；
+ * ③ 390 那一臂钉底栏标签 10/14/400（各端同一张表）；④ **注入正对照**：当场给一颗角色元素
+ *    写上违规字重，同一次扫描必须报红 —— 没有这条，② 可以靠"读到的值永远在范围内"骗过去；
+ * ⑤ console error 为零。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+
+  // 列表摘要只有"有正文的笔记"才画得出来 ⇒ 自己造一条，扫完自己清掉（夹具不许被这一腿堆脏）。
+  // 这里不用别处那条腿里的 `doc()` —— 那个 helper 是**块级作用域**的，在本腿里它不存在。
+  // 形状要 heading + paragraph 两块：只给一个段落时核心把那段当成标题，`summary` 是空的（量过一次），
+  // 于是 `.row-item__snippet` 根本不画，这一格会变成"永远读不到"的死判据。
+  const stamp = String(Date.now()).slice(-6);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [
+        { id: `h66${stamp}`, type: 'heading', attrs: { level: 1 }, content: [{ text: '§1.5量角色' }] },
+        { id: `p66${stamp}`, type: 'paragraph', content: [{ text: '这一段是给列表摘要那一格读的' }] },
+      ],
+    },
+  });
+  const madeId = made?.id ?? made?.note?.id;
+
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await p.waitForTimeout(900);
+
+  const ROLES = [
+    { role: '分组标题', sel: '.section-title', size: [11, 11], lh: [16, 16], weight: 600, ls: [0.8, 0.8] },
+    { role: '列表标题', sel: '.row-item__title', size: [13, 15], lh: [19.5, 20.6], weight: 600 },
+    // 列表摘要这一格有**两种渲染**：浏览态画 `.row-item__summary`（纯文本），搜索命中画
+    // `.row-item__snippet`（带 <mark> 的 v-html）。两条都量过，计算值同一个（13/18.2/400），
+    // 所以选择器写"或"，读到的就是当前那一种 —— 只写其中一个会在另一半静默缺席。
+    { role: '列表摘要', sel: '.row-item__summary, .row-item__snippet', size: [12, 13], lh: [18, 20], weight: 400 },
+    { role: '次要/元信息', sel: '.row-item__meta', size: [11, 12], lh: [16, 17], weight: 400 },
+    { role: '按钮标签', sel: '.btn:not(.btn--icon)', size: [12, 13], lh: [19.5, 20.6], weight: 600 },
+  ];
+  const readRoles = (page) => ROLES.map((r) => page.evaluate((q) => {
+    const el = document.querySelector(q);
+    if (!el) return { q, found: false };
+    const c = getComputedStyle(el);
+    const num = (v) => (v === 'normal' ? NaN : parseFloat(v));
+    return { q, found: true, size: num(c.fontSize), lh: num(c.lineHeight), weight: Number(c.fontWeight), ls: num(c.letterSpacing) };
+  }, r.sel));
+
+  const got = [];
+  const specBad = [];
+  // `ROLES.map(() => page.evaluate(...))` 交出的是**一串 Promise**，而 `await` 一个数组不会等它们落 ——
+  // 少了 Promise.all，读回来五个 Promise，展开成空对象，整条腿会安静地报"没读到元素"。
+  const rows = await Promise.all(readRoles(p));
+  ROLES.forEach((r, i) => {
+    const m = rows[i];
+    got.push({ role: r.role, ...m });
+    if (!m.found) { specBad.push(`${r.role} 没读到元素（${r.sel}）`); return; }
+    if (!(m.size >= r.size[0] && m.size <= r.size[1])) specBad.push(`${r.role} 字号 ${m.size} 不在 ${r.size.join('–')}`);
+    if (!(m.lh >= r.lh[0] && m.lh <= r.lh[1])) specBad.push(`${r.role} 行高 ${m.lh} 不在 ${r.lh.join('–')}`);
+    if (m.weight !== r.weight) specBad.push(`${r.role} 字重 ${m.weight} 应为 ${r.weight}`);
+    if (r.ls && !(m.ls >= r.ls[0] && m.ls <= r.ls[1])) specBad.push(`${r.role} 字距 ${m.ls}px 应为 ${r.ls.join('–')}px`);
+  });
+
+  // ④ 正对照：把分组标题的字重当场写成 700（就是修掉之前的那个值），同一次扫描必须报红。
+  const injected = await p.evaluate(() => {
+    const el = document.querySelector('.section-title');
+    if (!el) return '没有可注入的节点';
+    el.style.fontWeight = '700';
+    return true;
+  });
+  const afterInject = await Promise.all(readRoles(p));
+  const injectCaught = afterInject.some((m, i) => m.found && m.weight !== ROLES[i].weight);
+  await p.evaluate(() => { const el = document.querySelector('.section-title'); el && (el.style.fontWeight = ''); });
+
+  // ③ 390 那一臂：同一张表的底栏标签（§3.5 那一格只有移动端才画）。
+  const nctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const np = await nctx.newPage();
+  await np.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await np.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await np.waitForTimeout(800);
+  const dock = await np.evaluate(() => {
+    const el = document.querySelector('.dock__label');
+    if (!el) return { found: false };
+    const c = getComputedStyle(el);
+    return { found: true, size: parseFloat(c.fontSize), lh: parseFloat(c.lineHeight), weight: Number(c.fontWeight) };
+  });
+  const dockBad = [];
+  if (!dock.found) dockBad.push('底栏标签没读到元素（.dock__label）');
+  else if (dock.size !== 10 || dock.lh !== 14 || dock.weight !== 400) dockBad.push(JSON.stringify(dock));
+
+  if (madeId) { await cmd('delete_note', { id: madeId }); await cmd('purge_note', { id: madeId }); }
+  const residue = await cmd('list_notes', { folderId: null, trash: false });
+  const residueHits = ((residue?.items ?? residue) ?? []).filter((n) => /§1\.5量角色/.test(`${n.title}${n.summary ?? ''}`));
+
+  check('66 仪器自检：五个角色都真读到元素且读得出数值，注入正对照的载荷在场，夹具那一笔记已清干净',
+    got.every((g) => g.found && Number.isFinite(g.size) && Number.isFinite(g.lh) && Number.isFinite(g.weight))
+      && injected === true && injectCaught === true && residueHits.length === 0,
+    JSON.stringify({ got, injected, injectCaught, residue: residueHits.length }));
+  check('66 §1.5 桌面五个角色的字号/行高/字重都在规范那一格内（分组标题另钉 0.8px 字距）',
+    specBad.length === 0, JSON.stringify(specBad));
+  check('66 §1.5 底栏标签在 390 那一臂仍是 10/14/400（同一张表，各端不许各走一套）',
+    dockBad.length === 0, JSON.stringify({ dock, dockBad }));
+  check('66 这一腿的注入正对照必须真的打红过一次 —— 否则第 2 条靠"读到的永远在范围内"就能骗过去',
+    injectCaught === true, JSON.stringify({ injectCaught, after: afterInject.map((m) => m.weight) }));
+  notes.push(`     §1.5 角色实测：${JSON.stringify(got).slice(0, 300)}`);
+  check('66 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await np.close();
+  await nctx.close();
   await p.close();
   await ctx.close();
 }
