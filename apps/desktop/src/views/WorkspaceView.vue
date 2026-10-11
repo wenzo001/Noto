@@ -165,7 +165,7 @@ const folderChoices = computed(() =>
   align-items: center;
   justify-content: center;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: var(--r-chip);
   background: var(--canvas);
   color: var(--body);
   cursor: pointer;

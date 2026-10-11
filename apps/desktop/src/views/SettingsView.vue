@@ -1254,7 +1254,7 @@ function jumpTo(id: string): void {
   margin-top: var(--sp-2);
   padding: var(--sp-3);
   border: 1px solid var(--danger);
-  border-radius: 8px;
+  border-radius: var(--r-card);
   background: var(--canvas);
 }
 

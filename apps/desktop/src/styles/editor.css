@@ -385,7 +385,7 @@
 mark[data-mark='highlight'] {
   background: var(--mark-bg);
   color: var(--ink);
-  border-radius: 2px;
+  border-radius: var(--r-row);
   padding: 0 1px;
 }
 

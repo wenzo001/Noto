@@ -519,7 +519,7 @@ function createFrom(tpl: NoteTemplate): void {
 .row-item__snippet :deep(mark) {
   background: var(--mark-bg);
   color: var(--ink);
-  border-radius: 2px;
+  border-radius: var(--r-row);
 }
 
 .row-item__snippet :deep(b) {
