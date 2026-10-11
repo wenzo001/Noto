@@ -6738,6 +6738,68 @@ function contrastRatio(fg, bg) {
   await ctx.close();
 }
 
+/**
+ * 59 §2.3 五格那张表的**渲染**那一半：每一格的颜色是不是规范指定的那一个 token、
+ * 以及"唯一会转的"是否真的只有"正在同步"（接线那一半在 `syncBadgeCells.spec.ts`）。
+ *
+ * 为什么分两半：jsdom 不把 SFC 的 scoped 样式套到元素上 —— 在单测里读 `color` 会绿得好看；
+ * 而浏览器里靠注入状态驱动五格又不可靠（把 `/events` 路由掉会连带把"本地服务连不上"那一格点亮，
+ * §4.3 的优先级立刻盖过被注入的那一格 —— 2026-10-11 探过）。所以这里**把规范里的属性形状直接套到真元素上**，
+ * 量的是样式表有没有把它兑现（选择器漂了、被后一条盖掉、动画被搬进 scoped 块而静默不转，都在这条红）。
+ * 颜色一律与**同一页里**那颗 token 的解析值比，不写死三元组。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForTimeout(700);
+  const r = await p.evaluate(() => {
+    const bar = document.querySelector('[data-testid="syncbar"]');
+    const title = bar?.querySelector('.syncbar__title') ?? null;
+    const glyph = bar?.querySelector('svg') ?? null;
+    const tok = (name) => {
+      const probe = document.createElement('span');
+      probe.style.color = `var(${name})`;
+      document.body.appendChild(probe);
+      const v = getComputedStyle(probe).color;
+      probe.remove();
+      return v;
+    };
+    const CASES = [
+      ['synced', '--ok'], ['syncing', '--accent'], ['offline', '--mute'], ['failed', '--danger'], ['idle', '--mute'],
+    ];
+    const rows = [];
+    for (const [badge, token] of CASES) {
+      title?.setAttribute('data-badge', badge);
+      glyph?.setAttribute('data-spin', badge === 'syncing' ? 'true' : 'false');
+      const cs = glyph ? getComputedStyle(glyph) : null;
+      rows.push({
+        badge,
+        token,
+        attrStuck: title?.getAttribute('data-badge') === badge && glyph?.getAttribute('data-spin') === (badge === 'syncing' ? 'true' : 'false'),
+        color: cs?.color ?? '',
+        want: tok(token),
+        anim: cs?.animationName ?? '',
+      });
+    }
+    title?.setAttribute('data-badge', bar?.getAttribute('data-badge') ?? 'idle');
+    return { rows, hasStrip: Boolean(bar && title && glyph) };
+  });
+  check('59 仪器自检：同步条与那颗 glyph 都在（读不到就是选择器过期，下面全是空判据）',
+    r.hasStrip === true && r.rows.length === 5 && r.rows.every((x) => x.attrStuck && /^rgb\(/.test(x.want)),
+    JSON.stringify({ hasStrip: r.hasStrip, rows: r.rows.map((x) => ({ b: x.badge, stuck: x.attrStuck, want: x.want })) }));
+  const colorBad = r.rows.filter((x) => x.color !== x.want).map((x) => `${x.badge}: ${x.color} ≠ ${x.token} ${x.want}`);
+  check('59 §2.3 每一格的颜色就是它那一颗 token（--ok/--accent/--mute/--danger/--mute）', colorBad.length === 0, JSON.stringify(colorBad));
+  const spinBad = r.rows.filter((x) => (x.badge === 'syncing' ? x.anim === 'none' : x.anim !== 'none')).map((x) => `${x.badge}:${x.anim}`);
+  check('59 §2.3「唯一会转的」只有正在同步，其余四格（含第五格）在渲染后确实静止', spinBad.length === 0, JSON.stringify(spinBad));
+  notes.push(`     五格渲染实测：${r.rows.map((x) => `${x.badge}=${x.anim === 'none' ? '静止' : x.anim}/${x.color}`).join(' ｜ ')}`);
+  check('59 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
