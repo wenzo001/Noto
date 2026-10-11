@@ -188,3 +188,64 @@ describe('配好了同步，手动入口必须真的还能用', () => {
     document.body.innerHTML = '';
   });
 });
+
+/**
+ * §11.4「让路不是失败，但必须看得见」—— 这一块的来历要照实写：**我先把它当成缺口，其实是假发现**。
+ * 那句话早就有可见出口（`SyncBadge.vue:87` 的 `<p v-if="sync.detail" data-testid="sync-detail">`，
+ * 而 `detail` 就是 `state.messageKey ? messageFor(...)`），而且已经有两处证人：上面那条
+ * `sync.needsCredentials` 与本仓库的浏览器腿 ㊵。我第一版读模板只读到第 80 行，漏看了 87 行，
+ * 于是去"补"了一行——单测 72 全绿、typecheck 干净，**整跑腿 ㊵ 红**：同一句话说两遍，
+ * 同步条从 108 顶到 148，520 档把库读数顶出视口、侧栏长出 31px 溢出。
+ *
+ * 所以这里**不重复**"看得见"那一条（已有证人），只钉那次事故自己那一格：
+ * **同一句具名原因在可见的那几格里不许出现两遍**（aria-live 那一份是给读屏器的，
+ * 不算重复 —— 少了下面那条正对照，"只出现一次"会在两份都没渲染时照样绿）。
+ * 驱动走 `applySignal`，就是引擎 `SyncEvent::Deferred` 发的那一条（`badge = Offline` +
+ * `message_key = sync.leaseHeld`）。**不走 `sync_status`**：那一发只回
+ * `lastSuccessAt / divergenceHeld / pendingOps / openConflicts`，从不回徽标
+ * （我第一版把它当徽标入口，四条全红在 `expected 'idle' to be 'offline'`）。
+ */
+describe('§11.4 具名原因那句可见的话不许说两遍（说两遍会顶掉 520 档的「设置」）', () => {
+  const mountDeferred = async () => {
+    makeService(ACCOUNT_CONFIGURED);
+    const wrapper = mount(App, { attachTo: document.body });
+    await settle();
+    useSyncStore().applySignal({ badge: 'offline', messageKey: 'sync.leaseHeld' });
+    await settle();
+    return wrapper;
+  };
+
+  const visibleSyncbarTexts = (wrapper: ReturnType<typeof mount>) =>
+    Array.from(wrapper.find('[data-testid="syncbar"]').element.childNodes)
+      .filter((n) => (n as Element).nodeType === 1 && !(n as Element).classList?.contains('visually-hidden'))
+      .map((n) => (n as Element).textContent?.trim() ?? '')
+      .filter((s) => s.length > 0);
+
+  it('这一句在看得见的那几格里**只出现一次**（重复会把同步条顶高，520 档就弄丢「设置」）', async () => {
+    const wrapper = await mountDeferred();
+
+    const hits = visibleSyncbarTexts(wrapper).filter((s) => /先让它/.test(s));
+    expect(hits.length, `可见文字里出现了 ${hits.length} 遍：${JSON.stringify(hits)}`).toBe(1);
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('正对照：读屏器那一出口确实在场 —— 证明上一条的"恰好一次"不是"一次都没有"', async () => {
+    const wrapper = await mountDeferred();
+
+    const aria = wrapper.find('[data-testid="syncbar"] .visually-hidden');
+    expect(aria.exists(), 'aria-live 那一格没渲染 ⇒ "可见的那份只有一次"是靠少渲染蒙的').toBe(true);
+    expect(aria.text()).toContain('先让它');
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+
+  it('让路归**离线那一格**，不许说成"正在同步"，也不许清了原因只留"离线"两个字（§4.3）', async () => {
+    const wrapper = await mountDeferred();
+
+    expect(badgeKind(wrapper), '让路不是失败，也不是在动').toBe('offline');
+    expect(wrapper.find('[data-testid="sync-detail"]').exists(), '离线那一格必须带上原因').toBe(true);
+    wrapper.unmount();
+    document.body.innerHTML = '';
+  });
+});
