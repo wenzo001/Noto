@@ -106,3 +106,58 @@ describe('§4.8 导出只有一种格式（不许出现第二种）', () => {
     expect(hits, JSON.stringify(hits)).toEqual([]);
   });
 });
+
+/**
+ * §6「明确不做」剩下那几条里，能在这台机器上静态扫出来的三条：厂商账号 / 多账户、服务端搜索、
+ * 版本历史上传。形状沿用上面四条（读磁盘字节 + 每条配对照），但这里配**两种**对照，因为这三条
+ * 的现实情况是"这个词一辈子没出现过"—— 只断言"扫到 0 处"与"整个判据没牙"长得一模一样：
+ *  ① 语料侧对照：被扫的键空间必须真的有内容（搜索/历史这些能力是**做了**的，键一定在）；
+ *  ② 牙齿对照：拿同一支正则去打一句**故意写的假话**，必须命中 —— 证明红的是"没有假话"，不是"正则写错了"。
+ */
+describe('§6 不做厂商账号、不做多账户（只有 WebDAV 那一格自己填地址与账户）', () => {
+  const pairs = i18nPairs();
+  const VENDOR = /小米|华为|苹果账号|Apple\s?ID|Google\s?(账号|账户)|OneDrive|Dropbox|坚果云|印象笔记|语雀|飞书|WPS\s?云|登录.{0,6}(厂商|第三方|云服务)|切换账号|多账号|多个账号/i;
+  it('对照①：文案里"账户/账号"这一族是真在场的（同步账户那几个键）——否则"零违规"只是没扫到东西', () => {
+    expect(pairs.filter((p) => p.key.startsWith('settings.account') || /账户|账号/.test(p.value)).length).toBeGreaterThanOrEqual(3);
+  });
+  it('对照②：这一族写法一旦被说出来，正则必须抓得住（牙齿自检）', () => {
+    expect(VENDOR.test('用小米账号登录')).toBe(true);
+    expect(VENDOR.test('切换账号')).toBe(true);
+  });
+  it('没有任何一句文案把厂商登录或多账户说成产品能力', () => {
+    const hits = pairs.filter((p) => VENDOR.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
+
+describe('§6 搜索只搜本机：不许说"服务器/远端在替你搜"', () => {
+  const pairs = i18nPairs();
+  const SERVER_SIDE = /(服务器|远端|云端|服务端).{0,8}(搜索|检索|索引|查)|搜索.{0,6}(来自|在)服务器/i;
+  it('对照①：搜索这一族键是真的在场（搜索做了，扫描面不为空）', () => {
+    expect(pairs.filter((p) => /search/i.test(p.key) || /搜索/.test(p.value)).length).toBeGreaterThanOrEqual(5);
+  });
+  it('对照②：正则对"服务端搜索"那句假话必须命中', () => {
+    expect(SERVER_SIDE.test('服务器正在为你搜索')).toBe(true);
+    expect(SERVER_SIDE.test('搜索结果来自服务器')).toBe(true);
+  });
+  it('没有任何一句文案把搜索说成发生在服务器那一侧', () => {
+    const hits = pairs.filter((p) => SERVER_SIDE.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
+
+describe('§6 版本历史只在本机：不许说历史被上传/同步到远端', () => {
+  const pairs = i18nPairs();
+  const UPLOADED = /(历史|版本).{0,10}(上传|同步到|存放在|备份到).{0,8}(服务器|远端|云端)|远端.{0,6}(保留|存).{0,6}历史/i;
+  it('对照①：版本历史这一族键是真的在场（§6-8 的浏览与回滚做了）', () => {
+    expect(pairs.filter((p) => /histor|版本|历史/i.test(p.key) || /历史|版本/.test(p.value)).length).toBeGreaterThanOrEqual(5);
+  });
+  it('对照②：正则对"历史已上传"那句假话必须命中', () => {
+    expect(UPLOADED.test('历史已上传到服务器')).toBe(true);
+    expect(UPLOADED.test('版本记录存放在远端')).toBe(true);
+  });
+  it('没有任何一句文案把版本历史说成存在服务器那一侧', () => {
+    const hits = pairs.filter((p) => UPLOADED.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
