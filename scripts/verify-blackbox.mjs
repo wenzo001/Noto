@@ -86,39 +86,46 @@ await step('点「新建笔记」→ 敲正文 → 列表里立刻看得见这�
   return title;
 });
 
-const folder = `黑盒子层 ${Date.now()}`;
-await step('侧栏点「＋」建子文件夹 → 屏幕上立刻出现它', async () => {
-  const rootRow = page.locator('[data-testid^="folder-"]').first();
-  const rootId = (await rootRow.getAttribute('data-testid')).replace('folder-', '');
-  await rootRow.hover();
-  await page.click(`[data-testid="folder-new-sub-${rootId}"]`);
-  await page.fill('[data-testid="folder-create-input"]', folder);
+const folder = `黑盒文件夹 ${Date.now()}`;
+await step('侧栏点「＋」新建文件夹（v2：弹窗 + 就地输入）→ 屏幕上立刻出现它', async () => {
+  // 旧形状点的是行上的 `folder-new-sub-*` —— 那颗键随"去掉子文件夹"一起被产品拿掉了
+  // （`folderSystemGuard.spec.ts` 钉着"没有新建子文件夹、也没有移动到父级"），
+  // 这一版走现在真实存在的那条路：区块头上的「＋」→ AppDialog → 输入 → 回车。
+  await page.click('[data-testid="new-folder"]');
+  await page.waitForSelector('[data-testid="new-folder-input"]', { timeout: 4000 });
+  await page.fill('[data-testid="new-folder-input"]', folder);
   await page.keyboard.press('Enter');
   await page.waitForTimeout(900);
-  const labels = (await page.locator('.tree__label').allInnerTexts()).map((s) => s.trim());
+  const labels = (await page.locator('button.tree__name').allInnerTexts()).map((s) => s.trim());
   if (!labels.includes(folder)) throw new Error(`侧栏没出现「${folder}」，只有：${labels.join(' / ')}`);
   return folder;
 });
 
-await step('打开笔记 → 「移动到」选那个子文件夹 → 点进子文件夹看得见它', async () => {
+await step('打开笔记 → 「移动到」选那个文件夹 → 点进文件夹看得见它', async () => {
   await page.locator('[data-testid^="note-row-"]').filter({ hasText: title }).first().click();
   await page.waitForTimeout(600);
-  const pick = page.locator('[data-testid="move-folder"]');
-  const labels = (await pick.locator('option').allInnerTexts()).map((s) => s.trim());
-  const wanted = labels.find((l) => l.endsWith(folder));
-  if (!wanted) throw new Error(`「移动到」下拉里没有那个子文件夹，选项是：${labels.join(' | ')}`);
-  // 收起状态的 `<select>` 上点 option 元素不会触发 change（Playwright 要显式选）
-  await pick.selectOption({ label: wanted });
+  // v2 的「移动到」是自绘的 `AppSelect`：原生 `<option>` 已经不在了，
+  // 必须点开它、读弹层里渲染出来的每一项，再点中那一项。
+  await page.click('[data-testid="move-folder"]');
+  await page.waitForSelector('.app-select__option', { timeout: 4000 });
+  const opts = page.locator('.app-select__option');
+  const texts = (await opts.allInnerTexts()).map((s) => s.trim());
+  const idx = texts.findIndex((l) => l.includes(folder));
+  if (idx < 0) throw new Error(`「移动到」里没有那个文件夹，选项是：${texts.join(' | ')}`);
+  await opts.nth(idx).click();
   await page.waitForTimeout(1200);
   await page.locator('[data-testid="nav-all"]').click();
   await page.waitForTimeout(500);
-  // 点侧栏那颗文件夹按钮（`text=` 会同时命中"移动到"下拉里那个隐藏 option，
-  // 于是 click 一直等一个不可见的目标）
-  await page.locator('button.tree__name', { hasText: folder }).first().click();
+  // 点侧栏那颗文件夹按钮（`text=` 会同时命中"移动到"下拉里那一项，于是 click 一直等一个不可见的目标）。
+  // **落点要打在名字的左段**：hover 之后那一簇工具（改名/颜色/删除，实测宽 140）会浮在这一行的右半，
+  // 默认的中心点正好落在铅笔上 —— 第一版就是这里 30s 超时，call log 说
+  // `<svg data-icon="pencil"> from .tree__tools subtree intercepts pointer events`。
+  // 这不是选择器过期：中心点确实不该点（那里画的是图标），用户瞄的也是左边那几个字。
+  await page.locator('button.tree__name', { hasText: folder }).first().click({ position: { x: 24, y: 10 } });
   await page.waitForTimeout(900);
   const list = await visible('[data-testid="note-list"]');
-  if (!list.includes(title)) throw new Error(`移动后进那个子文件夹看不到它：${list.slice(0, 140)}`);
-  return '移动 + 子文件夹内可见';
+  if (!list.includes(title)) throw new Error(`移动后进那个文件夹看不到它：${list.slice(0, 140)}`);
+  return '移动 + 文件夹内可见（v2：一层，无子层级）';
 });
 
 await step('输入即搜：关键词只留下这一条，清空后恢复', async () => {

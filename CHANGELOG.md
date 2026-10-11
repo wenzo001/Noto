@@ -4572,6 +4572,65 @@ spec 重构（去掉一个只写不读的变量）之后把 N2 重打一遍，�
 
 **这一批只加判据与改等待 ⇒ 按口径不升版本（产品代码一行没动）。**
 
+### 界面重构 v2 · 第十三批（2026-10-11）：G115 —— 侧栏 hover 那一簇工具不再把图标印在名字上；第二道 UAT 追上 v2（黑盒 12/12）
+
+**起点是黑盒那一步点不动**：`打开笔记 → 「移动到」→ 点侧栏那个文件夹` 30 秒超时。
+第一版报错被我自己的截断切掉了根因那一行（只留下"waiting for element to be visible, enabled and stable"），
+把 call log 完整打出来才看见真凶：
+`<svg data-icon="pencil"> from <div class="tree__tools"> subtree intercepts pointer events`。
+**顺着这条往下量，量出的不是选择器过期，是一条产品缺陷**（G115）：
+
+- 1440 那一行宽 250，工具层实测 `left=115 right=255`（三颗 44 + 两道 4 = 宽 140），
+  而文件夹名折两行时**第一行墨迹右界是 231** —— 两者重叠 116 px；
+- 工具层 `background: rgba(0,0,0,0)`：**什么都没有**。所以 hover 之后铅笔与色点是直接画在字上的
+  （证据图 `.logs/probe-tools-overlap.png` 第一版：`…需要折两` 那两个字被铅笔压过去）；
+- 触屏那一档更糟：常驻 + 旧让位 `padding-right: 6.5rem` = 104 px，**本来就小于实测的 140 px**，
+  等于"让了位还是被盖住"。
+
+**改法（`FolderTree.vue`，+28/−5）**：① 行上挂一个 `--row-bg`，静止 / hover / 选中三档各给一个值，
+工具层用**同一支色**做 `linear-gradient(to right, transparent, var(--row-bg) var(--sp-6))` —— 遮的是尾巴，
+不是画一层新底色；淡出那一段用 `padding-left` 让出来，**三颗按钮的盒子一格没动**（44pt 与侧栏几何那批判据不受影响）。
+② 容器自己**永远不接点击**（它是一片遮罩，接了就等于从名字上切走 164 px 死区），
+hover / 焦点在行内 / 面板开着时把 `pointer-events: auto` 只给下面那三颗 —— "画在哪儿就点得着哪儿"。
+③ 触屏回到流内（`position: static`）：常驻的东西就该占自己的位置，名字由 `flex:1` 挤进剩下的宽度，
+那个猜出来的 `6.5rem` 一起删掉。
+
+**腿 62（`verify-layout`，6 条）与六刀**：台子 `.logs/leg62-ms.mjs` 是**从门禁原文里把这一腿切出来跑**的，
+不另抄一份（抄一份就会和真判据慢慢长歪）。对照臂全绿，六刀各自打红：
+MS1 拿掉遮罩 → 自检 + §5①；MS2 实色写死 `--canvas` → §5①；MS3 渐变尾巴拉到 40 px → §5②（`solidStart 131 > 115`）；
+MS4 容器吃点击 → §5③（`fade: DIV.tree__tools`）；MS5 三颗不给点击 → §5③（三颗 `self:false`）；
+MS6 触屏回到悬浮 → §5④（`ink 231 > toolsLeft 115`）。
+**其中一条形状值得记**：`padding-left` 与渐变的实色偏移今天是同一支 token，
+判据若拿 `padding-left` 去算"实色从哪起"，MS3 那一刀**永远抓不到**（两个表达式互相抵消）——
+所以 §5② 读的是 computed `background-image` 里那个 `24px`，不是 padding。
+
+**这一腿的自检顺手抓出我自己写错的一处仪器**：390 那一档我照抄了腿 61 的把手选择器
+`[data-testid="drawer-handle"]` —— 这个 testid 不存在（真的是 `sidebar-handle`），
+抽屉没开，量到的是**屏幕外**那一版（墨迹右界 −192）。腿 61 的 390 档一直也在这里空跑
+（它只比 `top` 的先后，闭着抽屉照样递增 ⇒ 不红）。两处一起改对，并给腿 62 加了"读数必须落在屏内"
+（`toolsLeft > 0`）—— 触屏墨迹 94 ≤ 工具层 115 才是真读数。
+
+**第二道 UAT（`verify-blackbox`）追上 v2**：两条步骤测的是 v2 已经拿掉的能力
+（行上的 `folder-new-sub-*` 随"去掉子文件夹"没了；原生 `<option>` 随 `AppSelect` 没了），
+改成现在真存在的那两条路（区块头「＋」→ AppDialog → 回车；点开 → `.app-select__option` → 点中）。
+第 6 步的落点改成打在名字左段（`position: {x:24,y:10}`）—— 中心点那一片 hover 时画的是图标，
+用户瞄的也是左边那几个字。**12/12 步通过，全程无一处读库或调命令。**
+上一轮那条 `net::ERR_NO_BUFFER_SPACE` 在干净重跑里**没有复现** ⇒ 按实记在这儿，
+**没有**为它加 `verify-layout` 那份 `ENV_NOISE` 名单（判据不因为一次机器噪声就放宽）。
+
+**读数**：`verify-layout` **686 项 PASS / 0 FAIL**（跑在"已经跑过一遍"的库 `.logs/g102-data` 上，
+680 + 腿 62 的 6 条）；`verify-blackbox` 12/12（空库 `.logs/bb-s64`）；vitest 72 个文件全绿；
+`vue-tsc` / `eslint` 退出 0；`arch-check` **34/34**（中途被工装预算门打红一次 —— `.logs` 76.1 MB > 60 MB，
+是本会话探针堆出来的，`clean-scratch` 收掉 20.3 MB 后回绿）。
+
+**还有一笔要认的账**：我把 §6-2「系统文件对话框」当成缺口报过一次，
+那是一次浅 grep（只搜了前端里的 `plugin-dialog`）造出来的**假发现** ——
+实际 `SettingsView.vue:717` 的 `export-browse` 走 `bridge.ts:228 pickSavePath` → `plugin:dialog|save`，
+导入侧 `pickOpenPath` → `plugin:dialog|open`，真壳那侧的执行者是 `verify-tauri-window.mjs:262`。
+教训按进 memory：**grep 没命中 ≠ 功能不存在**，缺口要写成可反驳的形状再落笔。
+
+**这一批改的是产品行为（hover 那一簇的遮挡与让位真的变了），按口径升 patch ⇒ 0.0.120。**
+
 ### 界面重构 v2 · 第 33 刀【已回退，G101 重开】：浮层量一次并朝上开 —— 几何修好了，却弄坏一条更早的腿
 
 **结局先说**：这一版把浮层量回了视口（390 与 1440 实测 `inside=true`、腿 52 单跑 5/5），

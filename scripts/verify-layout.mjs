@@ -6921,7 +6921,7 @@ function contrastRatio(fg, bg) {
     await p.goto(URL_BASE, { waitUntil: 'networkidle' });
     await p.waitForTimeout(700);
     if (openDrawer) {
-      const handle = p.locator('[data-testid="drawer-handle"], .drawer-handle').first();
+      const handle = p.locator('[data-testid="sidebar-handle"], [data-testid="open-sidebar"], [data-testid="drawer-handle"]').first();
       if (await handle.count()) { await handle.click(); await p.waitForTimeout(600); }
     }
     const r = await p.evaluate(() => {
@@ -6997,6 +6997,110 @@ function contrastRatio(fg, bg) {
   notes.push(`     侧栏顺序实测：1440 ${JSON.stringify(Object.values(wide.r.marks).join('<'))}；390 ${JSON.stringify(Object.values(narrow.r.marks).join('<'))}；有描边元素 ${wide.r.stroked}/${narrow.r.stroked} 枚，端点与颜色两种违规各 ${capsBad.length}/${colorBad.length} 条`);
   const errs61 = [...wide.errs, ...narrow.errs];
   check('61 这一腿 console error 为零', errs61.length === 0, errs61.slice(0, 2).join(' | '));
+}
+
+/**
+ * 62 §5「文字不许被别的东西印在上面」—— 侧栏文件夹行 hover 那一簇工具的**遮罩**。
+ *
+ * 起因是黑盒第二道 UAT 点不动侧栏：Playwright 的 call log 说中心点被
+ * `<svg data-icon="pencil"> from .tree__tools` 接走了。顺着查下去发现的不是选择器过期，
+ * 是**图标直接画在名字的字上**（真读数 1440：工具层 115..255 宽 140，名字第一行墨迹右界 231，
+ * 而工具层 `background: rgba(0,0,0,0)` —— 什么都没有）。触屏那一档更糟：常驻 + 旧让位
+ * `padding-right: 6.5rem`=104px < 实测 140px，等于"让了位还是被盖住"。
+ *
+ * 判据打在渲染后的几何上，四条各自一刀：
+ *  ① 遮罩的实色必须就是这一行此刻的底色（行色随 hover / 选中变，写死一支会在选中行露底）；
+ *  ② 淡出段要在**第一颗图标左边**结束 —— 图标落在实色上，不落在字上；
+ *  ③ 遮罩条本身不许吃点击（它是一片画上去的东西），而三颗图标各自中心仍命中自己；
+ *  ④ 触屏没有 hover：工具层回到流内，名字的墨迹与它**零重叠**（不需要遮罩也不需要让位数字）。
+ * 仪器自检先确认夹具那一行的墨迹真的越过工具层左界 —— 越不过就是空判据。
+ */
+{
+  const LONG_NAME = `布局夹具这一格名字要长到越过工具层 ${Date.now()}`;
+  const made = await cmd('create_folder', { parentId: null, name: LONG_NAME });
+  const readRow = async (width, height, drawer) => {
+    const ctx = await browser.newContext({ viewport: { width, height }, hasTouch: drawer, isMobile: drawer });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForTimeout(700);
+    if (drawer) {
+      const handle = p.locator('[data-testid="sidebar-handle"], [data-testid="open-sidebar"], [data-testid="drawer-handle"]').first();
+      if (await handle.count()) { await handle.click(); await p.waitForTimeout(600); }
+    }
+    const row = p.locator('.tree__row', { hasText: LONG_NAME }).first();
+    const found = (await row.count()) > 0;
+    if (found && !drawer) { await row.hover({ position: { x: 20, y: 8 } }); await p.waitForTimeout(250); }
+    const r = found
+      ? await row.evaluate((el) => {
+          const tools = el.querySelector('.tree__tools');
+          const name = el.querySelector('.tree__name');
+          const label = el.querySelector('.tree__label');
+          const t = tools.getBoundingClientRect();
+          const n = name.getBoundingClientRect();
+          const node = Array.from(label.childNodes).find((x) => x.nodeType === 3);
+          const range = document.createRange();
+          range.selectNodeContents(node || label);
+          const inkRight = Math.max(...[...range.getClientRects()].map((q) => q.right));
+          const hit = (x, y) => document.elementFromPoint(x, y);
+          const icons = [...tools.querySelectorAll('.btn')].map((b) => {
+            const q = b.getBoundingClientRect();
+            const h = hit(q.x + q.width / 2, q.y + q.height / 2);
+            return { left: Math.round(q.left), w: Math.round(q.width), self: Boolean(h && b.contains(h)) };
+          });
+          const cs = getComputedStyle(tools);
+          // 渐变"从哪一格起变成实色"要读**计算值里那个偏移**，不能拿 padding-left 代替：
+          // 两者今天恰好是同一支 token，用 padding 算的话"把渐变尾巴拉长"这一刀永远抓不到。
+          const stops = [...cs.backgroundImage.matchAll(/([0-9.]+)px/g)].map((m) => parseFloat(m[1]));
+          const bgStopPx = stops.length ? Math.max(...stops) : null;
+          return {
+            position: cs.position,
+            toolsOpacity: cs.opacity,
+            toolsPe: cs.pointerEvents,
+            toolsBgImage: cs.backgroundImage,
+            toolsBgColor: cs.backgroundColor,
+            rowBg: getComputedStyle(el).backgroundColor,
+            toolsLeft: Math.round(t.left),
+            toolsRight: Math.round(t.right),
+            inkRight: Math.round(inkRight),
+            bgStopPx,
+            solidStart: bgStopPx === null ? null : Math.round(t.left + bgStopPx),
+            nameCenterHit: (() => { const h = hit(n.x + n.width / 2, n.y + n.height / 2); return h === name || name.contains(h) ? 'name' : (h ? `${h.tagName}.${String(h.className).split(' ')[0]}` : 'none'); })(),
+            fadeStripHit: (() => { const h = hit(t.left + 6, n.y + n.height / 2); return h === name || name.contains(h) ? 'name' : (h ? `${h.tagName}.${String(h.className).split(' ')[0]}` : 'none'); })(),
+            icons,
+          };
+        })
+      : null;
+    await p.close();
+    await ctx.close();
+    return { found, r, errs };
+  };
+
+  const desk = await readRow(1440, 900, false);
+  const touch = await readRow(390, 844, true);
+  check('62 仪器自检：桌面与触屏都真量到了那一行（触屏那一档必须已开抽屉：工具层左界>0），渐变尾巴的偏移读得出来，且夹具的名字墨迹确实越过工具层左界（越不过=空判据）',
+    desk.found && touch.found && typeof desk.r.bgStopPx === 'number' && desk.r.inkRight > desk.r.toolsLeft && touch.r.toolsLeft > 0 && touch.r.inkRight > 0 && desk.r.icons.length >= 3,
+    JSON.stringify({ desk: { ink: desk.r?.inkRight, toolsLeft: desk.r?.toolsLeft, stop: desk.r?.bgStopPx, icons: desk.r?.icons.length }, touch: { found: touch.found, toolsLeft: touch.r?.toolsLeft, ink: touch.r?.inkRight } }));
+
+  const solid = desk.r?.toolsBgImage ?? '';
+  const rowColor = (desk.r?.rowBg ?? '').replace(/\s/g, '');
+  check('62 §5① hover 时工具层要有一片底色，且那片实色**等于这一行此刻的底色**（写死一支会在选中行露底）',
+    solid.includes('linear-gradient') && solid.replace(/\s/g, '').includes(rowColor.replace(/^\./, '')) && desk.r.toolsBgColor === 'rgba(0, 0, 0, 0)',
+    JSON.stringify({ rowBg: desk.r?.rowBg, toolsBgImage: solid.slice(0, 74) }));
+  check('62 §5② 渐变转实色的那一格要在**第一颗图标左边**（含恰好压边）—— 图标落在实色上，不落在字上',
+    desk.r.solidStart !== null && desk.r.icons.length > 0 && desk.r.solidStart <= desk.r.icons[0].left,
+    JSON.stringify({ solidStart: desk.r?.solidStart, stop: desk.r?.bgStopPx, firstIconLeft: desk.r?.icons[0]?.left, inkRight: desk.r?.inkRight }));
+  check('62 §5③ 遮罩条不吃点击（淡出段仍还给名字），而每一颗图标自己仍点得着',
+    desk.r.fadeStripHit === 'name' && desk.r.toolsPe === 'none' && desk.r.icons.every((i) => i.self),
+    JSON.stringify({ fade: desk.r?.fadeStripHit, center: desk.r?.nameCenterHit, pe: desk.r?.toolsPe, icons: desk.r?.icons }));
+  check('62 §5④ 触屏：工具层回到流内，名字的墨迹与它零重叠（常驻的东西该占自己的位置）',
+    touch.r.position === 'static' && touch.r.inkRight <= touch.r.toolsLeft && touch.r.toolsOpacity === '1' && touch.r.toolsPe === 'auto',
+    JSON.stringify({ pos: touch.r?.position, ink: touch.r?.inkRight, toolsLeft: touch.r?.toolsLeft, op: touch.r?.toolsOpacity, pe: touch.r?.toolsPe }));
+  notes.push(`     侧栏工具层遮罩实测：桌面名字墨迹右界 ${desk.r?.inkRight} / 工具层左界 ${desk.r?.toolsLeft} / 转实色于 ${desk.r?.solidStart} / 第一颗图标 ${desk.r?.icons[0]?.left}，底色 ${desk.r?.rowBg}；触屏墨迹 ${touch.r?.inkRight} ≤ 工具层 ${touch.r?.toolsLeft}（流内 ${touch.r?.position}）`);
+  const errs62 = [...desk.errs, ...touch.errs];
+  check('62 这一腿 console error 为零', errs62.length === 0, errs62.slice(0, 2).join(' | '));
+  if (made?.id) await cmd('delete_folder', { id: made.id });
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

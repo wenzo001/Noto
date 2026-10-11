@@ -211,14 +211,19 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
      注意这里**没有** padding-left：层级不再用缩进表达。 */
   position: relative;
   padding-right: var(--sp-2);
+  /* 这一行"此刻是什么底色"，工具层要拿同一个色去遮名字的尾巴。
+     静止态没人看得见遮罩（工具层 opacity:0），所以只有 hover / 选中两档是真的。 */
+  --row-bg: var(--canvas);
 }
 
 .tree__row:hover {
   background: var(--hover);
+  --row-bg: var(--hover);
 }
 
 .tree__row[data-active='true'] {
   background: var(--accent-soft);
+  --row-bg: var(--accent-soft);
 }
 
 .tree__name {
@@ -276,7 +281,18 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   display: flex;
   align-items: center;
   gap: var(--sp-1);
+  /**
+   * 尾巴要**遮**住，不是印在上面。这一层实测宽 140（三颗 44 + 两道 4），
+   * 而 hover 时名字的墨迹右界是 231、工具层左界是 115 —— 没有这层底色就是
+   * 铅笔和色点直接画在字上（`docs` 里那句"看着不专业"的形状）。
+   * 淡出那一段用 `padding-left` 让出来：它只负责渐变，不挪按钮的盒子，
+   * 所以 44pt 触摸目标与侧栏几何那几条判据都不受影响。
+   */
+  padding-left: var(--sp-6);
+  background: linear-gradient(to right, transparent, var(--row-bg) var(--sp-6));
   opacity: 0;
+  /* 容器自己**永远不接点击**：它是一片遮罩，接了就等于从名字上切走 164 px 的死区。
+     能点的只有下面那三颗（见下面的 `> *`），静止态它们继承这个 none。 */
   pointer-events: none;
 }
 
@@ -287,20 +303,27 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
    不另立一套状态。 */
 .tree__tools:has([aria-expanded='true']) {
   opacity: 1;
+}
+
+/* 「画在哪儿就点得着哪儿」：遮罩淡出之后，接点击的必须是那三颗本身。 */
+.tree__row:hover .tree__tools > *,
+.tree__row:focus-within .tree__tools > *,
+.tree__tools:has([aria-expanded='true']) > * {
   pointer-events: auto;
 }
 
 /* 触屏没有 hover 这回事：不常驻就是"改名/删除这两颗在手机上根本不存在"
    （实测 `hasTouch` 那一档 `opacity:0` 且 `pointer-events:none` —— 连点都点不到）。
-   名字那一片要让出工具占的宽度，否则常驻之后会盖住最后一个字。 */
+   常驻的东西就该占自己的位置：回到流内，名字自然被 `flex:1` 挤到剩下的宽度里，
+   不必再猜一个 `padding-right`（旧的 6.5rem=104px 本来就小于实测的 140px 工具带宽，
+   等于"让了位还是被盖住"）。 */
 @media (hover: none) {
   .tree__tools {
+    position: static;
+    padding-left: 0;
+    background: none;
     opacity: 1;
     pointer-events: auto;
-  }
-
-  .tree__name {
-    padding-right: 6.5rem;
   }
 }
 
