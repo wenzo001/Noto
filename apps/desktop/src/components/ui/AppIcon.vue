@@ -17,8 +17,13 @@ const props = withDefaults(defineProps<{
 }>(), { size: 20 });
 
 const spec = computed(() => ICONS[props.name] ?? { d: [] });
-/** 描边随尺寸等比缩放，保持 §2.1 那个 1.75 : 20 的比例（同屏不许混粗细）。 */
-const stroke = computed(() => Number((props.size / 20 * 1.75).toFixed(2)));
+/**
+ * §2.1 的描边是**画布的比例**（1.75 : 20 ≈ 1:11.4，`icons.ts` 头部同一句话），不是"随尺寸缩放的视觉值"：
+ * viewBox 固定 20，所以描边永远写 1.75 用户单位 —— 渲染尺寸把整枚（含笔触）一起缩放，
+ * 同尺寸的图标在屏幕上必然同粗细。以前这里按 `size` 反算（16 ⇒ 1.4 用户单位 = 1:14.3），
+ * 于是同一屏出现 1.4 / 1.58 / 1.75 / 2.45 四种笔触 —— 恰好就是 §2.1 点名要避免的那种混用。
+ */
+const stroke = 1.75;
 </script>
 
 <template>

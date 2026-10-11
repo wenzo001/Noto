@@ -3977,6 +3977,7 @@ function contrastRatio(fg, bg) {
     failed: document.querySelector('[data-testid="backup-failed"]') !== null,
     rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
     text: document.querySelector('[data-testid="backup-empty"]')?.textContent?.trim() ?? '',
+    topMeta: document.querySelector('[data-testid^="backup-row-"] .backup-row__meta')?.textContent?.trim() ?? '',
   }));
   /**
    * 这一格原来断的是"**此刻库里没有备份** ⇒ 要说空态"。那个前提不是界面造的，是文件系统造的：
@@ -4016,8 +4017,24 @@ function contrastRatio(fg, bg) {
     }
   };
 
+  /**
+   * 等的是**份数涨到 n** 这件事。旧写法等 `backup-row-0` 在不在 —— 这个目录里上一遍已经留下一份时
+   * 它**立刻为真**（2026-10-11 实测：rowsBefore=1、那一行写着"16 小时前"），于是 300ms 后读回 rows=1，
+   * 红在"点完立刻出现"；而同一轮后面那条"浮层不参与布局"也跟着红 —— 那一行恰好在两次测高之间落进来，
+   * `#sec-data` 从 737 长到 785（+48 = 一行）。**等一个恒真的条件与机器快慢，就是这两条一起红的根因。**
+   */
+  const waitRows = async (n, ms = 20000) => {
+    const until = Date.now() + ms;
+    for (;;) {
+      const c = await page.evaluate(() => document.querySelectorAll('[data-testid^="backup-row-"]').length);
+      if (c >= n) return true;
+      if (Date.now() > until) return false;
+      await page.waitForTimeout(200);
+    }
+  };
+
   const tappedBackup = await tap('[data-testid="backup-db"]');
-  const rowAppeared = await waitSel('[data-testid="backup-row-0"]');
+  const grew = await waitRows(empty.rows + 1);
   await page.waitForTimeout(300);
   const row = await page.evaluate(() => {
     const li = document.querySelector('[data-testid="backup-row-0"]');
@@ -4039,9 +4056,9 @@ function contrastRatio(fg, bg) {
   // `rows === 1` 是个目录依赖：上一遍在这一库里真按过一次备份，这里读回的就是 2（而它的"空态"那条
   // 反倒绿了 —— 一对互斥的判据谁先跑谁把对方的现场弄坏，缺口 G107）。判据要断的是**这一次点出来的一份**：
   // 点之前几行、点之后必须恰好多一行，与库里原来有没有备份无关。
-  check('㊳ 点「备份本地库」做完之后那一份立刻出现在清单里，空态同时收掉（做完就能选）',
-    tappedBackup === true && rowAppeared === true && row.rows === empty.rows + 1 && row.emptyGone === true,
-    JSON.stringify({ tappedBackup, rowAppeared, ...row, rowsBefore: empty.rows }));
+  check('㊳ 点「备份本地库」做完之后那一份立刻出现在清单里、空态收掉，且它就是最上面那一行（做完就能选）',
+    tappedBackup === true && grew === true && row.rows === empty.rows + 1 && row.emptyGone === true && row.meta !== empty.topMeta,
+    JSON.stringify({ tappedBackup, grew, ...row, rowsBefore: empty.rows, topBefore: empty.topMeta }));
   check('㊳ 行上三个事实都读得懂：时间不是紧凑 UTC 生串、有体积、有库版本',
     row.rawStamp === false && row.hasSize === true && row.hasVersion === true, JSON.stringify(row));
   check('㊳ 「恢复这版」是 ≥44 的触摸目标，中心命中它自己', row.h >= 44 && row.selfHit === true, JSON.stringify(row));
@@ -6654,6 +6671,71 @@ function contrastRatio(fg, bg) {
   check('㊾ 收尾不变量：跑完这一轮，库里的可见偏好还在基准上（theme=system、fontScale=1）',
     theme === 'system' && scale === 1, JSON.stringify({ theme, scale, raw: tail }));
   notes.push(`     收尾偏好读数：theme=${theme} · fontScale=${scale}`);
+}
+
+/**
+ * 58 §2.1 / §2.5「20×20 画布、1.75px 描边（≈1:11.4）、同屏图标必须同粗细」的全应用扫描 —— 这一句此前没有执行者。
+ *
+ * **为什么不静态解析 `icons.ts` 的坐标**：路径里大小写命令混着**相对位移**（实测最小数是 -9.6，那是相对量），
+ * 用"所有数字都在 0..20 内"去判会把正确的形状判成错的。所以这里量**渲染结果**：
+ *  · 每一枚 `viewBox="0 0 20 20"` 的 svg，其可绘制子元素的 `getBBox()` 必须落在画布内（四周各留 1 单位给描边与圆头端点）；
+ *  · 描边读 computed `stroke-width`：全屏幕只许**一个**取值，且它就是 §2.1 写死的 1.75。
+ *
+ * 这一腿抓到的第一件产品事登记为 **缺口 G112**：`AppIcon` 按 `size` 反算描边（16 ⇒ 1.4 用户单位、18 ⇒ 1.58），
+ * 于是同一屏同时出现 1.4 / 1.58 / 1.75 三种笔触 —— 恰是 §2.1 点名要避免的那种混用（"混用 1.5 与 1.75 是
+ * 看着不专业最常见的来源"）。修法是把描边钉回画布比例（永远 1.75 用户单位，缩放交给 viewBox），
+ * 修后本腿读数 `weights:[1.75]`、`odd:[]`、`outside:[]`。
+ * 守卫：svg 与子元素数的下界（空扫不算绿），以及"这一屏没画出来的（宽 <1）跳过"。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p.waitForTimeout(700);
+  const firstRow = p.locator('[data-testid^="note-row-"]').first();
+  if (await firstRow.count()) { await firstRow.click(); await p.waitForTimeout(600); }
+  const r = await p.evaluate(() => {
+    const svgs = [...document.querySelectorAll('svg')].filter((s) => s.getAttribute('viewBox') === '0 0 20 20');
+    const weights = new Set();
+    const odd = [];
+    const outside = [];
+    let kids = 0;
+    let stroked = 0;
+    for (const s of svgs) {
+      if (s.getBoundingClientRect().width < 1) continue; // 折叠的浮层里那一枚没上屏，不归这条管
+      for (const c of s.querySelectorAll('path,circle,rect,line,polyline,polygon')) {
+        kids += 1;
+        const cs = getComputedStyle(c);
+        const w = parseFloat(cs.strokeWidth);
+        if (cs.stroke !== 'none' && Number.isFinite(w)) {
+          stroked += 1;
+          weights.add(w);
+          if (Math.abs(w - 1.75) > 0.001) {
+            odd.push({ sw: w, icon: s.getAttribute('data-icon') ?? '(无名)', host: c.closest('[data-testid]')?.getAttribute('data-testid') ?? '' });
+          }
+        }
+        let b = null;
+        try { b = c.getBBox(); } catch { b = null; }
+        if (b && (b.x < -1 || b.y < -1 || b.x + b.width > 21 || b.y + b.height > 21)) {
+          outside.push({ icon: s.getAttribute('data-icon') ?? '(无名)', x: +b.x.toFixed(2), y: +b.y.toFixed(2), w: +b.width.toFixed(2), h: +b.height.toFixed(2) });
+        }
+      }
+    }
+    return { svgs: svgs.length, kids, stroked, weights: [...weights], odd: odd.slice(0, 6), outside: outside.slice(0, 6) };
+  });
+  check('58 仪器自检：这一屏真扫到了成批图标与可绘制子元素（空扫不算"同粗细"）',
+    r.svgs >= 30 && r.stroked >= 60, JSON.stringify({ svgs: r.svgs, kids: r.kids, stroked: r.stroked }));
+  check('58 §2.1 描边：全屏幕只有一种笔触，且它就是 1.75（同屏混粗细正是这条要避免的）',
+    r.weights.length === 1 && Math.abs(r.weights[0] - 1.75) < 0.001, JSON.stringify({ weights: r.weights, odd: r.odd }));
+  check('58 §2.5 画布：每一枚图标的几何都在 20×20 之内（出画布会被裁掉，没人会来报）',
+    r.outside.length === 0, JSON.stringify(r.outside));
+  await p.screenshot({ path: `${OUT}/61-icons-1440.png` });
+  check('58 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  notes.push(`     图标笔触实测：${r.svgs} 枚 svg / ${r.kids} 个可绘制子元素，描边取值集合 [${r.weights.join(', ')}]，出画布 ${r.outside.length} 条`);
+  await p.close();
+  await ctx.close();
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
