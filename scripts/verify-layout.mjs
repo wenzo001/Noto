@@ -7304,6 +7304,178 @@ function contrastRatio(fg, bg) {
   await ctx.close();
 }
 
+/**
+ * 65 §4.9「按下」那一格 —— 逐颗控件按下去，量**同一指针位置**"未按"与"按住"两帧的计算值链。
+ *
+ * 这一格是通扫扫出来的真缺陷（G119，2026-10-11）：全应用只有 `.btn` 与 `.dock__tab` 写过 `:active`，
+ * 侧栏的「回收站 / 冲突 / 设置」（`.nav-btn` 三行）、文件夹行、同步徽标按下去是**死的** —— 99 颗
+ * `<button>` 里 11 颗没有任何按下反馈。修法是 base.css 里一条全局规则，不逐个补。
+ *
+ * 这把尺子在落进来之前换过六版，三处都是量具自己的错（不修就会去点产品的名）：
+ *  ① 指针按下再抬起就是一次真点击：点走页面、开弹窗、Vue 换掉节点 —— v3 有 16/28 报"读不到"就是这么来的。
+ *     现在扫的这段把 `click`/`dragstart` 拦在**捕获相**（preventDefault 也顺手挡住原生拖拽）。
+ *  ② 同一颗 testid 可以有多个实例（`note-pin-toggle` 五颗）：`querySelector` 只拿第一颗，于是指针压在 #0、
+ *     读的是 #1，报成"无 :active"。现在扫前给每颗实例打唯一标记，按标记寻址。
+ *  ③ 松手后不许拿"整条链回位"当判据：`blur()` 会把 hover 那一层重新淡入一遍，抓到的是一帧过渡中的值
+ *     （实测 alpha 0.91）。现在只要求**按下时变了的那几根轴**回位，且不再动焦点。
+ * 判据用计算值不用像素：`scale(0.97)` 在 44px 的按钮上是 ~1.3px，像素 diff 抓不稳（腿 65 前两版就死在这）。
+ *
+ * 五条：① 仪器自检（成批量到、基线两拍相同、每一颗都真的进入了 `:active`）；② 按下必须有变化；
+ * ③ 变了的那几根轴松手必须回位；④ 禁用那颗（含注入的一颗）按下不许有变化（钉住 `:not(:disabled)`）；
+ * ⑤ console error 为零。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await p.waitForTimeout(700);
+
+  await p.evaluate(() => {
+    const stop = (e) => { e.stopPropagation(); e.preventDefault(); };
+    for (const t of ['click', 'dragstart']) window.addEventListener(t, stop, true);
+    let n = 0, injected = false;
+    for (const el of document.querySelectorAll('[data-testid]')) {
+      if (!(el instanceof HTMLButtonElement) && el.getAttribute('role') !== 'button') continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 20 || r.height < 20 || r.top < 0 || r.bottom > innerHeight || r.left < 0 || r.right > innerWidth) continue;
+      let vis = true;
+      for (let x = el; x && x !== document.documentElement; x = x.parentElement) {
+        const cs = getComputedStyle(x);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) { vis = false; break; }
+      }
+      if (!vis) continue;
+      let pe = 'auto';
+      for (let x = el; x && x !== document.documentElement; x = x.parentElement) {
+        if (getComputedStyle(x).pointerEvents === 'none') { pe = 'none'; break; }
+      }
+      // 注入一颗"真禁用"的载荷：`:not(:disabled)` 那一半没人钉住过，不注入就是一条空判据。
+      if (!injected && el.classList.contains('btn') && !el.disabled) { el.disabled = true; el.setAttribute('data-ms-injected', '1'); injected = true; }
+      el.setAttribute('data-press-scan', String(n));
+      n += 1;
+    }
+  });
+
+  const list = await p.evaluate(() => [...document.querySelectorAll('[data-press-scan]')].map((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      scan: el.getAttribute('data-press-scan'),
+      id: el.getAttribute('data-testid'),
+      injected: el.getAttribute('data-ms-injected') === '1',
+      dis: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+      box: [Math.round(r.x), Math.round(r.y)],
+    };
+  }));
+
+  const read = (scan) => p.evaluate((s) => {
+    // 读的是**解析后的值**，不是字符串：MS2 那一刀（`scale(0.97)` 写成 `scale(1)`）原本打不红 ——
+    // `none` 与 `matrix(1,0,0,1,0,0)` 是两个字符串，却被当成"按下有反馈"。同一位序列化还会把
+    // `rgb(...)` 与 `rgba(...,1)` 分成两个值，把松手那一帧报成"没回位"。
+    const tf = (t) => {
+      if (!t || t === 'none') return 'id';
+      const m = /matrix3?d?\(([^)]+)\)/.exec(t);
+      if (!m) return `raw:${t}`;
+      const v = m[1].split(',').map((x) => Number(x.trim()));
+      // 单位矩阵与 `none` 是**同一个值**：不并成一格，`scale(1)` 这种"规则在场但按下是死的"就打得红不了（MS2 空刀）。
+      const n2 = (x) => (Math.abs(x) < 5e-4 ? 0 : Number(x.toFixed(4)));
+      const is2d = v.length === 6 && [v[0], v[3]].every((x) => n2(x) === 1) && [v[1], v[2], v[4], v[5]].every((x) => n2(x) === 0);
+      const is3d = v.length === 16 && v.every((x, i) => n2(x) === (i % 5 === 0 ? 1 : 0));
+      if (is2d || is3d) return 'id';
+      return `m:${v.map(n2).join(',')}`;
+    };
+    const col = (c) => {
+      const m = /rgba?\(([^)]+)\)/.exec(String(c));
+      if (!m) return String(c);
+      const parts = m[1].split(/[,/]/).map((x) => Number(String(x).trim()));
+      const [r, g, b] = parts;
+      const a = parts.length >= 4 && Number.isFinite(parts[3]) ? parts[3] : 1;
+      if (![r, g, b].every(Number.isFinite)) return String(c);
+      return a >= 0.9995 ? `rgb(${r},${g},${b})` : `rgba(${r},${g},${b},${a.toFixed(3)})`;
+    };
+    const el = document.querySelector(`[data-press-scan="${s}"]`);
+    if (!el) return null;
+    const axes = [];
+    for (let x = el; x && x !== document.documentElement; x = x.parentElement) {
+      const c = getComputedStyle(x);
+      axes.push(`${tf(c.transform)}|${col(c.backgroundColor)}|${col(c.color)}|${c.boxShadow}`);
+    }
+    return { axes, active: el.matches(':active') };
+  }, scan);
+
+  const noDelta = [];
+  const notRecovered = [];
+  const unreadable = [];
+  const disabledChanged = [];
+  const unstable = [];
+  const unreachable = [];
+  const activeMissed = [];
+  let measured = 0;
+  let actives = 0;
+  for (const t of list) {
+    await p.mouse.move(4, 4);
+    await p.waitForTimeout(120);
+    await p.mouse.move(t.box[0] + 6, t.box[1] + 6);
+    await p.waitForTimeout(160);
+    // 落在它身上才算点得着：指针压住的可能是覆盖在它上面的另一层（祖先 pointer-events:none 也在这抓）。
+    const hit = await p.evaluate(([x, y, s]) => {
+      const el = document.querySelector(`[data-press-scan="${s}"]`);
+      if (!el) return 'gone';
+      if (getComputedStyle(el).pointerEvents === 'none') return 'pe-none';
+      const h = document.elementFromPoint(x + 6, y + 6);
+      if (!h) return 'no-point';
+      return h === el || el.contains(h) || h.contains(el) ? 'ok' : `covered-by:${h.getAttribute('data-testid') || String(h.className).split(' ')[0]}`;
+    }, [t.box[0], t.box[1], t.scan]);
+    if (hit !== 'ok') { unreachable.push(`${t.id} ${hit}`); continue; }
+    const a1 = await read(t.scan);
+    const a2 = await read(t.scan);
+    if (!a1 || !a2) { unreadable.push(t.id); continue; }
+    if (a1.axes.join() !== a2.axes.join()) { unstable.push(t.id); continue; }
+    measured += 1;
+    await p.mouse.down();
+    await p.waitForTimeout(200);
+    const b = await read(t.scan);
+    await p.mouse.up();
+    // 松手后 Vue 会把列表头那几颗重画一次，hover 那层底色先透明再淡回来（实测 150ms 时是 rgba(0,0,0,0)，
+    // 500ms 才回稳）。这一格等的是**过渡落定**，不是"多给点时间就一定过"：MS4 那一刀（焦点里漏住按下状态）
+    // 落定之后仍然红。
+    await p.waitForTimeout(700);
+    const c = await read(t.scan);
+    if (!b || !c) { unreadable.push(`${t.id}（按下/松手时读不到）`); continue; }
+    if (b.active) actives += 1;
+    const changed = [];
+    a1.axes.forEach((v, i) => { if (v !== b.axes[i]) changed.push(i); });
+    if (t.dis) {
+      if (changed.length > 0) disabledChanged.push(`${t.id} 变了 ${changed.length} 根轴（注入=${t.injected}）`);
+      continue;
+    }
+    if (!b.active) activeMissed.push(t.id);
+    if (changed.length === 0) {
+      noDelta.push(`${t.id} :active 成立而计算值没变`);
+      continue;
+    }
+    const still = changed.filter((i) => a1.axes[i] !== c.axes[i]);
+    if (still.length > 0) notRecovered.push(`${t.id} 第 ${still.join('/')} 根轴停在按下值 ${JSON.stringify(still.map((i) => c.axes[i]))}`);
+  }
+
+  check('65 仪器自检：成批量到（≥15 颗）、基线两拍逐字节相同、每一颗都点得着且都真进入了 :active，注入的禁用载荷在场',
+    measured >= 15 && unstable.length === 0 && unreachable.length === 0 && unreadable.length === 0
+      && activeMissed.length === 0 && list.some((t) => t.injected) === true,
+    JSON.stringify({ 量到: measured, 进入active: actives, 没进入: activeMissed.slice(0, 4), 基线不稳: unstable.slice(0, 4), 点不着: unreachable.slice(0, 4), 读不到: unreadable.slice(0, 4), 注入: list.filter((t) => t.injected).length }));
+  check('65 §4.9 按下那一格：每一颗可见可用的按钮按下去必须有计算值变化（scale(0.97) 那一档像素量不动，读的是链上的 transform/底色/字色/阴影）',
+    noDelta.length === 0, JSON.stringify(noDelta.slice(0, 10)));
+  check('65 §4.9 松手要回位：按下时变了的那几根轴，抬起之后必须回到未按时的同一值（按下状态漏在 JS 里就是这条红）',
+    notRecovered.length === 0, JSON.stringify(notRecovered.slice(0, 8)));
+  check('65 §4.9 禁用优先：禁用那颗（含注入的一颗）按下去不许有变化（钉住 :not(:disabled)）',
+    disabledChanged.length === 0 && list.some((t) => t.dis) === true,
+    JSON.stringify({ 变了: disabledChanged.slice(0, 6), 禁用颗数: list.filter((t) => t.dis).length }));
+  notes.push(`     §4.9 按下实测：身份寻址的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.dis).length} 颗，其中注入 1 颗），全部进入 :active ${actives} 颗，无变化 ${noDelta.length} 颗，没回位 ${notRecovered.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗`);
+  check('65 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

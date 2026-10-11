@@ -272,6 +272,13 @@ button {
   transform: scale(0.97);
 }
 
+/* §4.9「按下」以前只有 `.btn` 与 `.dock__tab` 两格，侧栏条目、文件夹行、同步徽标按下去是死的。
+   全应用 99 颗 `<button>` 在这一条规则里一次给齐，不逐个补。 */
+button:active:not(:disabled),
+[role="button"]:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
 /* 键盘那一圈必须看得见，且与鼠标语义等价（§5）。用 outline 不占布局、不推走相邻行。 */
 .btn:focus-visible {
   outline: 2px solid var(--accent);
