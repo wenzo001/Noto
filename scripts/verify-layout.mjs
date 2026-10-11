@@ -5482,7 +5482,17 @@ function contrastRatio(fg, bg) {
     await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
     await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')
       ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-    await p.waitForTimeout(1300);
+    await p.waitForSelector('#sec-attachments', { timeout: 15000 });
+    // **等这一格真的说了话再读**，不等定长 1300ms：2026-10-11 整跑实测，注入七份的那一轮
+    // 读到 `rows:0` 连红 7 条，而载荷是 route.fulfill 注入的、与库里状态无关，
+    // 同一棵树 20 分钟前那一遍是 675/0 —— 读早了，不是产品坏了（与腿 ㊳ 那处同一个形状）。
+    await p.waitForFunction(() => {
+      const card = document.querySelector('#sec-attachments');
+      if (!card) return false;
+      const t = (card.textContent ?? '').replace(/\s+/g, ' ').trim();
+      return t.length > 12 || card.querySelector('[data-testid^="attachment-row-"]') !== null;
+    }, { timeout: 15000, polling: 120 }).catch(() => {});
+    await p.waitForTimeout(250);
     return { c, p, errs, got: await readLedger(p) };
   };
 
@@ -5670,7 +5680,10 @@ function contrastRatio(fg, bg) {
     const names = got.rows.map((r) => r.name);
     const metaOf = (name) => got.rows.find((r) => r.name === name)?.meta ?? '';
     check('㊿ 仪器自检：逐份清单真的画出了行（读不到行时下面全是空判据）',
-      got.rows.length === 7, JSON.stringify({ rows: got.rows.length, names }));
+      got.rows.length === 7,
+      // 带上卡片自己那两句话：下次再读空时，凭这个分得开"注入没生效（会露出真账的份数）"
+      // 与"整格没渲染（两句都是 null）"—— 2026-10-11 那一轮红了 7 条，事后只能猜。
+      JSON.stringify({ rows: got.rows.length, names, summary: got.summary, quarantine: got.quarantine }));
     check('㊿ 那一列的顺序 = 有问题的在前 → 体积从大到小 → 同体积按内容号收口（输入顺序与它不同，抄载荷必红）',
       JSON.stringify(names) === JSON.stringify([
         '下到一半.pdf', '这张图', '旧的录像.mp4', '早过期的.png',
@@ -6886,6 +6899,104 @@ function contrastRatio(fg, bg) {
   notes.push(`     全局边距实测：1440 侧栏/列表/搜索/版心 = ${wide.r.folder.l}/${wide.r.listHeader.l}/${wide.r.search}/${wide.r.editorPad.r}px；390 = ${narrow.r.folder.l}/${narrow.r.listHeader.l}/${narrow.r.search}px，搜索框距顶 ${narrow.r.searchGap}px`);
   const errs60 = [...wide.errs, ...narrow.errs];
   check('60 这一腿 console error 为零', errs60.length === 0, errs60.slice(0, 2).join(' | '));
+}
+
+/**
+ * 61 §2.1 的"端点 round / 颜色继承 token"与 §3.2 的"侧栏自上而下，顺序即优先级" —— 三条第一次被量。
+ *
+ *  · **端点**：只判**有描边**的元素（`stroke !== none`）。`AppIcon` 里那组实心 `fill` 的 `<g>` 声明的是
+ *    `stroke="none"`，computed linecap 自然是 `butt/miter` —— 第一版把它一起算进来就红了，
+ *    量的对象选错（没有笔触的东西没有"端点"可言）。
+ *  · **颜色**：图标不许写死颜色，一律吃 `currentColor` ⇒ 判每一枚的 computed stroke 是否等于
+ *    **同一页里某一颗 token 的解析值**（`--ink/--body/--mute/--danger/--ok/--accent/…`），不写死三元组。
+ *  · **顺序**：导航三行 → 同步条 → 文件夹 → 底部设置 → 本地库读数，七块 landmark 的 `top` 必须严格递增，
+ *    桌面与移动端（抽屉打开）同一把尺子。§3.2 那句"顺序即优先级"从此不只是文档。
+ */
+{
+  const orderAt = async (width, height, openDrawer) => {
+    const ctx = await browser.newContext({ viewport: { width, height } });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForTimeout(700);
+    if (openDrawer) {
+      const handle = p.locator('[data-testid="drawer-handle"], .drawer-handle').first();
+      if (await handle.count()) { await handle.click(); await p.waitForTimeout(600); }
+    }
+    const r = await p.evaluate(() => {
+      const side = document.querySelector('.pane--sidebar');
+      const top = (sel) => {
+        const el = side?.querySelector(sel);
+        return el ? Math.round(el.getBoundingClientRect().top) : null;
+      };
+      const tok = (name) => {
+        const probe = document.createElement('span');
+        probe.style.color = `var(${name})`;
+        document.body.appendChild(probe);
+        const v = getComputedStyle(probe).color;
+        probe.remove();
+        return v;
+      };
+      const palette = new Set(['--ink', '--body', '--mute', '--danger', '--ok', '--accent', '--warn', '--sunken', '--canvas'].map(tok));
+      let stroked = 0;
+      const squareCaps = [];
+      const offPalette = [];
+      for (const el of document.querySelectorAll('svg g, svg path, svg circle, svg rect, svg line, svg polyline')) {
+        const cs = getComputedStyle(el);
+        if (cs.stroke === 'none' || cs.visibility === 'hidden') continue;
+        stroked += 1;
+        if (cs.strokeLinecap !== 'round' || cs.strokeLinejoin !== 'round') {
+          squareCaps.push(`${el.tagName}:${cs.strokeLinecap}/${cs.strokeLinejoin}`);
+        }
+        if (!palette.has(cs.stroke)) offPalette.push(`${el.tagName}:${cs.stroke}`);
+      }
+      return {
+        marks: {
+          navAll: top('[data-testid="nav-all"]'),
+          trash: top('[data-testid="nav-trash"]'),
+          conflicts: top('[data-testid="nav-conflicts"]'),
+          sync: top('[data-testid="syncbar"]'),
+          folders: top('.tree'),
+          settings: top('[data-testid="nav-settings"]'),
+          readout: top('[data-testid="library-readout"]'),
+        },
+        stroked,
+        squareCaps: squareCaps.slice(0, 6),
+        offPalette: [...new Set(offPalette)].slice(0, 6),
+      };
+    });
+    await p.close();
+    await ctx.close();
+    return { r, errs };
+  };
+
+  const wide = await orderAt(1440, 900, false);
+  const narrow = await orderAt(390, 844, true);
+  check('61 仪器自检：两档都真扫到成批有描边的图标元素，且七块 landmark 都读到了 top',
+    [wide, narrow].every((x) => x.r.stroked >= 40 && Object.values(x.r.marks).every((v) => typeof v === 'number')),
+    JSON.stringify({ stroked: [wide.r.stroked, narrow.r.stroked], marks: narrow.r.marks }));
+  const capsBad = [];
+  const colorBad = [];
+  for (const [tag, x] of [['1440', wide], ['390', narrow]]) {
+    if (x.r.squareCaps.length) capsBad.push(`${tag}:${x.r.squareCaps.join(',')}`);
+    if (x.r.offPalette.length) colorBad.push(`${tag}:${x.r.offPalette.join(',')}`);
+  }
+  check('61 §2.1 端点：有描边的图标元素全是 round cap / round join（实心无笔触的不算）', capsBad.length === 0, JSON.stringify(capsBad));
+  check('61 §2.1 颜色：图标不许写死颜色，每一枚的 stroke 都等于同一页里某一颗 token 的解析值', colorBad.length === 0, JSON.stringify(colorBad));
+  const orderBad = [];
+  for (const [tag, x] of [['1440', wide], ['390', narrow]]) {
+    const m = x.r.marks;
+    const seq = [m.navAll, m.trash, m.conflicts, m.sync, m.folders, m.settings, m.readout];
+    for (let i = 1; i < seq.length; i += 1) {
+      if (!(seq[i] > seq[i - 1])) orderBad.push(`${tag}:第${i + 1}块 ${seq[i]} 没排在 ${seq[i - 1]} 之下`);
+    }
+  }
+  check('61 §3.2 侧栏自上而下：导航三行 → 同步条 → 文件夹 → 设置 → 本地库读数，顺序严格递增（顺序即优先级）',
+    orderBad.length === 0, JSON.stringify({ orderBad, wide: wide.r.marks, narrow: narrow.r.marks }));
+  notes.push(`     侧栏顺序实测：1440 ${JSON.stringify(Object.values(wide.r.marks).join('<'))}；390 ${JSON.stringify(Object.values(narrow.r.marks).join('<'))}；有描边元素 ${wide.r.stroked}/${narrow.r.stroked} 枚，端点与颜色两种违规各 ${capsBad.length}/${colorBad.length} 条`);
+  const errs61 = [...wide.errs, ...narrow.errs];
+  check('61 这一腿 console error 为零', errs61.length === 0, errs61.slice(0, 2).join(' | '));
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
