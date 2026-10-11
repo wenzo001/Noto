@@ -259,6 +259,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.tlsPinHint': '证书链校验照常做，指纹只是叠在上面的白名单；服务器换过证书后要回来补上新指纹。',
   'settings.restoreNeedsPath': '请先在上面的路径框里填要恢复的备份文件。',
   'settings.exportPathLabel': '输出位置（导出 / 备份）',
+  // §4.9「缺状态 = 交付不全」：清单在**读的过程中**不许借用"还没有备份过"这句话
+  // （真读数：盘上有 5 份，进设置页那一格先说"还没有备份过"，约 3 秒后才换成清单）。
+  'settings.backupLoading': '正在读这台设备的备份清单…',
   'settings.exportScoped': '只导出指定文件夹（子树）',
   'settings.exportScopedHint': '子树包只含勾选文件夹及其子层、祖先链，不含库内其它内容，也不含无法归属到文件夹的永久删除公告 —— 因此不能用于「仅在空库时导入」的整库还原。',
   'settings.exportPathHint': '留空则由本地核心决定文件名；已存在的文件一律不覆盖',

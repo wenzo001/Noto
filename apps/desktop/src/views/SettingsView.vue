@@ -117,12 +117,21 @@ function onPortInput(event: Event): void {
   settings.draft.proxy.port = Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+/**
+ * 备份清单**第一次读回来没有** —— §4.9「缺状态 = 交付不全」里"加载"那一格。
+ * 没有这一位的时候，进设置页的第一帧 `settings.backups` 还是空数组，
+ * 于是那一格会先说一句「还没有备份过」，约 3 秒后才换成清单（真读数：盘上有 5 份）。
+ * 空态是一句断言，没读过就不能说。
+ */
+const backupsLoaded = ref(false);
+
 onMounted(async () => {
   bypassText.value = (settings.draft.proxy.bypass ?? []).join('\n');
   pinText.value = (settings.draft.tlsPolicy.fingerprints ?? []).join('\n');
   await settings.loadAccount();
   await settings.loadStats();
   await settings.loadBackups();
+  backupsLoaded.value = true;
   await settings.loadAttachmentInventory();
   bypassText.value = (settings.draft.proxy.bypass ?? []).join('\n');
   // 回填必须在 loadAccount 之后：那一步会用核心的 DTO 重建 draft，
@@ -767,6 +776,7 @@ function jumpTo(id: string): void {
           <div class="field" data-testid="backup-list">
             <span class="text-sm">{{ t('settings.backupList') }}</span>
             <p v-if="settings.backupsFailed" class="field-hint" data-testid="backup-failed">{{ t('settings.backupFailed') }}</p>
+            <p v-else-if="!backupsLoaded" class="field-hint" data-testid="backup-loading">{{ t('settings.backupLoading') }}</p>
             <p v-else-if="settings.backups.length === 0" class="field-hint" data-testid="backup-empty">{{ t('settings.backupEmpty') }}</p>
             <ul v-else class="backup-rows">
               <li v-for="(b, i) in settings.backups" :key="b.path" class="backup-row" :data-testid="`backup-row-${i}`">

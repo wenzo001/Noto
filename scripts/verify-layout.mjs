@@ -7227,6 +7227,70 @@ function contrastRatio(fg, bg) {
   await ctx.close();
 }
 
+/**
+ * 64 §4.9「缺状态 = 交付不全」+ §3.3「空态要说真话」—— 备份清单的**加载态**。
+ *
+ * 这一格是审计自己扫出来的真缺陷（G118，2026-10-11）：盘上有 5 份备份的时候，
+ * 进设置页的第一帧 `settings.backups` 还是空数组，于是那一格先说一句
+ * 「还没有备份过。点上面的「备份本地库」，做好了就会…」，约 3 秒后才换成清单。
+ * 空态是一句**断言**，没读过就不能说 —— 用户刚恢复完库、或磁盘慢一点，就会被告诉"你没有备份"。
+ * 修法是 `SettingsView.vue` 里那一位 `backupsLoaded`（读回来之前走 `backup-loading` 那一格）。
+ *
+ * 四条：① 仪器自检（真读到过东西）；② 有备份在盘上时，**任何一帧**都不许出现"还没有备份过"；
+ * ③ 落定之后清单真的在；④ **正对照**：把 `list_backups` 用 route 换成空表，那一格必须说"还没有备份过"
+ *    —— 没有这一条，② 可以靠"永远显示加载"骗过去。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  let existing = await cmd('list_backups', {});
+  if (!Array.isArray(existing) || existing.length === 0) existing = [];
+  if (existing.length === 0) { await cmd('backup_db', {}); existing = await cmd('list_backups', {}); }
+  const onDisk = Array.isArray(existing) ? existing.length : 0;
+
+  const frames = async () => {
+    await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+    await p.click('[data-testid="nav-settings"]');
+    const seen = [];
+    for (const ms of [0, 120, 350, 900]) {
+      if (ms > 0) await p.waitForTimeout(ms - (ms === 120 ? 0 : 0));
+      seen.push({ at: ms, ...(await p.evaluate(() => ({
+        rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
+        empty: Boolean(document.querySelector('[data-testid="backup-empty"]')),
+        loading: Boolean(document.querySelector('[data-testid="backup-loading"]')),
+        failed: Boolean(document.querySelector('[data-testid="backup-failed"]')),
+      }))) });
+    }
+    return seen;
+  };
+  const shot = await frames();
+  const settled = await p.evaluate(() => ({
+    rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
+    empty: Boolean(document.querySelector('[data-testid="backup-empty"]')),
+    loading: Boolean(document.querySelector('[data-testid="backup-loading"]')),
+  }));
+  // 正对照：核心回空表 ⇒ 这一格必须改口说"还没有备份过"（而且是在读回来之后，不是第一帧）
+  await p.route('**/cmd/list_backups', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+  const shotEmpty = await frames();
+  await p.unroute('**/cmd/list_backups');
+
+  check('64 仪器自检：盘上真有备份、四帧都读得出形状，且落定之后清单不是空的（读不到就是选择器过期，下面全是空判据）',
+    onDisk >= 1 && shot.length === 4 && shot.every((f) => typeof f.rows === 'number') && settled.rows >= 1,
+    JSON.stringify({ onDisk, shot, settled }));
+  check('64 §4.9 加载那一格：盘上有备份时，任何一帧都不许说「还没有备份过」（空态是断言，没读过不能说）',
+    shot.every((f) => f.empty === false), JSON.stringify({ onDisk, shot }));
+  check('64 §4.9 落定之后清单真的在，且加载那一格收掉', settled.rows >= 1 && settled.loading === false && settled.empty === false, JSON.stringify({ settled, onDisk }));
+  check('64 正对照：核心回空表时那一格必须说「还没有备份过」（否则上面两条靠"永远显示加载中"就能骗过去）',
+    shotEmpty.some((f) => f.empty === true) && shotEmpty[shotEmpty.length - 1].rows === 0,
+    JSON.stringify(shotEmpty));
+  notes.push(`     备份清单加载态实测：盘上 ${onDisk} 份时四帧 empty=${JSON.stringify(shot.map((f) => f.empty))} loading=${JSON.stringify(shot.map((f) => f.loading))}；route 换成空表 ⇒ empty=${JSON.stringify(shotEmpty.map((f) => f.empty))}`);
+  check('64 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
