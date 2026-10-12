@@ -137,6 +137,9 @@ const FIXTURE_MARKS = [
   // 腿 65（按下通扫）自己造的三篇：它扫的是"屏幕上此刻有多少颗身份寻址的控件"，
   // 覆盖不许靠现场继承 —— 名单补齐之后跑前清得更干净，它量到的颗数从 28 掉到 19（旧的 ≥15 门槛照样过）。
   '按下夹具',
+  // 腿 70（§3.4 工具条位置）那一篇 41 块的夹具：它造的是"能滚起来的一篇"，留着会把
+  // 后面每一条按行号/第几行寻址的腿的现场改掉（与 G97 那批同一族）。
+  '条位夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -8027,6 +8030,155 @@ async function pressSweep(p) {
   check('69 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
   await p.close();
   await ctx.close();
+}
+
+/**
+ * 70 §3.4 第一句：「工具条位置：**贴在文档头下方，不吸顶、不贴底**。」
+ *
+ * 这一句以前一个执行者都没有。㉝ 量的是同一格的第二句（横向放不下时的渐隐与「更多 ›」），
+ * 而"位置"这一句只在代码里由 DOM 顺序碰巧成立 —— 谁把它改成 `position: fixed; bottom: 0`
+ * 或塞进滚动区里 `sticky: top`，整条门禁一声不出（与 §3.3「搜索不搜回收站」只在数 SQL 字符串同族）。
+ *
+ * 真读数（1440×950 / 390×844 两档，本腿自己造的 41 块一篇）：
+ *   文档头 45→106 · 工具条 106→159 · 滚动区 159→884 —— **两条边都是逐像素贴住的**，
+ *   `.tb-wrap` 自己 `position: relative`，且**不在** `.editor-scroll` 里面。
+ *
+ * 为什么不写成"整棵子树都不许 sticky"：`.tb__more-wrap` 合法地用着
+ * `position: sticky; right: 4px`（那是 ㉝ 溢出那一格的落点，横向吸在右缘）。
+ * 判据的主语只有"这一条带子自己的竖直归属"，所以量的是带子那一个节点 + 它与三块矩形的次序。
+ *
+ * 五件事各自一条，每件事自己被撤掉时只有它那条红（四刀记分见 CHANGELOG 本批）：
+ *  ① 次序：头在下之前、条在正文之上（`fixed; bottom: 0` 那种"贴底"第一个撞它）；
+ *  ② 贴住：不留缝（`margin-top` 一缝就红 —— 这条与 ① 是两件事，① 只判先后）；
+ *  ③ 归属：这条带子在编辑器那一栏的宽度里（整窗口吸边的写法 x=0，①② 都可能照样绿）；
+ *  ④ 机制：它自己不是 sticky/fixed/absolute，也不住在滚动区里（"吸顶"两种做法都在这挡掉）；
+ *  ⑤ 真滚一遍：滚到底之后**没有任何一行的可见部分走到条底下**，且条的中心仍点得着自己、
+ *     滚动区第一像素行仍属于正文而不属于条。这一条带三件正对照（块数、首块顶位置真的挪了 >100px、
+ *     两档各自都看得见 ≥3 行）—— 上一批的教训：**"父容器没溢出"是空判据，要真的滚它**（§3.3 那条）。
+ */
+{
+  const stamp = String(Date.now()).slice(-6);
+  const mark = `条位夹具 ${stamp}`;
+  const blocks = [{ id: `t70h${stamp}`, type: 'heading', attrs: { level: 1 }, content: [{ text: mark }] }];
+  for (let i = 0; i < 40; i++) {
+    blocks.push({ id: `t70p${stamp}-${i}`, type: 'paragraph', content: [{ text: `第 ${i} 段，让编辑栏真的能滚起来。` }] });
+  }
+  const made = await cmd('create_note', { folderId: null, doc: { v: 1, content: blocks } });
+  const madeId = made?.id ?? made?.note?.id;
+
+  for (const [width, touch] of [[1440, false], [390, true]]) {
+    const ctx = await browser.newContext({ viewport: { width, height: width === 1440 ? 950 : 844 }, hasTouch: touch, isMobile: touch });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 140)); });
+    p.on('pageerror', (e) => errs.push(String(e).slice(0, 140)));
+    await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+    await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+    await p.getByText(mark).first().waitFor({ timeout: 8000 });
+    await p.getByText(mark).first().click();
+    // 落定再读：等编辑器把 41 块真挂上（不是等一个固定时长 —— G121 那一刀的口径）。
+    await p.waitForFunction(() => document.querySelectorAll('.editor-scroll .nb-block').length >= 10, null, { timeout: 12000 });
+    await p.locator('.tb-wrap').waitFor({ timeout: 8000 });
+
+    const read = (offset) => p.evaluate(async ([off, tag]) => {
+      const R = (r) => ({ x: Math.round(r.x), y: Math.round(r.y), right: Math.round(r.right), bottom: Math.round(r.bottom), w: Math.round(r.width), h: Math.round(r.height) });
+      const band = document.querySelector('.tb-wrap');
+      const head = document.querySelector('.editor-head');
+      const scroller = document.querySelector('.editor-scroll');
+      const pane = document.querySelector('[data-testid="editor-pane"]');
+      if (!band || !head || !scroller || !pane) {
+        // 缺元素时也回一份**同形状**的读数：下面每一条判据与每条 detail 都能照常求值，
+        // 红的是"没读到"，而不是判据自己被 TypeError 打死（一腿崩 = 整条门禁的读数作废）。
+        return {
+          missing: { band: !band, head: !head, scroller: !scroller, pane: !pane },
+          head: { bottom: -1 }, band: { y: -1, bottom: -1, x: -1, right: -1 }, scroller: { y: -1, bottom: -1 }, pane: { x: -1, y: -1, right: -1 },
+          pos: '(读不到)', inScroller: null, blockCount: 0, visibleBlocks: 0, firstTop: -1, scrollable: -1, scrollTop: -1,
+          gapHead: -999, gapDoc: -999, selfHit: false, selfCls: null, edgeInScroller: false, edgeInBand: false, visibleOverlap: -1,
+        };
+      }
+      scroller.scrollTop = off;
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const hr = head.getBoundingClientRect(), br = band.getBoundingClientRect();
+      const sr = scroller.getBoundingClientRect(), pr = pane.getBoundingClientRect();
+      const cs = getComputedStyle(band);
+      const all = Array.from(scroller.querySelectorAll('.nb-block')).map((el) => el.getBoundingClientRect());
+      // 可见交集：先把每一块裁到滚动区那一格里面，再跟带子比。
+      // 不裁会假红 —— `getBoundingClientRect()` 不看裁剪，滚到底那一次实测有 3 行"矩形"伸进带子，
+      // 而它们在屏幕上根本不存在（这 3 行就是这一句存在的理由，别把它当死代码删）。
+      const visibleOverlap = all.filter((q) => {
+        const t = Math.max(q.top, sr.top), b = Math.min(q.bottom, sr.bottom);
+        return b - t > 1 && b > br.top + 1 && t < br.bottom - 1;
+      }).length;
+      const cx = Math.round(br.x + br.width / 2);
+      const self = document.elementFromPoint(cx, Math.round(br.y + br.height / 2));
+      // 滚动区最上面那 2px 属于谁 —— 带子若"吸"在正文上面（挪进滚动区 / 负 margin 盖下来），这一句先红。
+      const edge = document.elementFromPoint(cx, Math.round(sr.top) + 2);
+      return {
+        tag,
+        head: R(hr), band: R(br), scroller: R(sr), pane: R(pr),
+        pos: cs.position, inScroller: scroller.contains(band),
+        blockCount: all.length, visibleBlocks: all.filter((q) => Math.min(q.bottom, sr.bottom) - Math.max(q.top, sr.top) > 1).length,
+        firstTop: all.length ? Math.round(all[0].top) : -1, scrollable: scroller.scrollHeight - scroller.clientHeight, scrollTop: Math.round(scroller.scrollTop),
+        gapHead: Math.round(br.top - hr.bottom), gapDoc: Math.round(sr.top - br.bottom),
+        selfHit: !!self && (self === band || band.contains(self)),
+        selfCls: self ? String(self.className).slice(0, 26) : null,
+        edgeInScroller: !!edge && scroller.contains(edge), edgeInBand: !!edge && band.contains(edge),
+        visibleOverlap,
+      };
+    }, [offset, width]);
+
+    const top = await read(0);
+    const bot = await read(99999);
+    const t = (x) => (x === undefined || x === null ? -1 : x);
+    const w = String(width);
+    const miss = top.missing || bot.missing;
+
+    check(`70 仪器自检 宽 ${w}：头/条/滚动区/栏都读到了，且这篇真能滚（块 ≥10、可滚 >200px、两档各自看得见 ≥3 行）`,
+      !miss && t(top.blockCount) >= 10 && t(top.scrollable) > 200 && t(top.visibleBlocks) >= 3 && t(bot.visibleBlocks) >= 3,
+      miss ? `缺元素 ${JSON.stringify(miss)}` : JSON.stringify({ 块: top.blockCount, 可滚: top.scrollable, 顶上可见: top.visibleBlocks, 底下可见: bot.visibleBlocks }));
+
+    check(`70 §3.4 次序 宽 ${w}：工具条在文档头**下面**、在正文**上面**（贴底那种写法撞这一条）`,
+      !miss && top.band.bottom <= top.scroller.bottom && t(top.head.bottom) <= t(top.band.y) + 1 && t(top.band.bottom) <= t(top.scroller.y) + 1,
+      JSON.stringify({ 头底: top.head.bottom, 条顶: top.band.y, 条底: top.band.bottom, 滚动顶: top.scroller.y }));
+
+    check(`70 §3.4 「贴」宽 ${w}：带子与文档头、与正文都是逐像素贴住，中间不许悬空留缝`,
+      !miss && Math.abs(t(top.gapHead)) <= 1 && Math.abs(t(top.gapDoc)) <= 1,
+      JSON.stringify({ 头到条: top.gapHead, 条到正文: top.gapDoc }));
+
+    check(`70 §3.4 归属 宽 ${w}：这条带子在编辑器那一栏的宽度里（整窗口吸边会红）`,
+      !miss && t(top.band.x) >= t(top.pane.x) - 1 && t(top.band.right) <= t(top.pane.right) + 1 && t(top.band.y) >= t(top.pane.y),
+      JSON.stringify({ 条: [top.band.x, top.band.right], 栏: [top.pane.x, top.pane.right] }));
+
+    check(`70 §3.4 机制 宽 ${w}：带子自己不是 sticky/fixed/absolute，也不住在滚动区里（「吸顶」两种做法都挡在这）`,
+      !miss && ['static', 'relative'].includes(top.pos) && top.inScroller === false,
+      JSON.stringify({ position: top.pos, 在滚动区里: top.inScroller }));
+
+    check(`70 §3.4 真滚一遍 宽 ${w}：滚到底没有任何一行的**可见部分**走到条底下（矩形不裁会假红，见上面那段注释）`,
+      !miss && t(top.visibleOverlap) === 0 && t(bot.visibleOverlap) === 0,
+      JSON.stringify({ 顶上压字: top.visibleOverlap, 底下滑过条: bot.visibleOverlap }));
+
+    check(`70 §3.4 滚到底仍然 宽 ${w}：条的中心点得着自己、滚动区第一像素行仍属于正文而不属于条`,
+      !miss && top.selfHit === true && bot.selfHit === true && top.edgeInScroller === true && top.edgeInBand === false
+      && bot.edgeInScroller === true && bot.edgeInBand === false,
+      JSON.stringify({ 顶: { 自点: top.selfHit, 落点: top.selfCls, 边缘属正文: top.edgeInScroller, 边缘属条: top.edgeInBand }, 底: { 自点: bot.selfHit, 边缘属正文: bot.edgeInScroller, 边缘属条: bot.edgeInBand } }));
+
+    check(`70 正对照 宽 ${w}：那一下滚动真的把正文挪走了（首块顶位移 >100px 且 scrollTop 上去了 —— 否则上面几条量的是静止画面）`,
+      !miss && Math.abs(t(top.firstTop) - t(bot.firstTop)) > 100 && t(bot.scrollTop) > t(top.scrollTop) + 50,
+      JSON.stringify({ 首块顶: [top.firstTop, bot.firstTop], scrollTop: [top.scrollTop, bot.scrollTop] }));
+
+    if (!miss) {
+      notes.push(`     §3.4 条位 宽 ${w}：头 ${top.head.bottom} → 条 ${top.band.y}..${top.band.bottom} → 正文 ${top.scroller.y}（${top.pos} · ${top.blockCount} 块 · 可滚 ${top.scrollable}px）`);
+    }
+    check(`70 宽 ${w} console error 为零`, errs.length === 0, errs.slice(0, 2).join(' | '));
+    await p.close();
+    await ctx.close();
+  }
+
+  if (madeId) { await cmd('delete_note', { id: madeId }); await cmd('purge_note', { id: madeId }); }
+  const after = await cmd('list_notes', { folderId: null, trash: false });
+  const left = ((after?.items ?? after) ?? []).filter((n) => (n.title ?? '').startsWith(`条位夹具 ${stamp}`));
+  check('70 自己造的夹具笔记扫完要清干净（留着就变成下一遍的现场）', left.length === 0 && !!madeId,
+    JSON.stringify({ left: left.length, made: !!madeId }));
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
