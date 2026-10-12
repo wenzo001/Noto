@@ -130,6 +130,10 @@ const FIXTURE_MARKS = [
   '字号夹具',
   // 第 50 批那条 toast 时限腿的夹具。
   '时限夹具',
+  // 第十九批：三条腿的夹具前缀以前不在名单里，崩在半路就留成下一遍的现场 ——
+  // 实测留下 '标记色腿的现场…' 把 ㊶ 的"第一行必须是精准那条"点成红（与产品无关的红）。
+  // §1.5 那条腿自己有收尾，但它也在崩溃路径上，所以一起进名单。
+  '标记色腿的现场', '布局门禁夹具', '版本夹具', '§1.5量角色',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -5847,7 +5851,13 @@ function contrastRatio(fg, bg) {
       await p.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
       await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')
         ?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
-      await p.waitForTimeout(1400);
+      // **等落定，不等固定时长**：这一格进设置页要跑好几发（备份清单、偏好、附件账），
+      // 库里东西越多跑得越久。以前写死 1400ms ⇒ 干净库第一遍刚好来得及、跑过一遍的库第二遍来不及，
+      // 于是 `rows:[]` 后面 `rows[0]` 直接抛 —— 同一份代码两遍读数不一样（G121 的根因形状，
+      // 与腿 ㊳/64 那两处"基准要等出来"同一个族）。等不到也继续走，让判据自己报红而不是卡死或抛。
+      await p.waitForFunction(() => document.querySelectorAll('#sec-attachments .attachment-row').length >= 5,
+        null, { timeout: 15000 }).catch(() => {});
+      await p.waitForTimeout(220);
       return { c, p, errs, sent, got: await readLedger(p), body: () => p.evaluate(() => document.body.innerText),
         // 屏幕上最新那一句：两条动作各有自己的话，而 toast 会叠着 —— 问整个 body 等于
         // 拿上一条动作的话问这一条（H1 的覆盖那一条第一次就是这么红的）。
@@ -7282,6 +7292,11 @@ function contrastRatio(fg, bg) {
     return seen;
   };
   const shot = await frames();
+  // **落定要等出来，不等固定四帧**：库里攒到 11 份备份时 `list_backups` 一发跑不完 900ms，
+  // 于是下面"落定之后清单真的在"量到的是还在加载的那一帧（实测红两条）。
+  // 前面那四帧不动 —— 它们的用途是"没读回来之前不许说空"，等久了反而看不见那一格。
+  await p.waitForFunction(() => document.querySelector('[data-testid="backup-loading"]') === null,
+    null, { timeout: 20000 }).catch(() => {});
   const settled = await p.evaluate(() => ({
     rows: document.querySelectorAll('[data-testid^="backup-row-"]').length,
     empty: Boolean(document.querySelector('[data-testid="backup-empty"]')),
@@ -7305,6 +7320,38 @@ function contrastRatio(fg, bg) {
   check('64 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
   await p.close();
   await ctx.close();
+
+  // **给自己造的残骸一个上界**（ARCHITECTURE-MAP §8：清了多少、谁在看守、清理挂哪，三样都要有）。
+  // 这一腿与腿 ㊳ 每跑一遍就 `backup_db` 一份，实测攒到 11 份 / 52 MB ⇒ `.logs` 越过 60 MB 预算
+  // （arch 的 hygiene:scratch-budget-guarded 因此红），而且 `list_backups` 被拖慢到量不出落定。
+  // 保留最新的 3 份 + **任何被引用着的那份**（`restore-pending.json` 指的、以及 `*.pre-restore.*`）——
+  // 这一条是被上一次事故教出来的：我清残骸时删掉过一份正被 pending 指着的备份，桥直接拒绝开库。
+  {
+    const fsp = await import('node:fs');
+    const dir = 'D:/code/Notes/.logs/g102-data/backups';
+    const pendingFile = 'D:/code/Notes/.logs/g102-data/restore-pending.json';
+    let removed = 0; let bytes = 0; const kept = [];
+    if (fsp.existsSync(dir)) {
+      const referenced = new Set();
+      if (fsp.existsSync(pendingFile)) {
+        const txt = fsp.readFileSync(pendingFile, 'utf8');
+        for (const m of txt.matchAll(/notera-[\w-]+\.sqlite/g)) referenced.add(m[0]);
+      }
+      const files = fsp.readdirSync(dir).filter((f) => f.endsWith('.sqlite') || f.includes('.pre-restore.'));
+      const sorted = files.map((f) => ({ f, t: fsp.statSync(`${dir}/${f}`).mtimeMs })).sort((a, b) => b.t - a.t);
+      sorted.forEach((x, i) => {
+        if (i < 3 || referenced.has(x.f) || x.f.includes('.pre-restore.')) { kept.push(x.f); return; }
+        bytes += fsp.statSync(`${dir}/${x.f}`).size;
+        fsp.rmSync(`${dir}/${x.f}`);
+        removed += 1;
+      });
+      notes.push(`     备份残骸上界：删 ${removed} 份 / ${(bytes / 1048576).toFixed(1)} MB，留 ${kept.length} 份（最新 3 + 被引用 ${referenced.size}）`);
+      check('64 自己造的备份残骸要收回上界内（留下的不超过 3 份 + 被引用的那些）',
+        kept.length <= 3 + referenced.size, JSON.stringify({ kept: kept.length, removed, referenced: referenced.size }));
+    } else {
+      notes.push('     备份残骸上界：没有 backups 目录（这一遍没落地备份），跳过');
+    }
+  }
 }
 
 /**
@@ -7638,6 +7685,29 @@ const envNoisy = failures.filter(isEnvOnly);
 if (envNoisy.length > 0 && envNoisy.length <= 2) {
   for (const line of envNoisy) failures.splice(failures.indexOf(line), 1);
   notes.push(`     环境噪声按名单放行 ${envNoisy.length} 条（机器 socket/超时，非产品；>2 条照样红）：${envNoisy.map((l) => l.slice(0, 60)).join(' ｜ ')}`);
+}
+
+/**
+ * **收尾残骸自检**（G121 那一条的泛化形状）：崩在半路的那一轮永远执行不到每腿自己的收尾，
+ * 于是残骸变成下一遍的现场 —— 制造的是与产品无关的红，而下一遍的人只会去查产品。
+ * 上一遍就是这样：`标记色腿的现场…` 留在列表里，把 ㊶ 的"第一行必须是精准那条"点红了。
+ * 名单只有一处（`FIXTURE_MARKS`）：加一条既管跑前清、也管跑后验，不会再出现"清漏了某个前缀"。
+ */
+{
+  const marks = [...FIXTURE_MARKS, '牺牲品'];
+  const rows = await cmd('list_notes', { folderId: null, trash: false });
+  const items = Array.isArray(rows) ? rows : (rows?.items ?? []);
+  const leaked = items.filter((n) => marks.some((m) => (n.title ?? '').startsWith(m))).map((n) => n.title);
+  const trashed = await cmd('list_notes', { folderId: null, trash: true });
+  const tItems = Array.isArray(trashed) ? trashed : (trashed?.items ?? []);
+  const leakedTrash = tItems.filter((n) => marks.some((m) => (n.title ?? '').startsWith(m))).map((n) => n.title);
+  for (const n of [...items, ...tItems]) {
+    if (marks.some((m) => (n.title ?? '').startsWith(m))) await cmd('purge_note', { id: n.id });
+  }
+  check('收尾 残骸自检：跑完不许把夹具笔记留给下一遍（残骸会变成下一遍的现场）',
+    leaked.length === 0 && leakedTrash.length === 0,
+    JSON.stringify({ 活动里: leaked.slice(0, 6), 回收站里: leakedTrash.slice(0, 6) }));
+  notes.push(`     收尾残骸自检：清掉活动 ${leaked.length} 条 / 回收站 ${leakedTrash.length} 条夹具残骸（名单取 FIXTURE_MARKS，一处来源）`);
 }
 
 readingsDumped = true; // 正常收尾：下面这两行就是全部读数，别让异常处理器再打一遍
