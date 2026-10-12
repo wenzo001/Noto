@@ -2418,6 +2418,10 @@ function contrastRatio(fg, bg) {
       p.remove();
       return v;
     };
+    const te = [...d.querySelectorAll('.dock__tab')];
+    const t0 = te[0]?.getBoundingClientRect();
+    const tn = te[te.length - 1]?.getBoundingClientRect();
+    const num = (v) => Math.round(parseFloat(v));
     return {
       tokLine: tok('--line'),
       tokCanvas: tok('--canvas'),
@@ -2437,6 +2441,14 @@ function contrastRatio(fg, bg) {
       paneBottom: Math.round(pane.getBoundingClientRect().bottom),
       viewportH: window.innerHeight,
       tabs: [...d.querySelectorAll('.dock__tab')].map(box),
+      // §3.5 那句「胶囊内左右 6px、上下 6px」以前一位没量。声明值与**实测视觉间隙**都取回来：
+      // 探针实测 `padding: 5px 6px` + 描边 1px ⇒ 左右声明就是规范的 6，上下"栏外沿→tab"的间隙 = 5 + 1 = 6。
+      padL: num(cs.paddingLeft), padR: num(cs.paddingRight), padT: num(cs.paddingTop), padB: num(cs.paddingBottom),
+      borderPx: num(cs.borderTopWidth),
+      gapTop: t0 ? Math.round(t0.top - r.top) : -1,
+      gapBottom: tn ? Math.round(r.bottom - tn.bottom) : -1,
+      tabH0: t0 ? Math.round(t0.height) : -1,
+      sumV: num(cs.paddingTop) + (t0 ? Math.round(t0.height) : 0) + num(cs.paddingBottom) + num(cs.borderTopWidth) * 2,
       primaryBg: d.querySelector('.dock__tab--primary') ? getComputedStyle(d.querySelector('.dock__tab--primary')).backgroundColor : '',
       primaryColor: d.querySelector('.dock__tab--primary') ? getComputedStyle(d.querySelector('.dock__tab--primary')).color : '',
       syncIcon: glyph?.getAttribute('data-icon') ?? '',
@@ -2456,6 +2468,20 @@ function contrastRatio(fg, bg) {
   check('㉕ 外层留白：左右各 12、底部 20（安全区内这一档就是 20）',
     dock.left === 12 && dock.rightGap === 12 && dock.bottomGap === 20,
     JSON.stringify({ left: dock.left, rightGap: dock.rightGap, bottomGap: dock.bottomGap }));
+  // §3.5 的第三句「胶囊内左右 6px、上下 6px」。这条曾经**一位没量**，而且它和我最初的判断相反：
+  // 我从 CSS 算术推出"64 / 52 / 上下 6 三数过定、实现牺牲了上下"—— 探针打脸：
+  // 实现写 `padding: 5px 6px` 正是为了让**视觉间隙**等于 6（5 padding + 1 描边），三个数同时成立。
+  // 所以这里两个口径都要钉：左右钉**声明值**（规范说的就是 padding），上下钉**实测间隙**（用户看见的那个数）。
+  // 横向实测间隙是 35px（`justify-content: center` 把 tab 排居中），规范那句在横向没说要贴边 —— 要不要贴边记 **G126** 等设计师拍，判据不替他们决定。
+  check('㉕ 胶囊内 padding：左右声明 = 6px（§3.5 字面值）',
+    dock.padL === 6 && dock.padR === 6 && dock.padT === 5 && dock.padB === 5,
+    JSON.stringify({ padL: dock.padL, padR: dock.padR, padT: dock.padT, padB: dock.padB }));
+  check('㉕ 胶囊内上下 = 6px 是**看得见的间隙**（5 padding + 1 描边），不是 CSS 里写了个 6',
+    dock.gapTop === 6 && dock.gapBottom === 6 && dock.borderPx === 1,
+    JSON.stringify({ 上隙: dock.gapTop, 下隙: dock.gapBottom, 描边: dock.borderPx }));
+  check('㉕ §3.5 那三个数要**自己算给自己看**：描边 1×2 + padding 5×2 + tab 52 = 栏 64（恒等式破了就是有人动了其中一个数）',
+    dock.sumV === 64 && dock.h === 64 && dock.tabH0 === 52,
+    JSON.stringify({ 合计: dock.sumV, 栏高: dock.h, 'tab 高': dock.tabH0 }));
   check('㉕ 栏**不参与文档流**：内容区仍然铺到视口底（栏要是占了位，这一条就量不到"浮层"了）',
     dock.bodyBottom === dock.viewportH, JSON.stringify({ bodyBottom: dock.bodyBottom, viewportH: dock.viewportH }));
   check('㉕ 内容区自己让出 ≥84px，且列表那一栏的底真的在栏顶之上（最后一行不许被压住）',
