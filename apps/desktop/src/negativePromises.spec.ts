@@ -146,6 +146,92 @@ describe('§6 搜索只搜本机：不许说"服务器/远端在替你搜"', () 
   });
 });
 
+/**
+ * §6 剩下那四条：**代理模式只有那五档**（没有 PAC）、**没有插件系统**、
+ * **没有表格单元格级合并**、**没有实时多端光标协同**。
+ * 这四条的现实与上面三条一样："这些词一辈子没出现过" ⇒ 只断言"扫到 0 处"与"整个判据没牙"长成一个样，
+ * 所以每条都配 ① 语料侧对照（被扫的那一族真有内容）+ ② 牙齿对照（同一支判据必须抓住故意写的假话）。
+ * 代理那档不用词表用**集合双向差集**：规范说的是"不做 PAC 执行"，而产品那边是一列**有限选项**
+ * —— 有限集合就该按集合判（多一档红、少一档也红），这才分辨得出"偷偷加了一档 pac"。
+ */
+describe('§6 代理只有那五档：不做 PAC 自动代理脚本执行', () => {
+  const src = read('views/SettingsView.vue');
+  // 从模板那个 `proxyOptions` 数组里把 `value:` 现取出来（不复制一份常量当判据 —— 那会变成同源自证）
+  const extract = (text: string): string[] => {
+    const block = /const proxyOptions[^=]*=\s*\[([\s\S]*?)\];/.exec(text);
+    if (!block) return [];
+    return [...block[1].matchAll(/value:\s*'([a-z0-9_]+)'/g)].map((m) => m[1]);
+  };
+  const ALLOWED = ['direct', 'system', 'http', 'https', 'socks5'];
+  const got = extract(src);
+  it('对照①：这一列选项真被扫到了（读到空数组就等于这条从没在看东西）', () => {
+    expect(got.length).toBeGreaterThanOrEqual(5);
+  });
+  it('对照②：牙齿自检 —— 同一支提取器面对"偷偷加了一档 pac"必须抓到（否则"零违规"只是判据没在看）', () => {
+    const fake = extract("const proxyOptions: Array<{ value: ProxyMode }> = [\n  { value: 'pac', label: 'settings.proxyPac' },\n  { value: 'socks5', label: 'x' },\n];");
+    expect(fake).toContain('pac');
+  });
+  it('选项集合与规范那一格**双向**一致：多一档（PAC 就在这一刀的形状）红，少一档也红', () => {
+    expect([...got].sort()).toEqual([...ALLOWED].sort());
+  });
+  it('文案侧也不许出现 PAC / 自动配置脚本那一档（用户看得见的那句同样不许发明）', () => {
+    const PAC = /PAC|自动代理|代理脚本|自动配置(脚本|文件)/i;
+    const hits = i18nPairs().filter((p) => p.key.startsWith('settings.proxy') && PAC.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(PAC.test('使用 PAC 自动代理脚本'), '牙齿：这句假话必须被抓住').toBe(true);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
+
+describe('§6 没有插件系统：不许画"安装/启用插件"那一类入口', () => {
+  const pairs = i18nPairs();
+  const PLUGIN = /(安装|启用|停用|浏览|管理|市场).{0,6}(插件|扩展)|(插件|扩展)(市场|列表|中心|管理)|第三方扩展/i;
+  it('对照①：被扫的文案面不为空（工具条与设置这些族都在）', () => {
+    expect(pairs.filter((p) => p.key.startsWith('settings.') || p.key.startsWith('toolbar.') || /工具|更多/.test(p.value)).length).toBeGreaterThanOrEqual(10);
+  });
+  it('对照②：正则对"插件市场""启用扩展"那两句假话必须命中', () => {
+    expect(PLUGIN.test('浏览插件市场')).toBe(true);
+    expect(PLUGIN.test('启用扩展以增强编辑器')).toBe(true);
+  });
+  it('没有任何一句文案把插件/扩展说成产品能力', () => {
+    const hits = pairs.filter((p) => PLUGIN.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
+
+describe('§6 没有表格单元格级合并：「合并」只许是冲突逐条与导入并库那一族', () => {
+  const pairs = i18nPairs();
+  // 这一条**故意不能写成 /合并/**：产品里 `我来合并`（冲突逐条）、`合并出来的`（副本来源）、
+  // `合并进现有库`（导入模式）三句都是合法在场的。判据要钉的是"单元格/表格级合并"那一格。
+  const CELL = /(单元格|表格|格子).{0,8}(合并|拆分)|合并.{0,8}(单元格|格子)|单元格级/i;
+  it('对照①：合法的「合并」这一族确实在场 —— 这条判的不是"整个文件没有这个字"', () => {
+    expect(pairs.filter((p) => /合并/.test(p.value)).length).toBeGreaterThanOrEqual(2);
+  });
+  it('对照②：正则对"支持单元格级合并"那句假话必须命中', () => {
+    expect(CELL.test('表格支持单元格级合并')).toBe(true);
+    expect(CELL.test('选中单元格后合并')).toBe(true);
+  });
+  it('没有任何一句文案把单元格/表格合并说成产品能力', () => {
+    const hits = pairs.filter((p) => CELL.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
+
+describe('§6 没有多人协作与实时光标：不许说"看见对方在编辑 / 光标在那一侧"', () => {
+  const pairs = i18nPairs();
+  const COLLAB = /(实时|多人|协同|协作).{0,10}(编辑|光标|在线)|对方(的)?光标|协作者|共同编辑|谁(也)?在(编辑|改)/;
+  it('对照①：「同步 / 设备 / 别的设备」这一族在场（同步做了，这一族就是最容易顺手写成"协作"的那族）', () => {
+    expect(pairs.filter((p) => /同步|设备/.test(p.value)).length).toBeGreaterThanOrEqual(5);
+  });
+  it('对照②：正则对"多人实时协作""对方的光标"那两句假话必须命中', () => {
+    expect(COLLAB.test('支持多人实时协作编辑')).toBe(true);
+    expect(COLLAB.test('你能看到对方的光标')).toBe(true);
+  });
+  it('没有任何一句文案把实时协作或对方光标说成产品能力', () => {
+    const hits = pairs.filter((p) => COLLAB.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
+
 describe('§6 版本历史只在本机：不许说历史被上传/同步到远端', () => {
   const pairs = i18nPairs();
   const UPLOADED = /(历史|版本).{0,10}(上传|同步到|存放在|备份到).{0,8}(服务器|远端|云端)|远端.{0,6}(保留|存).{0,6}历史/i;
