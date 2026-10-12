@@ -7358,54 +7358,13 @@ function contrastRatio(fg, bg) {
 }
 
 /**
- * 65 §4.9「按下」那一格 —— 逐颗控件按下去，量**同一指针位置**"未按"与"按住"两帧的计算值链。
- *
- * 这一格是通扫扫出来的真缺陷（G119，2026-10-11）：全应用只有 `.btn` 与 `.dock__tab` 写过 `:active`，
- * 侧栏的「回收站 / 冲突 / 设置」（`.nav-btn` 三行）、文件夹行、同步徽标按下去是**死的** —— 99 颗
- * `<button>` 里 11 颗没有任何按下反馈。修法是 base.css 里一条全局规则，不逐个补。
- *
- * 这把尺子在落进来之前换过六版，三处都是量具自己的错（不修就会去点产品的名）：
- *  ① 指针按下再抬起就是一次真点击：点走页面、开弹窗、Vue 换掉节点 —— v3 有 16/28 报"读不到"就是这么来的。
- *     现在扫的这段把 `click`/`dragstart` 拦在**捕获相**（preventDefault 也顺手挡住原生拖拽）。
- *  ② 同一颗 testid 可以有多个实例（`note-pin-toggle` 五颗）：`querySelector` 只拿第一颗，于是指针压在 #0、
- *     读的是 #1，报成"无 :active"。现在扫前给每颗实例打唯一标记，按标记寻址。
- *  ③ 松手后不许拿"整条链回位"当判据：`blur()` 会把 hover 那一层重新淡入一遍，抓到的是一帧过渡中的值
- *     （实测 alpha 0.91）。现在只要求**按下时变了的那几根轴**回位，且不再动焦点。
- * 判据用计算值不用像素：`scale(0.97)` 在 44px 的按钮上是 ~1.3px，像素 diff 抓不稳（腿 65 前两版就死在这）。
- *
- * 五条：① 仪器自检（人群按栏都在 + 基线两拍相同 + 每一颗都真的进入了 `:active`）；② 按下必须有变化；
- * ③ 变了的那几根轴松手必须回位；④ 禁用那颗（含注入的一颗）按下不许有变化（钉住 `:not(:disabled)`）；
- * ⑤ console error 为零 + 自己造的夹具扫完要清干净（残骸会变下一遍的现场，G121 那一族）。
+ * §4.9「按下」那把尺子 —— 桌面那一屏（腿 65）与 390 触摸那一屏（腿 67）**共用同一份实现**：
+ * 人群收集、按标记寻址、计算值读法、命中判定、按下/松手两帧，各只写一遍。
+ * 两个调用点各自决定"这一屏该有哪几栏、每栏至少几颗" —— 断言属于判据，不属于尺子
+ * （用户口径：共享一份实现，别逐个补；见 [[feedback-apple-hig-architecture-level]]）。
+ * 只返回读数，不 return 判据：这样每一臂的判据都能被单独变异、单独记分。
  */
-{
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const p = await ctx.newPage();
-  const errs = [];
-  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
-  // **覆盖不许靠现场继承**：这一腿扫的是"屏幕上此刻有多少颗身份寻址的控件"，而屏幕上有几行笔记
-  // 取决于列表里躺着什么。上一批把 `FIXTURE_MARKS` 补齐之后跑前清得更干净，它量到的颗数从 28 掉到 19
-  // —— 但读数里只有一个总数，说不出掉的是哪一栏，所以那条旧的"≥24"门槛照样绿（变异台也证明不了它）。
-  // 现在两件事分开做：① 自己造三篇保证列表/编辑器有东西可开；② 自检**按栏**量人群（见下面那条）。
-  // P1 那一刀（掐掉造夹具）实测：总数仍是 28 —— 库里有的是笔记时夹具不添颗数，它添的是"空库也扫得动"。
-  const ownStamp = String(Date.now()).slice(-6);
-  const seeded = [];
-  for (let i = 0; i < 3; i += 1) {
-    const r = await cmd('create_note', {
-      folderId: null,
-      doc: {
-        v: 1,
-        content: [
-          { id: `ph${ownStamp}${i}`, type: 'heading', attrs: { level: 1 }, content: [{ text: `按下夹具 ${ownStamp}-${i}` }] },
-          { id: `pp${ownStamp}${i}`, type: 'paragraph', content: [{ text: '这一行让列表里有摘要与元信息那几颗可点的控件。' }] },
-        ],
-      },
-    });
-    if (r?.id) seeded.push(r.id);
-  }
-  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
-  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
-  await p.waitForTimeout(700);
-
+async function pressSweep(p) {
   await p.evaluate(() => {
     const stop = (e) => { e.stopPropagation(); e.preventDefault(); };
     for (const t of ['click', 'dragstart']) window.addEventListener(t, stop, true);
@@ -7444,7 +7403,7 @@ function contrastRatio(fg, bg) {
         : el.closest('.pane--sidebar') ? 'sidebar'
           : el.closest('.pane--list') ? 'list'
             : el.closest('.dock') ? 'dock' : 'other',
-      box: [Math.round(r.x), Math.round(r.y)],
+      box: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)],
     };
   }));
   const byPane = {};
@@ -7497,18 +7456,41 @@ function contrastRatio(fg, bg) {
   for (const t of list) {
     await p.mouse.move(4, 4);
     await p.waitForTimeout(120);
-    await p.mouse.move(t.box[0] + 6, t.box[1] + 6);
-    await p.waitForTimeout(160);
-    // 落在它身上才算点得着：指针压住的可能是覆盖在它上面的另一层（祖先 pointer-events:none 也在这抓）。
-    const hit = await p.evaluate(([x, y, s]) => {
+    // 按在**真的落在这颗控件上**的那一点。两个方向都踩过坑：
+    //  · 只会按左上角偏 6px —— 药丸圆角（`--r-chip`）把那颗的角切在自己的形状之外，那一下浏览器根本不激活
+    //    （390 底部胶囊栏四颗最初报"没进入 :active"就是这么来的：同一颗按中心 `active:true` + `matrix(0.97,…)`）；
+    //  · 只会按中心 —— 文件夹行的悬停工具层（改名/颜色/更多）就画在行中间，中心那一下落在**兄弟**那颗按钮上，
+    //    焦点跳到 `folder-rename`，行自己既不激活也没增量（这一样不是产品缺陷：那几颗图标本来就在那里、本来就该点得着）。
+    // 所以按"中心 → 偏左 → 靠左上"依次试，取第一个命中自己或自己后代的点；一个都不中才记"点不着"。
+    const aim = () => p.evaluate((s) => {
       const el = document.querySelector(`[data-press-scan="${s}"]`);
-      if (!el) return 'gone';
-      if (getComputedStyle(el).pointerEvents === 'none') return 'pe-none';
-      const h = document.elementFromPoint(x + 6, y + 6);
-      if (!h) return 'no-point';
-      return h === el || el.contains(h) || h.contains(el) ? 'ok' : `covered-by:${h.getAttribute('data-testid') || String(h.className).split(' ')[0]}`;
-    }, [t.box[0], t.box[1], t.scan]);
-    if (hit !== 'ok') { unreachable.push(`${t.id} ${hit}`); continue; }
+      if (!el) return { hit: 'gone' };
+      if (getComputedStyle(el).pointerEvents === 'none') return { hit: 'pe-none' };
+      const r = el.getBoundingClientRect();
+      for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.5], [0.12, 0.5], [0.5, 0.75], [0.04, 0.14]]) {
+        const cx = Math.round(r.x + r.width * fx), cy = Math.round(r.y + r.height * fy);
+        const h = document.elementFromPoint(cx, cy);
+        // 只认"它自己或它的后代"。命中的是祖先 = 那个点不在它的可点形状上；命中的是别人 = 被盖住。
+        if (h && (h === el || el.contains(h))) return { hit: 'ok', cx, cy };
+      }
+      const mid = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
+      return { hit: `covered-by:${mid ? (mid.getAttribute('data-testid') || String(mid.className).split(' ')[0]) : 'no-point'}` };
+    }, t.scan);
+    // 先把指针放进这一格 —— `aim()` 必须在 **hover 那一层已经显形** 的现场挑点：
+    // 悬停工具层平时是透明的却照样可命中，未按之前挑中的点与真按下去命中的不是同一批
+    // （文件夹那 5 颗这一轮就是这么红的：挑在名字标签上，按下命中的却是刚显形的 `folder-rename`）。
+    await p.mouse.move(t.box[0] + Math.round(t.box[2] / 2), t.box[1] + Math.round(t.box[3] / 2));
+    await p.waitForTimeout(200);
+    let aimed = await aim();
+    if (aimed.hit !== 'ok') {
+      // 被挡住 ≠ 点不着（0.0.111 那条口径）：先把它滚进视野中间再量一次，救不回来才算缺陷。
+      await p.evaluate((s) => document.querySelector(`[data-press-scan="${s}"]`)?.scrollIntoView({ block: 'center' }), t.scan);
+      await p.waitForTimeout(320);
+      aimed = await aim();
+    }
+    if (aimed.hit !== 'ok') { unreachable.push(`${t.id} ${aimed.hit}`); continue; }
+    await p.mouse.move(aimed.cx, aimed.cy);
+    await p.waitForTimeout(150);
     const a1 = await read(t.scan);
     const a2 = await read(t.scan);
     if (!a1 || !a2) { unreadable.push(t.id); continue; }
@@ -7539,6 +7521,61 @@ function contrastRatio(fg, bg) {
     const still = changed.filter((i) => a1.axes[i] !== c.axes[i]);
     if (still.length > 0) notRecovered.push(`${t.id} 第 ${still.join('/')} 根轴停在按下值 ${JSON.stringify(still.map((i) => c.axes[i]))}`);
   }
+
+  return { list, byPane, measured, actives, noDelta, notRecovered, unreadable, disabledChanged, unstable, unreachable, activeMissed };
+}
+
+/**
+ * 65 §4.9「按下」那一格 —— 逐颗控件按下去，量**同一指针位置**"未按"与"按住"两帧的计算值链。
+ *
+ * 这一格是通扫扫出来的真缺陷（G119，2026-10-11）：全应用只有 `.btn` 与 `.dock__tab` 写过 `:active`，
+ * 侧栏的「回收站 / 冲突 / 设置」（`.nav-btn` 三行）、文件夹行、同步徽标按下去是**死的** —— 99 颗
+ * `<button>` 里 11 颗没有任何按下反馈。修法是 base.css 里一条全局规则，不逐个补。
+ *
+ * 这把尺子在落进来之前换过六版，三处都是量具自己的错（不修就会去点产品的名）：
+ *  ① 指针按下再抬起就是一次真点击：点走页面、开弹窗、Vue 换掉节点 —— v3 有 16/28 报"读不到"就是这么来的。
+ *     现在扫的这段把 `click`/`dragstart` 拦在**捕获相**（preventDefault 也顺手挡住原生拖拽）。
+ *  ② 同一颗 testid 可以有多个实例（`note-pin-toggle` 五颗）：`querySelector` 只拿第一颗，于是指针压在 #0、
+ *     读的是 #1，报成"无 :active"。现在扫前给每颗实例打唯一标记，按标记寻址。
+ *  ③ 松手后不许拿"整条链回位"当判据：`blur()` 会把 hover 那一层重新淡入一遍，抓到的是一帧过渡中的值
+ *     （实测 alpha 0.91）。现在只要求**按下时变了的那几根轴**回位，且不再动焦点。
+ * 判据用计算值不用像素：`scale(0.97)` 在 44px 的按钮上是 ~1.3px，像素 diff 抓不稳（腿 65 前两版就死在这）。
+ *
+ * 五条：① 仪器自检（人群按栏都在 + 基线两拍相同 + 每一颗都真的进入了 `:active`）；② 按下必须有变化；
+ * ③ 变了的那几根轴松手必须回位；④ 禁用那颗（含注入的一颗）按下不许有变化（钉住 `:not(:disabled)`）；
+ * ⑤ console error 为零 + 自己造的夹具扫完要清干净（残骸会变下一遍的现场，G121 那一族）。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  // **覆盖不许靠现场继承**：这一腿扫的是"屏幕上此刻有多少颗身份寻址的控件"，而屏幕上有几行笔记
+  // 取决于列表里躺着什么。上一批把 `FIXTURE_MARKS` 补齐之后跑前清得更干净，它量到的颗数从 28 掉到 19
+  // —— 但读数里只有一个总数，说不出掉的是哪一栏，所以那条旧的"≥24"门槛照样绿（变异台也证明不了它）。
+  // 现在两件事分开做：① 自己造三篇保证列表/编辑器有东西可开；② 自检**按栏**量人群（见下面那条）。
+  // P1 那一刀（掐掉造夹具）实测：总数仍是 28 —— 库里有的是笔记时夹具不添颗数，它添的是"空库也扫得动"。
+  const ownStamp = String(Date.now()).slice(-6);
+  const seeded = [];
+  for (let i = 0; i < 3; i += 1) {
+    const r = await cmd('create_note', {
+      folderId: null,
+      doc: {
+        v: 1,
+        content: [
+          { id: `ph${ownStamp}${i}`, type: 'heading', attrs: { level: 1 }, content: [{ text: `按下夹具 ${ownStamp}-${i}` }] },
+          { id: `pp${ownStamp}${i}`, type: 'paragraph', content: [{ text: '这一行让列表里有摘要与元信息那几颗可点的控件。' }] },
+        ],
+      },
+    });
+    if (r?.id) seeded.push(r.id);
+  }
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await p.waitForTimeout(700);
+
+  const { list, byPane, measured, actives, noDelta, notRecovered, unreadable,
+    disabledChanged, unstable, unreachable, activeMissed } = await pressSweep(p);
 
   check('65 仪器自检：人群按栏都在（侧栏 ≥8、列表 ≥3、编辑器 ≥4，总 ≥12）—— 上一批 19↔28 那一次只留下一个总数，看不出掉的是哪一整栏',
     (byPane.sidebar ?? 0) >= 8 && (byPane.list ?? 0) >= 3 && (byPane.editor ?? 0) >= 4 && measured >= 12,
@@ -7741,6 +7778,48 @@ function contrastRatio(fg, bg) {
   check('66 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
   await np.close();
   await nctx.close();
+  await p.close();
+  await ctx.close();
+}
+
+/**
+ * 67 §4.9「按下」那一格在 **390 触摸档** —— 尺子是腿 65 那一份（`pressSweep`），这一臂只写"这一屏该有什么"的断言。
+ * 为什么要有第二臂：那条全局规则在**规则级**成立，而 390 这一屏独有的控件（§3.5 底部胶囊栏那四颗、列表头那几颗）
+ * 从来没被逐颗按过 —— "覆盖了桌面"不等于"覆盖了各端"，与当初悬停那一族一模一样。
+ * 现场读数（下面那些下限就是从它取的）：`{"list":13,"dock":4}` 共 17 颗；抽屉平时是关着的，
+ * 侧栏那 12 颗不在这一屏里 ⇒ **这一臂不许要求 sidebar**（那是腿 65 的责任面）。
+ *
+ * 这一臂顺手改掉的两把尺子错（都在"按下点"上，见 `pressSweep` 里那段注释）：
+ * 固定按左上角偏 6px 打不到药丸圆角那一族；只按中心会被文件夹行的悬停工具层抢走那一下。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await p.waitForTimeout(700);
+  const s = await pressSweep(p);
+  check('67 仪器自检：390 这一屏的人群按栏都在（底部胶囊栏 ≥4、列表 ≥3，总 ≥12）—— 抽屉平时关着，侧栏不归这一臂管',
+    (s.byPane.dock ?? 0) >= 4 && (s.byPane.list ?? 0) >= 3 && s.measured >= 12,
+    JSON.stringify({ 分栏: s.byPane, 量到: s.measured }));
+  check('67 仪器自检：基线两拍逐字节相同、每一颗都点得着且都真进入了 :active，注入的禁用载荷在场',
+    s.unstable.length === 0 && s.unreachable.length === 0 && s.unreadable.length === 0
+      && s.activeMissed.length === 0 && s.list.some((t) => t.injected) === true,
+    JSON.stringify({ 没进入: s.activeMissed.slice(0, 4), 基线不稳: s.unstable.slice(0, 4), 点不着: s.unreachable.slice(0, 4), 读不到: s.unreadable.slice(0, 4), 注入: s.list.filter((t) => t.injected).length }));
+  check('67 §4.9 按下（390 触摸档）：每一颗可见可用的按钮按下去必须有计算值变化 —— 全局那条规则要在这一屏也真画上',
+    s.noDelta.length === 0, JSON.stringify(s.noDelta.slice(0, 10)));
+  check('67 §4.9 松手要回位（390 触摸档）：按下时变了的那几根轴，抬起之后必须回到未按时的同一值',
+    s.notRecovered.length === 0, JSON.stringify(s.notRecovered.slice(0, 8)));
+  check('67 §4.9 禁用优先（390 触摸档）：禁用那颗（含注入的一颗）按下去不许有变化',
+    s.disabledChanged.length === 0 && s.list.some((t) => t.dis) === true,
+    JSON.stringify({ 变了: s.disabledChanged.slice(0, 6), 禁用颗数: s.list.filter((t) => t.dis).length }));
+  notes.push(`     §4.9 390 按下实测：${s.measured} 颗（禁用 ${s.list.filter((t) => t.dis).length} 颗，其中注入 1 颗），`
+    + `全部进入 :active ${s.actives} 颗，无变化 ${s.noDelta.length} 颗，没回位 ${s.notRecovered.length} 颗，`
+    + `点不着 ${s.unreachable.length} 颗；分栏 ${JSON.stringify(s.byPane)}`);
+  await p.screenshot({ path: `${OUT}/64-press-390.png` });
+  check('67 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
   await p.close();
   await ctx.close();
 }
