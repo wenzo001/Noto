@@ -123,7 +123,7 @@ const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, '');
 const FIXTURE_MARKS = [
   '只读夹具', '常驻夹具', '拖排夹具', '滚动夹具', '状态夹具', '保存状态夹具',
   '置顶往返夹具', '通扫夹具', '键盘夹具', '附件账夹具', '弹窗夹具', '拖放夹具',
-  '分档夹具', '改于夹具', '移到夹具', '附件夹具',
+  '分档夹具', '改于夹具', '移到夹具', '附件夹具', '指点路径夹具',
   // 第 44/45 刀那两条腿的夹具：崩在半路也不许把残骸留成后面腿的现场（第 54 刀一次造 85 篇）。
   '满页夹具', '设备夹具',
   // 第 49 刀那条字号腿的夹具。
@@ -7327,32 +7327,41 @@ function contrastRatio(fg, bg) {
   // **给自己造的残骸一个上界**（ARCHITECTURE-MAP §8：清了多少、谁在看守、清理挂哪，三样都要有）。
   // 这一腿与腿 ㊳ 每跑一遍就 `backup_db` 一份，实测攒到 11 份 / 52 MB ⇒ `.logs` 越过 60 MB 预算
   // （arch 的 hygiene:scratch-budget-guarded 因此红），而且 `list_backups` 被拖慢到量不出落定。
-  // 保留最新的 3 份 + **任何被引用着的那份**（`restore-pending.json` 指的、以及 `*.pre-restore.*`）——
-  // 这一条是被上一次事故教出来的：我清残骸时删掉过一份正被 pending 指着的备份，桥直接拒绝开库。
+  // 保留最新的 3 份 + **被 pending 指着的那份** —— 这一条是被上一次事故教出来的：
+  // 我清残骸时删掉过一份正被 `restore-pending.json` 指着的备份，桥直接拒绝开库。
+  //
+  // 第二版补上的是**我自己这条上界的漏洞**：恢复动作还在库根留 `notera.sqlite.pre-restore.<ver>.<rand>` 回滚副本，
+  // 而我当时写成"任何 `.pre-restore.` 都留"（并把它算进 `backups/` 那一支 —— 那个目录里根本没有这类文件）。
+  // 于是**每跑一遍多一份 4 MB、永远不删**，`.logs` 就是这么在 62 MB 顶爆预算的。
+  // 口径改成：回滚副本只留**最新一份**（在飞的那次恢复要用它回滚），其余按同样方式被 pending 的名字豁免。
   {
     const fsp = await import('node:fs');
-    const dir = 'D:/code/Notes/.logs/g102-data/backups';
-    const pendingFile = 'D:/code/Notes/.logs/g102-data/restore-pending.json';
-    let removed = 0; let bytes = 0; const kept = [];
+    const libDir = 'D:/code/Notes/.logs/g102-data';
+    const dir = `${libDir}/backups`;
+    const pendingFile = `${libDir}/restore-pending.json`;
+    let removed = 0; let bytes = 0; const keptBackups = []; const keptPre = [];
     if (fsp.existsSync(dir)) {
       const referenced = new Set();
       if (fsp.existsSync(pendingFile)) {
         const txt = fsp.readFileSync(pendingFile, 'utf8');
-        for (const m of txt.matchAll(/notera-[\w-]+\.sqlite/g)) referenced.add(m[0]);
+        for (const m of txt.matchAll(/notera[-\w.]*\.sqlite/g)) referenced.add(m[0]);
       }
-      const files = fsp.readdirSync(dir).filter((f) => f.endsWith('.sqlite') || f.includes('.pre-restore.'));
-      const sorted = files.map((f) => ({ f, t: fsp.statSync(`${dir}/${f}`).mtimeMs })).sort((a, b) => b.t - a.t);
-      sorted.forEach((x, i) => {
-        if (i < 3 || referenced.has(x.f) || x.f.includes('.pre-restore.')) { kept.push(x.f); return; }
-        bytes += fsp.statSync(`${dir}/${x.f}`).size;
-        fsp.rmSync(`${dir}/${x.f}`);
-        removed += 1;
+      const newestFirst = (names, base) => names.map((f) => ({ f, t: fsp.statSync(`${base}/${f}`).mtimeMs, s: fsp.statSync(`${base}/${f}`).size }))
+        .sort((a, b) => b.t - a.t);
+      const drop = (list, keepN, sink) => list.forEach((x, i) => {
+        if (i < keepN || referenced.has(x.f)) { sink.push(x.f); return; }
+        bytes += x.s; fsp.rmSync(`${x.base}/${x.f}`); removed += 1;
       });
-      notes.push(`     备份残骸上界：删 ${removed} 份 / ${(bytes / 1048576).toFixed(1)} MB，留 ${kept.length} 份（最新 3 + 被引用 ${referenced.size}）`);
-      check('64 自己造的备份残骸要收回上界内（留下的不超过 3 份 + 被引用的那些）',
-        kept.length <= 3 + referenced.size, JSON.stringify({ kept: kept.length, removed, referenced: referenced.size }));
+      const bk = newestFirst(fsp.readdirSync(dir).filter((f) => f.endsWith('.sqlite')), dir).map((x) => ({ ...x, base: dir }));
+      const pr = newestFirst(fsp.readdirSync(libDir).filter((f) => f.includes('.pre-restore.')), libDir).map((x) => ({ ...x, base: libDir }));
+      drop(bk, 3, keptBackups);
+      drop(pr, 1, keptPre);
+      notes.push(`     残骸上界：删 ${removed} 份 / ${(bytes / 1048576).toFixed(1)} MB，留备份 ${keptBackups.length} 份 + 回滚副本 ${keptPre.length} 份（被 pending 引用 ${referenced.size} 个）`);
+      check('64 自己造的备份与回滚副本要收回上界内（备份 ≤3+被引用、pre-restore ≤1+被引用；两族都数得出来才算在看守）',
+        bk.length + pr.length > 0 && keptBackups.length <= 3 + referenced.size && keptPre.length <= 1 + referenced.size,
+        JSON.stringify({ 备份留下: keptBackups.length, 回滚副本留下: keptPre.length, 删掉: removed, 被引用: referenced.size }));
     } else {
-      notes.push('     备份残骸上界：没有 backups 目录（这一遍没落地备份），跳过');
+      notes.push('     残骸上界：没有 backups 目录（这一遍没落地备份），跳过');
     }
   }
 }
@@ -7904,6 +7913,118 @@ async function pressSweep(p) {
   notes.push(`     §4.9 390 聚焦实测：${rows.filter((r) => r.focusVisible).length}/4 颗画出焦点环，环色对齐 ${rows.filter((r) => r.ringColor === r.accent).length}/4，最低对比 ${Math.min(...rows.map((r) => contrastRatio(r.ringColor, r.canvas))).toFixed(2)}:1`);
   await p.screenshot({ path: `${OUT}/65-focus-ring-390.png` });
   check('68 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
+/**
+ * 69 §5「每个快捷键动作都要有等价的指点路径」—— 从**键位表那份源文件**现取动作，逐个量界面上真有一颗点得着的控件。
+ *
+ * 这一格以前只有两条断言（`accessibility.spec.ts` 的 §5②）：键位表读到了 + 每条的 `labelKey` 在 i18n 登记了。
+ * 那两句量的都是**标签在场**，没有一句问过"这条路点得到吗"。键盘能做的事鼠标做不到，界面上是不会说话的
+ * （与 §6 那四条"词一辈子没出现过"是同一类空判据，也同 [[verify-the-call-edge-not-just-the-callees-tests]]）。
+ *
+ * 两件事一起钉：
+ *  ① **双向差集**：键位表里每一行都必须出现在下面这张映射里 —— 新增了键位没配指点路径 ⇒ 红；
+ *     映射里留着一条键位已经删掉的死条目 ⇒ 也红。带 `requires:` 的那几行是 **OS 级能力**（托盘、全局快捷键），
+ *     界面上本来就不该有颗按钮替它们办事 ⇒ 走豁免；豁免必须**真的命中过**（空表与永不生效的表都是烂掉的门禁）。
+ *  ② 每一行的那颗控件要**看得见、按自己的中心点得着**（祖先链可见 + `elementFromPoint` 命中的是自己或自己的后代）。
+ *     DOM 里存在不等于能点 —— 这把尺子在腿 65/67 上刚抓过一次"落在形状外面"。
+ */
+{
+  const { readFileSync } = await import('node:fs');
+  const capsSrc = readFileSync('D:/code/Notes/apps/desktop/src/platform/caps.ts', 'utf8');
+  const rows = [...capsSrc.matchAll(/\{\s*id:\s*'([^']+)'([\s\S]*?)\}/g)]
+    .map((m) => ({ id: m[1], requires: /\brequires:/.test(m[2]) }));
+  // 指点路径。多选择器 = 一条路有好几个入口（徽标与设置页那颗都算），第一个存在的就算这条路。
+  const PATHS = {
+    'new-note': ['[data-testid="new-note"]'],
+    'search': ['[data-testid="search-input"]'],
+    'collapse': ['[data-testid="sidebar-handle"]', '[data-testid="sidebar-collapse"]'],
+    'pin': ['[data-testid="note-pin-toggle"]', '[data-testid="toggle-pin"]'],
+    'delete': ['[data-testid="trash-note"]'],
+    'bold': ['[data-tb-key="bold"]'],
+    'italic': ['[data-tb-key="italic"]'],
+    'underline': ['[data-tb-key="underline"]'],
+    'heading': ['[data-tb-key="type"]'],
+    'checklist': ['[role="checkbox"]'],
+    'attach': ['[data-tb-key="attach"]'],
+    'sync': ['[data-testid="sync-badge"]', '[data-testid="sync-now"]'],
+    'conflicts': ['[data-testid="nav-conflicts"]'],
+  };
+
+  const inTable = rows.map((r) => r.id);
+  const osLevel = rows.filter((r) => r.requires).map((r) => r.id);
+  const missing = inTable.filter((id) => !(id in PATHS) && !osLevel.includes(id));
+  const stale = [...Object.keys(PATHS), ...osLevel].filter((id) => !inTable.includes(id));
+  check('69 双向差集：键位表里每一行都有指点路径（或明确是 OS 级能力），映射里不许留死条目',
+    rows.length >= 13 && osLevel.length >= 1 && missing.length === 0 && stale.length === 0,
+    JSON.stringify({ 键位行数: rows.length, 无路径: missing, 死条目: stale, os级豁免: osLevel }));
+
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  // 那颗勾要有一篇含 checklistItem 块的笔记才画得出来 ⇒ 自己造，扫完自己清（同一篇也保证工具条与行上动作都在场）。
+  const stamp = String(Date.now()).slice(-6);
+  const made = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [
+        { id: `q69h${stamp}`, type: 'heading', attrs: { level: 1 }, content: [{ text: `指点路径夹具 ${stamp}` }] },
+        { id: `q69p${stamp}`, type: 'paragraph', content: [{ text: '这一段让编辑器、工具条与行上的动作都画出来。' }] },
+        { id: `q69c${stamp}`, type: 'checklistItem', attrs: { checked: false }, content: [{ text: '这一格要有那颗勾' }] },
+      ],
+    },
+  });
+  const madeId = made?.id ?? made?.note?.id;
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await p.waitForTimeout(800);
+  await p.getByText(`指点路径夹具 ${stamp}`).first().waitFor({ timeout: 8000 });
+  await p.getByText(`指点路径夹具 ${stamp}`).first().click();
+  await p.waitForTimeout(700);
+
+  const probe = (sel) => p.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return null;
+    let vis = true;
+    for (let x = el; x && x !== document.documentElement; x = x.parentElement) {
+      const cs = getComputedStyle(x);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) { vis = false; break; }
+    }
+    const r = el.getBoundingClientRect();
+    const h = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
+    return { vis, w: Math.round(r.width), h: Math.round(r.height), hit: !!h && (h === el || el.contains(h)) };
+  }, sel);
+
+  const bad = [];
+  const seen = [];
+  for (const id of inTable) {
+    if (!(id in PATHS)) continue; // OS 级那一族：上面那条差集已经管住了
+    let got = null;
+    let used = '';
+    for (const sel of PATHS[id]) {
+      got = await probe(sel);
+      used = sel;
+      if (got) break;
+    }
+    if (!got) { bad.push(`${id} 没有那颗控件（${PATHS[id].join(' / ')}）`); continue; }
+    seen.push(id);
+    if (!got.vis) { bad.push(`${id} 的 ${used} 看不见（${JSON.stringify(got)}）`); continue; }
+    if (!got.hit) bad.push(`${id} 的 ${used} 按中心点不着（${JSON.stringify(got)}）`);
+  }
+  check('69 §5 等价指点路径：每一条键盘动作都在屏幕上找到一颗**看得见且按自己中心点得着**的控件',
+    bad.length === 0 && seen.length >= 13, JSON.stringify({ 走到的: seen.length, 坏在: bad.slice(0, 6) }));
+  notes.push(`     §5 指点路径：${seen.length} 条键盘动作逐条对到控件（OS 级豁免 ${osLevel.length} 条：${osLevel.join('/')}）`);
+
+  if (madeId) { await cmd('delete_note', { id: madeId }); await cmd('purge_note', { id: madeId }); }
+  const after = await cmd('list_notes', { folderId: null, trash: false });
+  const left = ((after?.items ?? after) ?? []).filter((n) => (n.title ?? '').startsWith(`指点路径夹具 ${stamp}`));
+  check('69 自己造的夹具笔记扫完要清干净（留着就变成下一遍的现场）', left.length === 0 && !!madeId,
+    JSON.stringify({ left: left.length, made: !!madeId }));
+  check('69 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
   await p.close();
   await ctx.close();
 }
