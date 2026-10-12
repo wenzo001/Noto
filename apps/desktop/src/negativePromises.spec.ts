@@ -247,3 +247,74 @@ describe('§6 版本历史只在本机：不许说历史被上传/同步到远�
     expect(hits, JSON.stringify(hits)).toEqual([]);
   });
 });
+
+/**
+ * §3.3 那句「没有筛选器、没有正则、没有按文件夹搜、没有日期分面」—— 四句否定式承诺以前**零证人**
+ * （那一节里只有"搜索不搜回收站"那半句有执行者）。
+ *
+ * 扫**两面**，因为这两面会各自漏：
+ *  · **文案面**：一句文案把这四样说成产品能力 = 发明能力（与 §4.8「没有 Markdown/HTML/PDF 导出」同族）；
+ *  · **控件面**：画了一颗入口但没起中文名字 —— 文案面干净，入口照样在屏幕上。
+ *
+ * 载荷面**不重复**：`stores/notes.spec.ts` 已经拿 `toEqual({ text, limit })` 钉死了 `search` 那一发
+ * 只有这两位（加一档文件夹范围 / 日期区间 / 正则开关都会红）。这一族的"谁在守什么"写在这儿，
+ * 免得下一个人以为还欠着。
+ */
+describe('§3.3 搜索只有"一个词"这一件事：没有筛选器 / 正则 / 按文件夹搜 / 日期分面', () => {
+  const pairs = i18nPairs();
+  const searchKeys = pairs.filter((p) => /search|tier/i.test(p.key) || /搜索|找到|没列出来/.test(p.value));
+  const BAN_TEXT = /筛选|过滤|正则|\bregex\b|按文件夹搜|限定文件夹|文件夹内搜|分面|分面|facet|日期范围|时间范围|按日期搜|高级搜索/i;
+  // 控件面用的是**入口名**（英文 testid），与文案面两套词 —— 一把尺子量不到两边。
+  const BAN_TESTID = /(filter|facet|regex|scope|date-?range|advanced)/i;
+
+  /** 全仓的 `data-testid` 值（去注释后扫；模板串那种 `` `x-${id}` `` 不匹配，落不进名单也不该落进）。 */
+  function allTestIds(): string[] {
+    const ids: string[] = [];
+    for (const rel of listFiles(['.vue', '.ts'])) {
+      const text = read(rel)
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/<!--[\s\S]*?-->/g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+      for (const m of text.matchAll(/data-testid="([^"$`]+)"/g)) ids.push(m[1]);
+    }
+    return ids;
+  }
+
+  it('对照①：搜索那一族的文案真在场（≥5 条）—— 否则"零违规"只是没扫到东西', () => {
+    expect(searchKeys.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('对照②：四句假话各打一遍，文案面那条尺子必须句句命中（牙齿自检）', () => {
+    for (const lie of ['可以按日期范围筛选', '启用正则搜索', '只在当前文件夹内搜索', '搜索结果按时间分面']) {
+      expect(BAN_TEXT.test(lie), lie).toBe(true);
+    }
+  });
+
+  it('对照③：控件面的尺子既要抓得住假入口，也不许把规范真要求的那几颗拦下来（双向）', () => {
+    for (const id of ['search-folder-scope', 'search-date-range', 'regex-toggle', 'result-facet']) {
+      expect(BAN_TESTID.test(id), id).toBe(true);
+    }
+    // 反面对照：这些是**在场的合法名字**，被误伤就说明尺子宽到会把规范要的东西也判成违规。
+    for (const okId of ['search-input', 'search-clear', 'search-found', 'search-more', 'search-tier-hint', 'tier-exact', 'tier-fuzzy', 'search-empty']) {
+      expect(BAN_TESTID.test(okId), okId).toBe(false);
+    }
+  });
+
+  it('对照④：抽取器读到的是真名单（≥150 个 testid，且上面那八颗都在里面）—— 抽不到东西的扫描等于没检查', () => {
+    const ids = new Set(allTestIds());
+    expect(ids.size).toBeGreaterThanOrEqual(150);
+    for (const okId of ['search-input', 'search-clear', 'tier-exact', 'tier-fuzzy', 'search-tier-hint']) {
+      expect(ids.has(okId), `名单里读不到 ${okId}（选择器或抽取器坏了）`).toBe(true);
+    }
+  });
+
+  it('主判据·文案面：没有任何一句把筛选器/正则/按文件夹搜/日期分面说成产品能力', () => {
+    const hits = pairs.filter((p) => BAN_TEXT.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+
+  it('主判据·控件面：全仓没有任何一颗入口的名字落进那四个词', () => {
+    const hits = [...new Set(allTestIds())].filter((id) => BAN_TESTID.test(id));
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+});
