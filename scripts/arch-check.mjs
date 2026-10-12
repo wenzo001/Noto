@@ -453,6 +453,199 @@ for (const arm of commandsSrc.matchAll(/j\(app\.([a-z_]+)\(/g)) {
 check('edge:command-wire-is-camelCase', 'ARCHITECTURE-MAP §5（命令面出参的键名是契约）', [...new Set(camelArmViolations)],
   `这些命令出参的类型没声明 camelCase，wire 上会是 snake_case 而界面按 camelCase 取值：\n    ${[...new Set(camelArmViolations)].join('\n    ')}`);
 
+// ------------------------------------------ 平台能力的跨语言契约（键名 + 值词汇）---
+//
+// 这条是 2026-10-12 补的，起因是拿真载荷对了一遍两端，发现**四处漂**且**没有门禁看着**：
+//   · host 发 `backgroundTask`，前端读 `bgTask`           ⇒ 前端拿不到
+//   · host 发 "desktop_timer"/"workmanager"/"bgapprefresh"，前端只认
+//     'desktopTimer'/'workManager'/'bgAppRefresh'          ⇒ 值也不在词汇表里
+//   · host 发 filePicker "saf"/"document_picker"，前端只认 'native'|'web' ⇒ 一律折成 native
+//   · host **从不发** windowChrome/compactToolbar/transparency/dragAndDrop
+//     ⇒ 前端只能拿 `navigator.userAgent` 猜（= ADR-0011 明令禁止的机型分支）
+// 危害形状：`normalizeCaps` 对不认识的值**安静地退回兜底**，界面看起来完全正常，
+// 只是"说的不是核心的事实"——与本仓 `stats` 的 snake_case 事故同一族。
+//
+// 判据（双向）：
+//   ① host 结构体发出去的每个键，必须在前端 `PlatformCaps` 里有，或在 host-only 名单里；
+//   ② 带值词汇表的字段，host 的**取值**必须落在前端声明的联合里（逐字面量比）。
+// 空转保护：两端都要真解析出东西，否则报"本条在空转"。
+const CAPS_HOST_ONLY = new Set(['nativeMenu', 'notifications']);
+const capsDrift = [];
+{
+  const hostLibRaw = read(join(ROOT, 'crates/notera-host/src/lib.rs'));
+  const feCaps = read(join(ROOT, 'apps/desktop/src/platform/caps.ts'));
+
+  // 扫之前先把**注释整段去掉**：变异台 K1 已经证明，本结构体的文档注释里为了解释
+  // "为什么要显式 rename"而逐字写了那条属性，于是不认注释的解析器会读注释当代码，
+  // 门禁绿着放行。这一层防护对下面"键名"与"值"两处扫描**都要**生效。
+  const stripRustComments = (src) =>
+    src
+      .split(/\r?\n/)
+      .map((l) => {
+        const t = l.trimStart();
+        return t.startsWith('//') || t.startsWith('/*') || t.startsWith('*') ? '' : l;
+      })
+      .join('\n');
+  const hostLib = stripRustComments(hostLibRaw);
+
+  // ① host 结构体的字段（含 #[serde(rename=...)] 覆盖）
+  const structMatch = /pub struct PlatformCaps \{([\s\S]*?)\n\}/.exec(hostLib);
+  const structBody = structMatch?.[1] ?? '';
+  const hostFields = [];
+  if (!structBody) {
+    capsDrift.push('找不到 host 的 `pub struct PlatformCaps` —— 本条在空转');
+  } else {
+    // 逐字段扫：先记 #[serde(rename = "x")]，再取 pub name: type。
+    let pendingRename = null;
+    for (const line of structBody.split(/\r?\n/)) {
+      const rn = /#\[serde\(rename\s*=\s*"([^"]+)"\)\]/.exec(line);
+      if (rn) { pendingRename = rn[1]; continue; }
+      const f = /^\s*pub ([a-z0-9_]+):/.exec(line);
+      if (!f) continue;
+      const camel = pendingRename ?? f[1].replace(/_+([a-z0-9])/g, (_, c) => c.toUpperCase());
+      hostFields.push({ rust: f[1], wire: camel });
+      pendingRename = null;
+    }
+  }
+
+  // ② 前端 PlatformCaps 的键
+  const feMatch = /export interface PlatformCaps \{([\s\S]*?)\n\}/.exec(feCaps);
+  const feBody = feMatch?.[1] ?? '';
+  if (!feBody) capsDrift.push('找不到前端 `export interface PlatformCaps` —— 本条在空转');
+  const feKeys = new Set([...feBody.matchAll(/^\s*(\w+)\??\s*:/gm)].map((m) => m[1]));
+
+  if (hostFields.length === 0) capsDrift.push('host 的 PlatformCaps 一个字段都没解析出来 —— 本条在空转');
+  for (const f of hostFields) {
+    if (feKeys.has(f.wire) || CAPS_HOST_ONLY.has(f.wire)) continue;
+    capsDrift.push(`host 发 \`${f.wire}\`（Rust 字段 ${f.rust}），但前端 PlatformCaps 里没有它，也不在 host-only 名单里 —— 界面拿不到这一格`);
+  }
+  // 反向：前端读的键，host 必须真的发得出来（除前端本地推断独有的）
+  const FE_LOCAL_ONLY = new Set(['biometric']);
+  for (const k of feKeys) {
+    if (FE_LOCAL_ONLY.has(k)) continue;
+    if (!hostFields.some((f) => f.wire === k)) {
+      capsDrift.push(`前端读 \`${k}\`，但 host 从不发它 —— 只能靠 UA 猜（ADR-0011 禁止机型分支）`);
+    }
+  }
+
+  // ③ 值词汇表：host 每个分支里的字面量必须落在前端联合类型里
+  const unionOf = (name) => {
+    const m = new RegExp(`export type ${name} =([^;]+);`).exec(feCaps);
+    return m ? new Set([...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1])) : null;
+  };
+  const vocab = [
+    { rust: 'background_task', wire: 'bgTask', feType: 'BgTaskKind' },
+    { rust: 'keychain', wire: 'keychain', feType: null }, // 无别名联合，单独处理
+    { rust: 'file_picker', wire: 'filePicker', feType: null },
+    { rust: 'window_chrome', wire: 'windowChrome', feType: 'WindowChrome' },
+  ];
+  for (const v of vocab) {
+    const values = [...hostLib.matchAll(new RegExp(`\\b${v.rust}:\\s*"([^"]+)"`, 'g'))].map((m) => m[1]);
+    if (values.length === 0) {
+      capsDrift.push(`host 的 \`${v.rust}\` 一个字面量都没扫到 —— 本条在空转`);
+      continue;
+    }
+    let allowed;
+    if (v.feType) allowed = unionOf(v.feType);
+    else if (v.wire === 'keychain') allowed = new Set(['credentialManager', 'keychain', 'keystore', 'none']);
+    else allowed = new Set(['native', 'web']); // filePicker 的行内联合
+    if (!allowed) { capsDrift.push(`前端找不到 ${v.feType ?? v.wire} 的词汇表 —— 本条在空转`); continue; }
+    for (const got of new Set(values)) {
+      if (!allowed.has(got)) {
+        capsDrift.push(`host 的 \`${v.rust}\` 发 "${got}"，不在前端词汇表 {${[...allowed].join(', ')}} 里 —— 前端会安静地退回兜底`);
+      }
+    }
+  }
+}
+check('edge:caps-wire-vocabulary', 'ADR-0011 / ARCHITECTURE-MAP §5（平台能力是跨语言契约，键名与值都要对得上）',
+  capsDrift, `平台能力这一层两端对不上（界面会静默说错，而看不出坏）：\n    ${capsDrift.join('\n    ')}`);
+
+// ------------------------------------- 平台名只许出现在平台那一层（ADR-0011 的 grep 闸门）---
+//
+// ADR-0011 的「验证方式」一节明写：
+//   > grep 闸门：`apps/desktop/src` 与 `notera-host` 中不出现按机型/平台名的条件分支
+//   > （平台名只允许出现在 `platform/*`）。
+//
+// **这条闸门此前根本不存在**（2026-10-12 全仓搜 `arch-check` 零命中），
+// 而 ADR-0011 把"禁止按机型分支"写成了硬决策 —— 也就是那条决策一直只靠人记得住。
+//
+// 判据：在这些目录里，**非注释行**不许出现"平台名 + 条件分支"的组合。
+// 允许名单是显式的、且必须逐条有理由（名单本身要能被证伪：列了却匹配不到就报）。
+//
+// 为什么允许名单里那几处是**正当**的，而不是在放水：
+//   · `platform/*` —— ADR-0011 原文就允许平台名出现在这里（它那一层的职责就是把
+//     平台差异收口）。前端 `platform/caps.ts` 的 `inferOs()` 属于**兜底**：
+//     host 权威路径已把 13 个键发齐（见上一条门禁），猜测只在拿不到 host 时发生。
+//   · `credential_store.rs` —— 它是**平台适配器**：Windows 走凭据管理器、
+//     其余平台走会话内存（ADR-0020）。这是"平台差异收口在一处"的正面样本，
+//     不是"在业务层里按机型分支"。它同时由 `cfg(windows)` 在编译期切开。
+const PLATFORM_BRANCH_ALLOW = [
+  { file: 'apps/desktop/src/platform/caps.ts', why: 'ADR-0011 原文允许：平台名只允许出现在 platform/*（此处是 host 拿不到时的兜底推断）' },
+  { file: 'crates/notera-host/src/credential_store.rs', why: '平台适配器：Windows 凭据管理器 / 其余平台会话内存（ADR-0020），差异收口在这一处' },
+  { file: 'crates/notera-host/src/lib.rs', why: '`PlatformCaps::for_current_target()` 是能力表的**属主**：它按平台给出 as-built 事实，正是 ADR-0011 要求的能力协商入口（另有一处测试内的 Windows 断言）' },
+];
+const platformBranchViolations = [];
+{
+  // ⚠ **必须大小写不敏感**，这是变异台 K1 抓出来的第二个真 bug：
+  // Rust 里写的是 `cfg!(target_os = "android")`（**小写**），而平台名表里列的是
+  // `Android`（首字母大写，那是产品文案里的写法）。第一版没加 `i` 标志 ⇒
+  // 小写的 `"android"` / `"windows"` **一条都匹配不到**，那条闸门对 Rust 那半边
+  // 基本是空转的（而它在 caps.ts 上能红，因为那里的 UA 正则用的是 `/Android/` 大写）。
+  // 这正是"闸门看着在跑、其实只覆盖了一半输入"的形状。
+  const PLATFORM_WORD = '(?:iPhone|iPad|iPod|Android|macOS|macos|darwin|Windows|windows|Linux|linux|iOS|ios)';
+  // "条件分支 + 平台名"。两半取或：
+  //   ① 分支关键字（if / else if / cfg!( / ? / && / ||）之后、**同一个语句内**出现平台名；
+  //   ② 平台名之后出现 ? / && / ||。
+  // ⚠ 第一版写的是 `\bif\s*\(`，而 Rust 里最常见的一形是
+  // `if cfg!(target_os = "android") {…}` —— `if` 后面跟的是 `cfg!(` 而不是 `(`，
+  // 于是那把刀**没被打红**（变异台抓出来的）。所以这里用 `\bif\b` 并允许
+  // 分支关键字与平台名之间夹一个 `cfg!(…)`；`[^;{}]*` 收在同一个语句内。
+  const BRANCH_RE = new RegExp(
+    `(?:\\bif\\b|\\belse\\s+if\\b|cfg!?\\s*\\(|\\?|&&|\\|\\|)[^;{}]*\\b${PLATFORM_WORD}\\b` +
+      `|\\b${PLATFORM_WORD}\\b[^;{}]*?(?:\\?|&&|\\|\\|)`,
+    'i',
+  );
+  const allowSet = new Set(PLATFORM_BRANCH_ALLOW.map((a) => a.file));
+  const allowHits = new Map(PLATFORM_BRANCH_ALLOW.map((a) => [a.file, 0]));
+  const roots = [
+    ['apps/desktop/src', ['.ts', '.vue']],
+    ['crates/notera-host/src', ['.rs']],
+    ['crates/notera-store/src', ['.rs']],
+    ['crates/notera-sync/src', ['.rs']],
+  ];
+  let scannedFiles = 0;
+  // ⚠ 这里的循环变量**不许叫 `rel`** —— 它会遮蔽本文件上面的 `rel()` 辅助函数
+  // （`const` 不提升，于是 `rel(f)` 变成"调用一个字符串"）。第一版就是这么炸的：
+  // `TypeError: rel is not a function`，而那一步正是变异台跑出来的。
+  for (const [rootRel, exts] of roots) {
+    for (const f of sources(join(ROOT, rootRel), exts)) {
+      scannedFiles += 1;
+      const r = rel(f);
+      const inAllow = allowSet.has(r);
+      read(f)
+        .split(/\r?\n/)
+        .forEach((line, i) => {
+          const t = line.trim();
+          // 注释不算：这条闸门管的是**真的会分支**的代码
+          if (t.startsWith('//') || t.startsWith('*') || t.startsWith('/*') || t.startsWith('<!--')) return;
+          if (!BRANCH_RE.test(line)) return;
+          if (inAllow) {
+            allowHits.set(r, (allowHits.get(r) ?? 0) + 1);
+            return;
+          }
+          platformBranchViolations.push(`${r}:${i + 1}  ${t.slice(0, 100)}`);
+        });
+    }
+  }
+  if (scannedFiles === 0) platformBranchViolations.push('一个源文件都没扫到 —— 本条在空转');
+  // 允许名单要能被证伪：列了却一处都没匹配到 = 那条名单过期了
+  for (const [f, n] of allowHits) {
+    if (n === 0) platformBranchViolations.push(`允许名单过期：${f} 一处平台分支都没匹配到（${PLATFORM_BRANCH_ALLOW.find((a) => a.file === f)?.why ?? ''}）—— 要么它已经不需要豁免，要么判据写错了`);
+  }
+}
+check('layer:no-platform-branching', 'ADR-0011 验证方式（平台名只允许出现在 platform/*；禁止按机型分支）',
+  platformBranchViolations, `业务层出现了按机型的条件分支：\n    ${platformBranchViolations.join('\n    ')}`);
+
 // 命令面 `j(...)` 里的 Result **必须就地传播（`?`）**，不许把 `Result` 本身交给序列化。
 // 为什么单独立一条（缺口 G32 的根因）：`dispatch` 的臂写成 `j(app.to_dto(x))`（少了一个 `?`）时，
 // serde 对 `Result` 用的是**外部标签**，于是成功载荷变成 `{"Ok":{…}}` 而不是裸 DTO。这条边有多静默：

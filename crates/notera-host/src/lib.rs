@@ -94,18 +94,70 @@ pub enum NativeCap {
 }
 
 /// 平台能力声明。UI 按能力渲染，**禁止**按机型分支（ADR-0011）。
+///
+/// ## 键名与值是**跨语言契约**（2026-10-12 修正）
+///
+/// 前端那份（`apps/desktop/src/platform/caps.ts` 的 `PlatformCaps`）才是消费方，
+/// 而它读的键名/值词汇表与本结构体曾经**对不上**，且**没有任何门禁看着**：
+///
+/// | 前端读 | 本结构体曾经发 | 后果 |
+/// |---|---|---|
+/// | `bgTask` | `backgroundTask`（键名不同） | 前端拿不到 ⇒ 静默退回本地推断 |
+/// | `'desktopTimer' / 'workManager' / 'bgAppRefresh'` | `"desktop_timer" / "workmanager" / "bgapprefresh"` | 值也不在词汇表里 |
+/// | `filePicker: 'native' \| 'web'` | `"saf" / "document_picker"` | 一律被折成 `"native"` |
+/// | `windowChrome` / `compactToolbar` / `transparency` / `dragAndDrop` | **从不发** | 前端只能靠 `navigator.userAgent` 猜（= 机型分支） |
+///
+/// `normalizeCaps` 对不认识的值是**安静地退回兜底**（那条设计本身是对的：缺数据不该让界面
+/// 不渲染功能），代价是"契约漂了"没有任何声音 —— 界面看起来正常，只是**说的不是核心的事实**。
+/// 这正是本仓反复吃过的那一类（`stats` 的 snake_case、`titleHit` 从没发过…）。
+///
+/// 现在两边一致，并且由门禁 `edge:caps-wire-vocabulary` 双向钉住：
+/// 本结构体发出去的每个键都必须在前端 `PlatformCaps` 里存在（或在前端那份的**已知 host-only
+/// 名单**里），且带词汇表的三个字段（`bgTask` / `keychain` / `filePicker` / `windowChrome`）
+/// 的取值必须落在前端声明的联合里。改任何一边而忘了另一边，门禁立刻红。
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformCaps {
     pub tray: bool,
     pub global_shortcuts: bool,
+    /// host 独有：前端当前不读它（前端用 `windowChrome` 判断画不画标题栏）。
+    /// 留着是因为它描述的是"壳有没有挂原生菜单"这个事实，`report_native_cap` 之外
+    /// 还有别的地方要问；门禁里有一份显式的 host-only 名单，加一项要显式登记。
     pub native_menu: bool,
+    /// host 独有：同上，前端当前不读（通知由壳自己发，界面不按它渲染）。
     pub notifications: bool,
     pub share_sheet: bool,
+    /// 值词汇表 = 前端 `BgTaskKind`（`none | desktopTimer | workManager | bgAppRefresh`）。
+    /// 字段名 `background_task` 经 `rename_all` 出去是 `backgroundTask`，
+    /// 而前端读的是 `bgTask` —— 所以这里用 `#[serde(rename = "bgTask")]` **显式**钉住，
+    /// 不让它跟着结构体名走（跟着走就会在下次改名时再漂一次）。
+    #[serde(rename = "bgTask")]
     pub background_task: String,
     pub keychain: String,
+    /// 值词汇表 = 前端 `'native' | 'web'`。**按 as-built 报，不按"平台原则上有什么"**：
+    /// Android 的 SAF 与 iOS 的 document picker 本仓**都没接**（编辑器那条插入路径走的是
+    /// 隐藏的 `<input type=file>`，见 ARCHITECTURE-MAP §8 的 D11 ③），所以移动端如实报 `"web"`。
+    /// 以前这里报 `"saf"` / `"document_picker"`，而前端只认两个值 ⇒ 一律被折成 `"native"`，
+    /// 于是"这台设备用哪种选文件方式"在界面上永远说错（且没有任何门禁看着）。
     pub file_picker: String,
     pub safe_area: bool,
+
+    // ---- 下面四个是前端**读**、而 host 以前**不发**的（前端只能拿 UA 猜）----
+    //
+    // ADR-0011 明令"UI 按能力渲染，**禁止按机型分支**"，而"按 UA 猜"正是机型分支的一种：
+    // `apps/desktop/src/platform/caps.ts::inferOs()` 靠 `navigator.userAgent` 判断，
+    // 一旦 WebView 的 UA 变了（或将来换成别的壳），界面就会按猜错的结果渲染。
+    // 平台事实应当由**平台那一层**（host）供给，前端只负责渲染。这四个字段就是补上这一跳。
+    /// 前端 `WindowChrome`：`custom`（自绘那一行）/ `overlay`（系统标题栏收成零高度、
+    /// 红绿灯浮在我们这一行上）/ `system`（完全不画）。
+    pub window_chrome: String,
+    /// 移动端把工具条收成紧凑形（视口窄 + 触摸档）。
+    pub compact_toolbar: bool,
+    /// 窗口透明效果。**今天全平台 false**：`window-vibrancy` 没有任何 call site，
+    /// 报 true 会让设置页摆出一颗"勾得动、存得下、没有视觉后果"的开关（§40 禁止的形状）。
+    pub transparency: bool,
+    /// 拖文件进窗口。桌面开、移动关（移动端没有"从桌面拖进窗口"这件事）。
+    pub drag_and_drop: bool,
 }
 
 impl PlatformCaps {
@@ -132,10 +184,14 @@ impl PlatformCaps {
                 native_menu: true,
                 notifications: true,
                 share_sheet: false,
-                background_task: "desktop_timer".into(),
+                background_task: "desktopTimer".into(),
                 keychain: "credentialManager".into(),
                 file_picker: "native".into(),
                 safe_area: false,
+                window_chrome: "custom".into(),
+                compact_toolbar: false,
+                transparency: false,
+                drag_and_drop: true,
             }
         } else if cfg!(target_os = "macos") {
             Self {
@@ -144,10 +200,14 @@ impl PlatformCaps {
                 native_menu: true,
                 notifications: true,
                 share_sheet: true,
-                background_task: "desktop_timer".into(),
+                background_task: "desktopTimer".into(),
                 keychain: "none".into(),
                 file_picker: "native".into(),
                 safe_area: false,
+                window_chrome: "overlay".into(),
+                compact_toolbar: false,
+                transparency: false,
+                drag_and_drop: true,
             }
         } else if cfg!(target_os = "android") {
             Self {
@@ -156,10 +216,14 @@ impl PlatformCaps {
                 native_menu: false,
                 notifications: false,
                 share_sheet: true,
-                background_task: "workmanager".into(),
+                background_task: "workManager".into(),
                 keychain: "none".into(),
-                file_picker: "saf".into(),
+                file_picker: "web".into(),
                 safe_area: true,
+                window_chrome: "custom".into(),
+                compact_toolbar: true,
+                transparency: false,
+                drag_and_drop: false,
             }
         } else if cfg!(target_os = "ios") {
             Self {
@@ -168,10 +232,14 @@ impl PlatformCaps {
                 native_menu: false,
                 notifications: false,
                 share_sheet: true,
-                background_task: "bgapprefresh".into(),
+                background_task: "bgAppRefresh".into(),
                 keychain: "none".into(),
-                file_picker: "document_picker".into(),
+                file_picker: "web".into(),
                 safe_area: true,
+                window_chrome: "overlay".into(),
+                compact_toolbar: true,
+                transparency: false,
+                drag_and_drop: false,
             }
         } else {
             Self {
@@ -180,10 +248,14 @@ impl PlatformCaps {
                 native_menu: true,
                 notifications: true,
                 share_sheet: false,
-                background_task: "desktop_timer".into(),
+                background_task: "desktopTimer".into(),
                 keychain: "none".into(),
                 file_picker: "web".into(),
                 safe_area: false,
+                window_chrome: "custom".into(),
+                compact_toolbar: false,
+                transparency: false,
+                drag_and_drop: true,
             }
         }
     }
@@ -5391,6 +5463,109 @@ mod tests {
                 "Windows 上这一格从 0.0.29 起是真的"
             );
         }
+    }
+
+    /// 平台能力**整张表**的线格式契约（2026-10-12 补，起因是拿真载荷对了一遍两端）。
+    ///
+    /// 上面那条只钉了 `keychain` 一个字段。这次把真载荷逐键比过，发现**四处漂**且都没有门禁：
+    ///   · 键名 `backgroundTask`（本结构体）对 `bgTask`（前端读）—— 前端拿不到；
+    ///   · 值 `"desktop_timer"` 对前端 `'desktopTimer'` —— 也不在词汇表里；
+    ///   · `filePicker` 发 `"saf"/"document_picker"`，前端只认 `'native'|'web'`；
+    ///   · `windowChrome`/`compactToolbar`/`transparency`/`dragAndDrop` **从不发**，
+    ///     前端只能拿 `navigator.userAgent` 猜 —— 而 ADR-0011 明令禁止按机型分支。
+    ///
+    /// 静态那一半在 `arch-check` 的 `edge:caps-wire-vocabulary`（它还会断**反方向**：
+    /// 前端读的键必须真的发得出来）。这条是**运行时**那一半：直接序列化真结构体，
+    /// 断言键名与值都落在前端声明的词汇表里 —— 静态扫源码扫不到 `rename_all` 的实际效果。
+    #[test]
+    fn platform_caps_wire_shape_matches_the_frontend_contract() {
+        let v =
+            serde_json::to_value(PlatformCaps::for_current_target()).expect("能力要序列化得出去");
+        let obj = v.as_object().expect("能力表必须是个对象");
+
+        // ① 键名：前端 `PlatformCaps` 读得到的那些，一个都不许少。
+        //    （`nativeMenu` / `notifications` 是 host-only，前端不读，见结构体注释。）
+        const FRONTEND_READS: [&str; 13] = [
+            "tray",
+            "globalShortcuts",
+            "bgTask",
+            "shareSheet",
+            "keychain",
+            "filePicker",
+            "biometric",
+            "windowChrome",
+            "safeArea",
+            "compactToolbar",
+            "transparency",
+            "dragAndDrop",
+            "notifications",
+        ];
+        for k in FRONTEND_READS {
+            if k == "biometric" {
+                // 前端把它归在"本地推断独有"里（能力位声明了但零使用），本结构体不发它。
+                continue;
+            }
+            assert!(
+                obj.contains_key(k),
+                "前端读 `{k}`，而能力表没发它 —— 界面会静默退回兜底（或按 UA 猜）"
+            );
+        }
+        // 反向：发出去的键要么前端读，要么在 host-only 名单里（不许悄悄多发）。
+        const HOST_ONLY: [&str; 1] = ["nativeMenu"];
+        for k in obj.keys() {
+            assert!(
+                FRONTEND_READS.contains(&k.as_str()) || HOST_ONLY.contains(&k.as_str()),
+                "能力表发了 `{k}`，但前端既不读它、也不在 host-only 名单里 —— 要么接上前端，要么登记进名单"
+            );
+        }
+
+        // ② 值：带词汇表的字段，取值必须落在前端声明的联合类型里。
+        let str_of = |k: &str| {
+            obj[k]
+                .as_str()
+                .unwrap_or_else(|| panic!("{k} 必须是字符串"))
+        };
+        const BG: [&str; 4] = ["none", "desktopTimer", "workManager", "bgAppRefresh"];
+        assert!(
+            BG.contains(&str_of("bgTask")),
+            "bgTask 的实际值是 {:?}，不在前端 BgTaskKind 里（会被静默退回兜底）",
+            str_of("bgTask")
+        );
+        const CHROME: [&str; 3] = ["custom", "overlay", "system"];
+        assert!(
+            CHROME.contains(&str_of("windowChrome")),
+            "windowChrome 的实际值是 {:?}，不在前端 WindowChrome 里",
+            str_of("windowChrome")
+        );
+        const PICKER: [&str; 2] = ["native", "web"];
+        assert!(
+            PICKER.contains(&str_of("filePicker")),
+            "filePicker 的实际值是 {:?}，前端只认 native|web（SAF / document_picker 都没接）",
+            str_of("filePicker")
+        );
+        const KEYCHAIN: [&str; 4] = ["credentialManager", "keychain", "keystore", "none"];
+        assert!(
+            KEYCHAIN.contains(&str_of("keychain")),
+            "keychain 的值不在词汇表里"
+        );
+
+        // ③ 那几个布尔位必须是布尔（前端用 `pick` 判 `typeof`，发了字符串会被当缺字段）。
+        for k in [
+            "compactToolbar",
+            "transparency",
+            "dragAndDrop",
+            "safeArea",
+            "tray",
+        ] {
+            assert!(obj[k].is_boolean(), "{k} 必须是布尔，实际是 {:?}", obj[k]);
+        }
+
+        // ④ 透明效果今天**全平台 false**（`window-vibrancy` 零 call site）：
+        //    报 true 会让设置页摆出一颗"勾得动、存得下、没有视觉后果"的开关（§40 禁止的形状）。
+        assert!(
+            !obj["transparency"].as_bool().unwrap_or(true),
+            "transparency 报 true 了，而窗口透明效果没有任何 call site —— 那会摆出一颗假开关"
+        );
     }
 
     /// 代理口令那条边：配置里存的是**引用**，出口层必须拿到真凭据。

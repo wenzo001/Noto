@@ -1,6 +1,15 @@
 /**
  * 平台能力：一律按能力（PlatformCaps）渲染，不按机型分支。
- * 首选 host 提供的 caps；缺失时退化为本地探测结果（仅用于窗口外观，不参与任何业务判定）。
+ *
+ * **首选 host 提供的 caps**（`platform_caps` 命令）。`localCaps()` 只是**兜底**，
+ * 用在"host 还没答上来 / 答不上来"的那一刻（首帧、或命令失败）。
+ *
+ * ⚠ 兜底为什么要靠 `navigator.userAgent` 猜：因为它是兜底 —— 拿不到权威事实时，
+ * 至少别让界面白屏。但**权威路径不该靠猜**，而且 2026-10-12 之前 host 那一侧
+ * **只发了 9 个键、少发 4 个**（`windowChrome` / `compactToolbar` / `transparency` /
+ * `dragAndDrop`），于是这四个**永远**走猜的那条路 —— 那是 ADR-0011 明令禁止的
+ * "按机型分支"（见 `normalizeCaps` 上面那段）。现在 host 把 13 个键都发齐了，
+ * 猜测只在真兜底时发生；跨语言这一层由门禁 `edge:caps-wire-vocabulary` 双向钉住。
  */
 
 export type BgTaskKind = 'none' | 'desktopTimer' | 'workManager' | 'bgAppRefresh';
@@ -109,7 +118,6 @@ export function normalizeCaps(raw: unknown): PlatformCaps {
     dragAndDrop: pick(value.dragAndDrop, base.dragAndDrop),
   };
 }
-
 /**
  * 点「关闭」是收进托盘还是真退出。
  *

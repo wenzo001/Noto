@@ -5202,6 +5202,75 @@ Release 正文会退化成一句"找不到条目"的占位。这条是**结构�
 代码签名与公证要证书（D3）。macOS / Android 那两台**没有系统凭据库**，
 按 G38 选 B 的口径**口令只活一次运行 ⇒ 每次启动要重填** —— 这一句必须进对外发布说明。
 
+### 平台能力那一层两端对不上（2026-10-12）：跨语言契约补上门禁，并修掉四处静默漂移
+
+**怎么发现的**：不是读代码"看着不对"，是**拿真载荷把两端逐格对了一遍**。
+`platform_caps` 命令的返回值（host 的 `PlatformCaps` 经 serde 出去）与前端
+`apps/desktop/src/platform/caps.ts` 的 `PlatformCaps` 之间，有四处对不上，而**没有任何门禁看着**：
+
+| 前端读 | host 曾经发 | 后果 |
+|---|---|---|
+| `bgTask` | `backgroundTask`（键名不同） | 前端拿不到 |
+| `'desktopTimer' / 'workManager' / 'bgAppRefresh'` | `"desktop_timer" / "workmanager" / "bgapprefresh"` | 值也不在词汇表里 |
+| `filePicker: 'native' \| 'web'` | `"saf"` / `"document_picker"` | 一律被折成 `"native"` |
+| `windowChrome` / `compactToolbar` / `transparency` / `dragAndDrop` | **从不发** | 前端只能拿 `navigator.userAgent` 猜 |
+
+**为什么这个形状危险**：`normalizeCaps` 对不认识的值是**安静地退回兜底**
+（那条设计本身是对的：缺数据不该让界面不渲染功能），代价是"契约漂了"**没有任何声音** ——
+界面看起来完全正常，只是**说的不是核心的事实**。这与本仓 `stats` 的 snake_case 事故
+（`notes_trash` 对 `notesInTrash`，三行统计恒为 `—`）是同一族。
+最后一行还同时违反 ADR-0011 那条硬决策："UI 按能力渲染，**禁止按机型分支**"——
+"按 UA 猜"就是机型分支。
+
+**修法**：
+- host 侧 `#[serde(rename = "bgTask")]` **显式**钉住键名（不让它跟着 Rust 字段名走，
+  跟着走就会在下次改名时再漂一次）；值词汇表对齐前端 `BgTaskKind`；
+- `filePicker` 按 **as-built** 报 `"web"`：Android 的 SAF 与 iOS 的 document picker
+  本仓都没接（编辑器那条插入路径走隐藏的 `<input type=file>`，D11 ③），
+  报 `"saf"` 是"平台原则上有什么"而不是"我们做了什么"；
+- **补上 host 缺发的四个字段**（`windowChrome` / `compactToolbar` / `transparency` /
+  `dragAndDrop`），前端不必再靠 UA 猜；每个平台分支各自填 as-built 事实。
+
+**三条新门禁（各自有变异自证）**：
+1. `edge:caps-wire-vocabulary` —— **双向**：host 发的每个键必须在前端有（或在显式的
+   host-only 名单里）；前端读的每个键 host 必须真的发得出来；带词汇表的四个字段
+   （`bgTask`/`keychain`/`filePicker`/`windowChrome`）的**取值**必须逐字面量落在前端联合里。
+   变异台 **5 刀 5 红**（摘 rename / 改值 / 改 filePicker / 摘 host 字段 / 摘前端声明）。
+2. `layer:no-platform-branching` —— **ADR-0011 的「验证方式」一节明写要有的 grep 闸门，
+   此前根本不存在**（全仓搜 `arch-check` 零命中），也就是说那条硬决策一直只靠人记得住。
+   判据：业务层（`apps/desktop/src` / `notera-host` / `notera-store` / `notera-sync`）的
+   **非注释行**不许出现"平台名 + 条件分支"。允许名单显式且**可被证伪**（列了却匹配不到就报）。
+   变异台 **3 刀 3 红**（业务层塞 `cfg!(target_os="android")` / 前端塞 UA 三目 / 允许名单过期）。
+3. 运行时那一半在 `notera-host` 的单测
+   `platform_caps_wire_shape_matches_the_frontend_contract`：直接序列化**真结构体**，
+   断言键名、值、类型、以及"`transparency` 必须为 false"。变异 **2 刀 2 红**。
+
+**这次写门禁时，变异台抓出我自己三个真 bug（按实记，都不遮）**：
+- **判据读了自己的说明**：第一版解析器逐行扫 `#[serde(rename = …)]` 而不认注释，
+  而**结构体的文档注释里为了解释"为什么要显式 rename"逐字写了那条属性** ——
+  于是变异把真属性摘掉之后，解析器从**注释**里读出了它，门禁**绿着放行**。
+  修法是扫之前把注释整段去掉。
+- **`if cfg!(…)` 那一形漏了**：第一版写 `\bif\s*\(`，而 Rust 里最常见的是
+  `if cfg!(target_os = "android") {…}` —— `if` 后面跟的是 `cfg!(` 不是 `(`。
+- **大小写不敏感漏了**：Rust 写的是小写 `"android"`，而平台名表里列的是 `Android`
+  ⇒ 没加 `i` 标志时，那条闸门对 Rust 那半边**基本是空转的**（在前端能红，因为那里用大写）。
+  三个都是"闸门看着在跑、其实只覆盖一半输入"的形状。
+
+**实测证据（不是读源码）**：起真壳（CDP 9223）直接调 `platform_caps`，把**真载荷**打出来逐格对照 ⇒
+13 个键全到、四个词汇表逐字面量在表内、`transparency=false`：
+`{"bgTask":"desktopTimer","compactToolbar":false,"dragAndDrop":true,"filePicker":"native",
+"globalShortcuts":true,"keychain":"credentialManager","nativeMenu":true,"notifications":true,
+"safeArea":false,"shareSheet":false,"transparency":false,"tray":true,"windowChrome":"custom"}`
+—— 其中 `bgTask` / `windowChrome` / `compactToolbar` / `transparency` / `dragAndDrop`
+这五格在修之前**根本不在载荷里**。
+
+**读数**：`cargo test --workspace -- --test-threads=1` **717 通过 / 0 失败 / 6 ignored**
+（99 个 result 行；716 → 717 = 上面那条新单测）；前端 vitest **627 通过（72 文件）**；
+`cargo clippy --workspace --all-targets -- -D warnings` **0 error / 0 warning**；
+`cargo fmt --all --check` 退出码 0；`arch-check` **40/40**（新增 2 条）；`check-versions` 一致。
+**本批改了产品行为（能力表真的多发了四个键、两个值改正）⇒ 按口径升 patch：0.0.125 → 0.0.126**
+（`node scripts/bump-version.mjs patch`，四处派生位置 + `Cargo.lock` 已同步，`check-versions` 通过）。
+
 ### 平台代码整理（2026-10-12）：两个壳的接线收成一份（新增 `notera-shell`），平台差异只经 `PlatformSurface` 表达
 
 **问题（拿数字量出来的，不是"看着乱"）**：`apps/desktop/src-tauri/src/lib.rs` 与
