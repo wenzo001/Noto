@@ -16,7 +16,11 @@
 .editor-doc {
   max-width: var(--measure);
   margin: 0 auto;
-  font-size: calc(var(--text-md) * var(--editor-font-scale));
+  /* §1.5「正文」= 字号 15–16 / 行高 27–28 / 字重 400。这里用 --text-base（15px），
+     15 × `--leading-body` 1.8 = 27 正好落进那一格。以前是 --text-md（17px ⇒ 行高 30.6），
+     整条编辑器的度量都偏大一档 —— 而各块的字号预设是 **em**，所以基准一改，预设跟着一起回正。
+     `--editor-font-scale`（0.85–1.6）仍作用在最终值上，用户那一档不动语义。 */
+  font-size: calc(var(--text-base) * var(--editor-font-scale));
   line-height: var(--leading-body);
   color: var(--ink);
   overflow-wrap: anywhere;
@@ -175,23 +179,32 @@
 }
 
 .nb-block[data-type='heading'] .nb-content {
-  font-weight: 700;
+  /* §1.5 表里"文档标题"那一格是 600，不是 700（二/三级标题同一族，跟着走 600）。 */
+  font-weight: 600;
   line-height: var(--leading-tight);
   letter-spacing: -0.015em;
 }
 
 .nb-block[data-level='1'] .nb-content {
-  font-size: calc(1.6em * var(--editor-font-scale));
+  /* §1.5「文档标题」= 20 / 28 / 600：正文基准 15px 时 4/3 档 = 20px，
+     行高写 1.4（= 28px）—— 原来 `--leading-tight` 1.3 在这一个是 26px，差在规范那一格外。
+     **这里不再乘 `--editor-font-scale`**：父级 `.editor-doc` 的 font-size 已经乘过一次，
+     而 `em` 就是相对父级算的 —— 再乘一次等于按档位的**平方**缩放（实测 标题/正文 比例
+     从 1 档的 1.333 变成 1.6 档的 2.133、0.85 档的 1.133，也就是"字号调大标题涨得比正文快"、
+     调小则标题几乎与正文一样大）。腿 66 现在把"这个比例不许随档位变"钉成判据。
+     以前这一格是 1.6em × 17px 基准 = 27.2px，整档偏大。 */
+  font-size: 1.3334em;
+  line-height: 1.4;
   margin-top: var(--sp-6);
 }
 
 .nb-block[data-level='2'] .nb-content {
-  font-size: calc(1.32em * var(--editor-font-scale));
+  font-size: 1.32em;
   margin-top: var(--sp-4);
 }
 
 .nb-block[data-level='3'] .nb-content {
-  font-size: calc(1.14em * var(--editor-font-scale));
+  font-size: 1.14em;
   margin-top: var(--sp-4);
 }
 
@@ -211,7 +224,8 @@
 
 .nb-block[data-type='codeBlock'] .nb-content {
   font-family: var(--font-mono);
-  font-size: calc(0.92em * var(--editor-font-scale));
+  /* `em` 已经继承过 `.editor-doc` 的档位缩放，这里不再乘一次（同上面标题那三条的理由）。 */
+  font-size: 0.92em;
   tab-size: 2;
 }
 
@@ -222,7 +236,9 @@
   flex: 0 0 auto;
   min-width: 1.9em;
   color: var(--mute);
-  font-size: calc(0.92em * var(--editor-font-scale));
+  /* 同上面标题/正文那几条：`em` 已经从 `.editor-doc` 继承过一次档位缩放，再乘一次就是按档位平方。
+     腿 66 的"比例只许作用一次"现在也量这一颗（无序列表那颗点与序号都在这个类上）。 */
+  font-size: 0.92em;
   font-variant-numeric: tabular-nums;
   padding-top: calc(var(--sp-1) * var(--editor-font-scale));
   user-select: none;

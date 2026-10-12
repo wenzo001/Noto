@@ -134,6 +134,9 @@ const FIXTURE_MARKS = [
   // 实测留下 '标记色腿的现场…' 把 ㊶ 的"第一行必须是精准那条"点成红（与产品无关的红）。
   // §1.5 那条腿自己有收尾，但它也在崩溃路径上，所以一起进名单。
   '标记色腿的现场', '布局门禁夹具', '版本夹具', '§1.5量角色',
+  // 腿 65（按下通扫）自己造的三篇：它扫的是"屏幕上此刻有多少颗身份寻址的控件"，
+  // 覆盖不许靠现场继承 —— 名单补齐之后跑前清得更干净，它量到的颗数从 28 掉到 19（旧的 ≥15 门槛照样过）。
+  '按下夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
 
@@ -7370,15 +7373,35 @@ function contrastRatio(fg, bg) {
  *     （实测 alpha 0.91）。现在只要求**按下时变了的那几根轴**回位，且不再动焦点。
  * 判据用计算值不用像素：`scale(0.97)` 在 44px 的按钮上是 ~1.3px，像素 diff 抓不稳（腿 65 前两版就死在这）。
  *
- * 五条：① 仪器自检（成批量到、基线两拍相同、每一颗都真的进入了 `:active`）；② 按下必须有变化；
+ * 五条：① 仪器自检（人群按栏都在 + 基线两拍相同 + 每一颗都真的进入了 `:active`）；② 按下必须有变化；
  * ③ 变了的那几根轴松手必须回位；④ 禁用那颗（含注入的一颗）按下不许有变化（钉住 `:not(:disabled)`）；
- * ⑤ console error 为零。
+ * ⑤ console error 为零 + 自己造的夹具扫完要清干净（残骸会变下一遍的现场，G121 那一族）。
  */
 {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const p = await ctx.newPage();
   const errs = [];
   p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  // **覆盖不许靠现场继承**：这一腿扫的是"屏幕上此刻有多少颗身份寻址的控件"，而屏幕上有几行笔记
+  // 取决于列表里躺着什么。上一批把 `FIXTURE_MARKS` 补齐之后跑前清得更干净，它量到的颗数从 28 掉到 19
+  // —— 但读数里只有一个总数，说不出掉的是哪一栏，所以那条旧的"≥24"门槛照样绿（变异台也证明不了它）。
+  // 现在两件事分开做：① 自己造三篇保证列表/编辑器有东西可开；② 自检**按栏**量人群（见下面那条）。
+  // P1 那一刀（掐掉造夹具）实测：总数仍是 28 —— 库里有的是笔记时夹具不添颗数，它添的是"空库也扫得动"。
+  const ownStamp = String(Date.now()).slice(-6);
+  const seeded = [];
+  for (let i = 0; i < 3; i += 1) {
+    const r = await cmd('create_note', {
+      folderId: null,
+      doc: {
+        v: 1,
+        content: [
+          { id: `ph${ownStamp}${i}`, type: 'heading', attrs: { level: 1 }, content: [{ text: `按下夹具 ${ownStamp}-${i}` }] },
+          { id: `pp${ownStamp}${i}`, type: 'paragraph', content: [{ text: '这一行让列表里有摘要与元信息那几颗可点的控件。' }] },
+        ],
+      },
+    });
+    if (r?.id) seeded.push(r.id);
+  }
   await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
   await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
   await p.waitForTimeout(700);
@@ -7415,9 +7438,17 @@ function contrastRatio(fg, bg) {
       id: el.getAttribute('data-testid'),
       injected: el.getAttribute('data-ms-injected') === '1',
       dis: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+      // 人群来自**哪几栏**：颗数只说"扫到了多少"，说不清"扫到了哪几片"。上一批 19 ↔ 28 那一次
+      // 摆动就是只数了颗数 —— 掉的是哪一整栏，读数里看不见。
+      pane: el.closest('.pane--editor') ? 'editor'
+        : el.closest('.pane--sidebar') ? 'sidebar'
+          : el.closest('.pane--list') ? 'list'
+            : el.closest('.dock') ? 'dock' : 'other',
       box: [Math.round(r.x), Math.round(r.y)],
     };
   }));
+  const byPane = {};
+  for (const t of list) byPane[t.pane] = (byPane[t.pane] ?? 0) + 1;
 
   const read = (scan) => p.evaluate((s) => {
     // 读的是**解析后的值**，不是字符串：MS2 那一刀（`scale(0.97)` 写成 `scale(1)`）原本打不红 ——
@@ -7509,10 +7540,13 @@ function contrastRatio(fg, bg) {
     if (still.length > 0) notRecovered.push(`${t.id} 第 ${still.join('/')} 根轴停在按下值 ${JSON.stringify(still.map((i) => c.axes[i]))}`);
   }
 
-  check('65 仪器自检：成批量到（≥15 颗）、基线两拍逐字节相同、每一颗都点得着且都真进入了 :active，注入的禁用载荷在场',
-    measured >= 15 && unstable.length === 0 && unreachable.length === 0 && unreadable.length === 0
+  check('65 仪器自检：人群按栏都在（侧栏 ≥8、列表 ≥3、编辑器 ≥4，总 ≥12）—— 上一批 19↔28 那一次只留下一个总数，看不出掉的是哪一整栏',
+    (byPane.sidebar ?? 0) >= 8 && (byPane.list ?? 0) >= 3 && (byPane.editor ?? 0) >= 4 && measured >= 12,
+    JSON.stringify({ 分栏: byPane, 量到: measured }));
+  check('65 仪器自检：基线两拍逐字节相同、每一颗都点得着且都真进入了 :active，注入的禁用载荷在场',
+    unstable.length === 0 && unreachable.length === 0 && unreadable.length === 0
       && activeMissed.length === 0 && list.some((t) => t.injected) === true,
-    JSON.stringify({ 量到: measured, 进入active: actives, 没进入: activeMissed.slice(0, 4), 基线不稳: unstable.slice(0, 4), 点不着: unreachable.slice(0, 4), 读不到: unreadable.slice(0, 4), 注入: list.filter((t) => t.injected).length }));
+    JSON.stringify({ 没进入: activeMissed.slice(0, 4), 基线不稳: unstable.slice(0, 4), 点不着: unreachable.slice(0, 4), 读不到: unreadable.slice(0, 4), 注入: list.filter((t) => t.injected).length }));
   check('65 §4.9 按下那一格：每一颗可见可用的按钮按下去必须有计算值变化（scale(0.97) 那一档像素量不动，读的是链上的 transform/底色/字色/阴影）',
     noDelta.length === 0, JSON.stringify(noDelta.slice(0, 10)));
   check('65 §4.9 松手要回位：按下时变了的那几根轴，抬起之后必须回到未按时的同一值（按下状态漏在 JS 里就是这条红）',
@@ -7520,8 +7554,13 @@ function contrastRatio(fg, bg) {
   check('65 §4.9 禁用优先：禁用那颗（含注入的一颗）按下去不许有变化（钉住 :not(:disabled)）',
     disabledChanged.length === 0 && list.some((t) => t.dis) === true,
     JSON.stringify({ 变了: disabledChanged.slice(0, 6), 禁用颗数: list.filter((t) => t.dis).length }));
-  notes.push(`     §4.9 按下实测：身份寻址的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.dis).length} 颗，其中注入 1 颗），全部进入 :active ${actives} 颗，无变化 ${noDelta.length} 颗，没回位 ${notRecovered.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗`);
+  notes.push(`     §4.9 按下实测：身份寻址的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.dis).length} 颗，其中注入 1 颗），全部进入 :active ${actives} 颗，无变化 ${noDelta.length} 颗，没回位 ${notRecovered.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗；分栏 ${JSON.stringify(byPane)}`);
   check('65 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  for (const id of seeded) { await cmd('delete_note', { id }); await cmd('purge_note', { id }); }
+  const leftAfter = await cmd('list_notes', { folderId: null, trash: false });
+  const leftHits = ((leftAfter?.items ?? leftAfter) ?? []).filter((n) => (n.title ?? '').startsWith(`按下夹具 ${ownStamp}`));
+  check('65 自己造的三篇夹具扫完要清干净（留着就变成下一遍的现场）', leftHits.length === 0 && seeded.length === 3,
+    JSON.stringify({ seeded: seeded.length, left: leftHits.length }));
   await p.close();
   await ctx.close();
 }
@@ -7566,6 +7605,9 @@ function contrastRatio(fg, bg) {
       content: [
         { id: `h66${stamp}`, type: 'heading', attrs: { level: 1 }, content: [{ text: '§1.5量角色' }] },
         { id: `p66${stamp}`, type: 'paragraph', content: [{ text: '这一段是给列表摘要那一格读的' }] },
+        // 那颗点/序号所在的 `.nb-gutter` 只在列表块上画 ⇒ "档位只作用一次"那一格要量它，
+        // 夹具就必须带一个列表块（无序这一种不需要 `numbers[]` 那套序号计算，最省事）。
+        { id: `l66${stamp}`, type: 'bulletList', content: [{ text: '这一行给行号槽那一格量缩放' }] },
       ],
     },
   });
@@ -7584,7 +7626,17 @@ function contrastRatio(fg, bg) {
     { role: '列表摘要', sel: '.row-item__summary, .row-item__snippet', size: [12, 13], lh: [18, 20], weight: 400 },
     { role: '次要/元信息', sel: '.row-item__meta', size: [11, 12], lh: [16, 17], weight: 400 },
     { role: '按钮标签', sel: '.btn:not(.btn--icon)', size: [12, 13], lh: [19.5, 20.6], weight: 600 },
+    // 编辑器里那两格：期望同样抄自 §1.5（文档标题 20/28/600、正文 15–16/27–28/400）。
+    // 选择器挑的是**内容节点本身**（`.nb-content`），不是那颗 flex 容器 —— 容器只继承排版。
+    { role: '文档标题', sel: `.nb-block[data-level='1'] .nb-content`, size: [19.4, 20.6], lh: [27.2, 28.8], weight: 600 },
+    { role: '正文', sel: `.nb-block[data-type='paragraph'] .nb-content`, size: [15, 16], lh: [26.4, 28.8], weight: 400 },
   ];
+  // 编辑器里那两格要**打开一篇有标题段 + 正文段的笔记**才量得到：本腿自己造的那一篇就是。
+  // （以前我只量 `.nb-block` 那颗容器，量到的是它从 `.editor-doc` 继承来的排版，不是角色本身。）
+  await p.getByText('§1.5量角色').first().waitFor({ timeout: 8000 });
+  await p.getByText('§1.5量角色').first().click();
+  await p.waitForTimeout(700);
+
   const readRoles = (page) => ROLES.map((r) => page.evaluate((q) => {
     const el = document.querySelector(q);
     if (!el) return { q, found: false };
@@ -7592,6 +7644,39 @@ function contrastRatio(fg, bg) {
     const num = (v) => (v === 'normal' ? NaN : parseFloat(v));
     return { q, found: true, size: num(c.fontSize), lh: num(c.lineHeight), weight: Number(c.fontWeight), ls: num(c.letterSpacing) };
   }, r.sel));
+
+  // **档位只作用一次**：`em` 已经继承了 `.editor-doc` 乘过档位的字号，子规则再乘一次
+  // 就是按档位的平方缩放。形状是"某角色与正文的比例不许随档位变"，量的是**两对**：
+  // 标题/正文（改前实测 1 档 1.333 / 1.6 档 **2.133** / 0.85 档 **1.133** —— 调大时标题涨得比正文快、
+  // 调小时标题几乎和正文一样大）与 行号槽/正文（`.nb-gutter` 原本也写着 `calc(0.92em * scale)`，同一个病）。
+  // 这里直接写 `--editor-font-scale` 到 root，与 `stores/settings.ts:231` 那一行同一机制；
+  // "偏好 → 那个变量"的接线由腿 56 钉，这一条只管"作用次数"。
+  const PAIRS = [['h1', '标题/正文'], ['gut', '行号槽/正文']];
+  const ratioOf = (page) => page.evaluate(() => {
+    const num = (el) => (el ? parseFloat(getComputedStyle(el).fontSize) : NaN);
+    const body = num(document.querySelector(`.nb-block[data-type='paragraph'] .nb-content`));
+    const h1 = num(document.querySelector(`.nb-block[data-level='1'] .nb-content`));
+    const gut = num(document.querySelector('.nb-gutter'));
+    const r = (v) => (body && Number.isFinite(v) ? v / body : NaN);
+    return { body, h1, gut, rh1: r(h1), rgut: r(gut) };
+  });
+  const setScale = async (page, v) => {
+    await page.evaluate((x) => document.documentElement.style.setProperty('--editor-font-scale', String(x)), v);
+    await page.waitForTimeout(220);
+    return ratioOf(page);
+  };
+  const ratio1 = await setScale(p, 1);
+  const ratio16 = await setScale(p, 1.6);
+  await setScale(p, 1);
+  const scaleBad = [];
+  for (const [key, name] of PAIRS) {
+    const k = `r${key}`;
+    if (!Number.isFinite(ratio1[k]) || !Number.isFinite(ratio16[k])) scaleBad.push(`${name} 没读到（一倍档 ${ratio1[k]} / 一点六档 ${ratio16[k]}）`);
+    else if (Math.abs(ratio1[k] - ratio16[k]) > 0.02) {
+      scaleBad.push(`${name} 比例随档位漂移：1 档 ${ratio1[k].toFixed(3)} / 1.6 档 ${ratio16[k].toFixed(3)}（${key} 从 ${ratio1[key]} 涨到 ${ratio16[key]}）`);
+    }
+  }
+  if (Math.abs(ratio1.body - 15) > 0.6) scaleBad.push(`正文基准没跟着档位落地：${ratio1.body}`);
 
   const got = [];
   const specBad = [];
@@ -7639,12 +7724,15 @@ function contrastRatio(fg, bg) {
   const residue = await cmd('list_notes', { folderId: null, trash: false });
   const residueHits = ((residue?.items ?? residue) ?? []).filter((n) => /§1\.5量角色/.test(`${n.title}${n.summary ?? ''}`));
 
-  check('66 仪器自检：五个角色都真读到元素且读得出数值，注入正对照的载荷在场，夹具那一笔记已清干净',
+  check('66 仪器自检：七个角色都真读到元素且读得出数值，注入正对照的载荷在场，比例那一格两对×两个档位都真读到数，夹具那一笔记已清干净',
     got.every((g) => g.found && Number.isFinite(g.size) && Number.isFinite(g.lh) && Number.isFinite(g.weight))
-      && injected === true && injectCaught === true && residueHits.length === 0,
-    JSON.stringify({ got, injected, injectCaught, residue: residueHits.length }));
-  check('66 §1.5 桌面五个角色的字号/行高/字重都在规范那一格内（分组标题另钉 0.8px 字距）',
+      && injected === true && injectCaught === true && residueHits.length === 0
+      && PAIRS.every(([k]) => Number.isFinite(ratio1[`r${k}`]) && Number.isFinite(ratio16[`r${k}`])),
+    JSON.stringify({ got, injected, injectCaught, residue: residueHits.length, ratio1, ratio16 }));
+  check('66 §1.5 桌面七个角色的字号/行高/字重都在规范那一格内（分组标题另钉 0.8px 字距）',
     specBad.length === 0, JSON.stringify(specBad));
+  check('66 §1.5 用户字号档只许作用一次：标题/正文 与 行号槽/正文 两对比例都不许随档位漂移（`.editor-doc` 乘过，子规则的 em 就别再乘）',
+    scaleBad.length === 0, JSON.stringify({ scaleBad, 一倍: ratio1, 一点六倍: ratio16 }));
   check('66 §1.5 底栏标签在 390 那一臂仍是 10/14/400（同一张表，各端不许各走一套）',
     dockBad.length === 0, JSON.stringify({ dock, dockBad }));
   check('66 这一腿的注入正对照必须真的打红过一次 —— 否则第 2 条靠"读到的永远在范围内"就能骗过去',
