@@ -7824,6 +7824,90 @@ async function pressSweep(p) {
   await ctx.close();
 }
 
+/**
+ * 68 §4.9「聚焦」那一格在 **390 触摸档** —— 底部胶囊栏那四颗以前**没有任何执行者量过**。
+ *
+ * 为什么腿 ㉞ 量不到它：腿 ㉞ 是从文档第一个焦点位真按 Tab 逐站走查，而它跑在 `1440×900`；
+ * `.dock` 只在窄屏渲染 ⇒ 那一腿从来没见过 `.dock__tab`。反过来在 390 做整圈走查也不行：
+ * 探针实测 120 次 Tab 都走不完（列表里 24 篇 × 每行 4 个停靠位），而那四颗在 DOM 末尾 —— **0 站**。
+ * 所以这一臂不重走整圈，只做这一屏独有的那一族：先把键盘语义打开（真按一次 Tab），
+ * 再逐颗聚焦那四颗，读它们**自己**画出来的焦点环。
+ *
+ * 判据四条（期望值来自规范 §4.9「聚焦：2px --accent 外描边」与 §5「焦点可见」+ 非文字对比度 ≥3:1）：
+ * ① 覆盖守卫：四颗都得在场且都真的被聚焦到（走不到就是选择器或渲染条件变了）；
+ * ② 每一颗的环真的画上：`outline ≥ 2px` 且 `:focus-visible` 真的成立（写了 CSS ≠ 屏幕上画了）；
+ * ③ 环的颜色就是 `--accent`，压在它旁边的底色（dock 的 `--canvas`）上够 3:1 ——
+ *    实心那颗（`--primary`，底是 `--ink`）环画在 `outline-offset: 2px` 之外，所以比的是 dock 的底不是它自己的底；
+ * ④ 每一颗都有可读名字（§5 最后一条）。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const p = await ctx.newPage();
+  const errs = [];
+  p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+  await p.waitForTimeout(700);
+  // `:focus-visible` 认的是"最后一次交互是不是键盘"。程序 `.focus()` 之前必须先用真按键把语义打开，
+  // 否则读回来的环是"没画"——那不是产品的错，是我没进入被测的那个状态。
+  await p.evaluate(() => { document.querySelector('.skip-link')?.focus(); });
+  await p.keyboard.press('Tab');
+  await p.waitForTimeout(120);
+
+  const ids = await p.evaluate(() => [...document.querySelectorAll('.dock [data-testid]')]
+    .filter((el) => el instanceof HTMLButtonElement || el.getAttribute('role') === 'button')
+    .map((el) => el.getAttribute('data-testid')));
+  const readOne = (id) => p.evaluate((tid) => {
+    const el = document.querySelector(`[data-testid="${tid}"]`);
+    if (!el) return { id: tid, missing: true };
+    el.focus();
+    const got = document.activeElement === el;
+    const cs = getComputedStyle(el);
+    const tok = (n) => {
+      const s = document.createElement('span');
+      s.style.color = `var(${n})`;
+      document.body.appendChild(s);
+      const v = getComputedStyle(s).color;
+      s.remove();
+      return v;
+    };
+    return {
+      id: tid,
+      got,
+      focusVisible: el.matches(':focus-visible'),
+      outline: cs.outlineStyle,
+      width: Number.parseFloat(cs.outlineWidth),
+      offset: Number.parseFloat(cs.outlineOffset),
+      ringColor: cs.outlineColor,
+      accent: tok('--accent'),
+      canvas: tok('--canvas'),
+      name: (el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 20),
+      inViewport: el.getBoundingClientRect().top >= 0 && el.getBoundingClientRect().bottom <= window.innerHeight + 1,
+    };
+  }, id);
+  const rows = [];
+  for (const id of ids) rows.push(await readOne(id));
+
+  check('68 仪器自检：底部胶囊栏那四颗都在、都真的被聚焦到、且 `:focus-visible` 真的成立（走不到 / 没进那个状态 = 量不到，不等于画了）',
+    ids.length >= 4 && rows.length === ids.length && rows.every((r) => r.missing !== true && r.got === true && r.focusVisible === true && r.inViewport === true),
+    JSON.stringify({ 现取: ids.length, ids, 逐颗: rows.map((r) => ({ id: r.id, missing: r.missing, got: r.got, fv: r.focusVisible, inVp: r.inViewport })) }));
+  const noRing = rows.filter((r) => !(r.outline !== 'none' && r.width >= 2));
+  check('68 §4.9 聚焦：那四颗每一颗都画出 ≥2px 的外描边（规范那一格写的是 2px --accent 外描边）',
+    noRing.length === 0, JSON.stringify(noRing.map((r) => ({ id: r.id, outline: r.outline, width: r.width }))));
+  const badColor = rows.filter((r) => r.ringColor !== r.accent);
+  const badContrast = rows.filter((r) => contrastRatio(r.ringColor, r.canvas) < 3);
+  check('68 §5 非文字对比度：环的颜色就是 --accent，且压在 dock 的 --canvas 底上够 3:1（实心那颗环画在 offset 之外，比的是 dock 的底）',
+    badColor.length === 0 && badContrast.length === 0,
+    JSON.stringify(rows.map((r) => ({ id: r.id, ring: r.ringColor, accent: r.accent, offset: r.offset, 对比: Number(contrastRatio(r.ringColor, r.canvas).toFixed(2)) }))));
+  check('68 §5 可读名字：那四颗每一颗都说得出自己是什么（焦点环 + 无名控件 = 键盘用户听到的是"按钮"）',
+    rows.every((r) => (r.name ?? '').trim().length > 0), JSON.stringify(rows.map((r) => ({ id: r.id, name: r.name }))));
+  notes.push(`     §4.9 390 聚焦实测：${rows.filter((r) => r.focusVisible).length}/4 颗画出焦点环，环色对齐 ${rows.filter((r) => r.ringColor === r.accent).length}/4，最低对比 ${Math.min(...rows.map((r) => contrastRatio(r.ringColor, r.canvas))).toFixed(2)}:1`);
+  await p.screenshot({ path: `${OUT}/65-focus-ring-390.png` });
+  check('68 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
+  await p.close();
+  await ctx.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {
