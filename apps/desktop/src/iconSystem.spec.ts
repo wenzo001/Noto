@@ -86,17 +86,63 @@ describe('§2 图标必须是 SVG，不许是 Unicode 字形', () => {
 });
 
 /**
- * §2.2 / §2.3 的载体规则里那句可机检的话：**同一家族共享同一条基形，只换内部徽标**。
- * 规范给的理由是"v1 用'圆圈 + 符号'画了同步五格和保存三态，两枚撞脸，用户以为是同一个东西"。
- * 这条判据守的就是"撞脸别再回来"：谁往云那一组里塞一条不一样的轮廓，这里就红。
+ * §2.2 / §2.3 的载体规则里可机检的**两句**：
+ *  ① **同族共享同一条基形**（规范：五格云"共用同一片云轮廓，只换内部徽标"）；
+ *  ② **不同族不许共用基形**（规范原话："不同语义必须用不同载体，绝不同组混用"，
+ *     而 v1 犯的正是"同步五格与保存三态都用圆圈 + 符号，两枚撞脸"）。
+ * 以前这里只有 ① 的两族（云 / 文档），② 一句都没量过 —— 而 §2.2 的"撞脸"其实**是 ② 那一半**，
+ * 只守 ① 等于把规范那半句话留在了注释里。
+ *
+ * 两处已知破的地方走**登记台账**（不是注释）：台账必须"确实命中过"才算生效，
+ * 而且**只准命中登记的那几对** —— 设计师的真 SVG 一到，这两条会红着提醒"撤掉豁免"（同 §5 那条"登记表要能被证伪"）。
  */
-describe('§2.2 载体：同一家族必须共享同一条基形', () => {
-  for (const group of ['cloud', 'document']) {
-    it(`「${group}」那一组共享同一条基形路径`, () => {
-      const names = CARRIERS[group] ?? [];
-      expect(names.length, `${group} 组不足 3 枚，这条判据会空转`).toBeGreaterThanOrEqual(3);
-      const bases = new Set(names.map((n) => (ICONS[n].d ?? [])[0]));
-      expect(bases.size, `${group} 组里出现了 ${bases.size} 条不同的基形`).toBe(1);
-    });
-  }
+describe('§2.2 载体：同族共享同一条基形，异族不许共用基形', () => {
+  // 基形 = 那条外轮廓。`solid`（实心态）与 `d`（描边态）画的是同一个形状的两种上法 ⇒ 都算基形。
+  const baseOf = (n: string): string | undefined => {
+    const icon = (ICONS as Record<string, { d?: string[]; solid?: string[] }>)[n];
+    return [...(icon?.d ?? []), ...(icon?.solid ?? [])][0];
+  };
+  const groups = Object.keys(CARRIERS);
+  const basesOf = (g: string) => new Set((CARRIERS as Record<string, string[]>)[g].map(baseOf));
+
+  it('仪器自检：族与成员都真的扫到了（扫到空表这两条会集体空转）', () => {
+    expect(groups.length).toBeGreaterThanOrEqual(4);
+    const total = groups.reduce((a, g) => a + (CARRIERS as Record<string, string[]>)[g].length, 0);
+    expect(total).toBeGreaterThanOrEqual(10);
+    expect(groups.every((g) => [...basesOf(g)].every((b) => typeof b === 'string' && b.length > 3)), '有成员的基形读不出来').toBe(true);
+  });
+
+  // ① 同族一条基形。star 那一族登记在案：实心与空心两枚现在是**两条不同的星形路径**（不是同一条的两面上法），
+  //    真 SVG 到手要改成同一条轮廓 + 换填充。台账不命中就红，多命中也红。
+  const WITHIN_FAMILY_REGISTERED: Array<[string, number]> = [['star', 2]];
+  it('① 同族必须共享同一条基形（例外只准是登记台账里那几对，且必须真的命中）', () => {
+    const bad = groups
+      .map((g) => ({ g, n: basesOf(g).size, members: (CARRIERS as Record<string, string[]>)[g].length }))
+      .filter((x) => x.members >= 2 && x.n !== 1);
+    const extra = bad.filter((x) => !WITHIN_FAMILY_REGISTERED.some(([g, n]) => g === x.g && n === x.n));
+    const unused = WITHIN_FAMILY_REGISTERED.filter(([g, n]) => !bad.some((x) => x.g === g && x.n === n));
+    expect(extra, `这些族没共享基形又没登记：${JSON.stringify(extra)}`).toEqual([]);
+    expect(unused, `台账里这几条已经不复存在（真 SVG 到了就撤掉它）：${JSON.stringify(unused)}`).toEqual([]);
+  });
+
+  // ② 异族不许共用基形。**台账现在是空的**：这一条真去量的时候发现 `icons.ts` 那条注释
+  // （"附件那两颗也是纸，与保存同载体"）**已经过期** —— 附件那颗的第一条路径与保存那一族的 `DOC` 基形不同，
+  // 五族之间没有任何一对共用基形。台账留空不是"没有这一判"，而是"这一判现在零例外"：
+  // 谁以后把两族的轮廓抄成同一条，② 立刻红；哪天确实需要共用，就必须在这里登记下来（并写为什么）。
+  const CROSS_FAMILY_REGISTERED: Array<[string, string]> = [];
+  it('② 不同族之间不许共用同一条基形（撞脸就是 §2.2 点名的那个 v1 错误），例外同样走可证伪的台账', () => {
+    const collisions: Array<[string, string]> = [];
+    for (let i = 0; i < groups.length; i += 1) {
+      for (let j = i + 1; j < groups.length; j += 1) {
+        const a = basesOf(groups[i]);
+        const b = basesOf(groups[j]);
+        if ([...a].some((x) => b.has(x))) collisions.push([groups[i], groups[j]]);
+      }
+    }
+    const same = (p: [string, string], q: [string, string]) => (p[0] === q[0] && p[1] === q[1]) || (p[0] === q[1] && p[1] === q[0]);
+    const extra = collisions.filter((p) => !CROSS_FAMILY_REGISTERED.some((q) => same(p, q)));
+    const unused = CROSS_FAMILY_REGISTERED.filter((q) => !collisions.some((p) => same(p, q)));
+    expect(extra, `这两族共用了基形又没登记：${JSON.stringify(extra)}`).toEqual([]);
+    expect(unused, `共用基形的台账里这几对已经不成立了（撤掉它）：${JSON.stringify(unused)}`).toEqual([]);
+  });
 });

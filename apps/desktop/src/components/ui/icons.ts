@@ -111,9 +111,9 @@ export const CARRIERS: Record<string, IconName[]> = {
   star: ['pin-on', 'pin-off'],
   document: ['save-saving', 'save-dirty', 'save-saved', 'save-failed'],
   image: ['attach-image'],
-  // ⚠️ 附件那两颗也是"纸"，与保存那一族同载体 —— §2.2 的撞脸规则在这里其实是被破了的。
-  // 现在靠"纸里有没有徽标"分开（保存四格内部都有一枚状态徽标，附件这两颗没有），
-  // 真分开要等设计师的 SVG。单列一组是为了不让它混进 `document` 那条基形判据里。
+  // §2.2 的"撞脸"这一条 2026-10-12 真去量了：附件这两颗的第一条路径与保存那一族的 `DOC` 基形**并不相同**，
+  // 所以旧注释那句"与保存同载体、破了一次"是过期话（`iconSystem.spec.ts` ② 的例外台账一旦登记它就会红着要求撤掉）。
+  // 仍然单列一组：§2.2 要的是"不同语义不同载体" —— 混进 `document` 只会让那条判据再也看不见将来真去共用轮廓的人。
   attachment: ['attach-file'],
 };
 
