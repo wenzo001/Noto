@@ -56,6 +56,10 @@ secrets.*
 /rustup-toolchain
 .qoder/scratch/
 
+# DSH harness 的沙箱 ACL 恢复现场（机器绑定；在本仓库里跑 agent 时自动生成，
+# 不是仓库内容。它冒出来会把工作树弄脏，而 `tag-release.mjs` 要求工作树干净）。
+.dsh-acl-recovery/
+
 # 本地验证日志（不参与版本控制）
 .logs/
 # cargo test 的落盘输出（用来加总 passed/failed/ignored 的那份），属于现场而非产物。
