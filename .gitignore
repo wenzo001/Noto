@@ -59,6 +59,11 @@ secrets.*
 # DSH harness 的沙箱 ACL 恢复现场（机器绑定；在本仓库里跑 agent 时自动生成，
 # 不是仓库内容。它冒出来会把工作树弄脏，而 `tag-release.mjs` 要求工作树干净）。
 .dsh-acl-recovery/
+# harness 在仓库根上留下的会话现场与探针脚本（同样是机器绑定、跑一次就变）。
+# 这两个本机实测会自己长出来：`.session-decoded.jsonl` 已有 2 085 047 B —— 那种体积
+# 一旦被 `git add -A` 顺手收进版本库，是既进历史又进产物的双重代价。
+.mcp-probe.cjs
+.session-decoded.jsonl
 
 # 本地验证日志（不参与版本控制）
 .logs/
