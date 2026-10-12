@@ -5202,6 +5202,79 @@ Release 正文会退化成一句"找不到条目"的占位。这条是**结构�
 代码签名与公证要证书（D3）。macOS / Android 那两台**没有系统凭据库**，
 按 G38 选 B 的口径**口令只活一次运行 ⇒ 每次启动要重填** —— 这一句必须进对外发布说明。
 
+### 平台代码整理（2026-10-12）：两个壳的接线收成一份（新增 `notera-shell`），平台差异只经 `PlatformSurface` 表达
+
+**问题（拿数字量出来的，不是"看着乱"）**：`apps/desktop/src-tauri/src/lib.rs` 与
+`apps/mobile/src-tauri/src/lib.rs` 各自抄了一份壳接线。逐条比过：
+
+| 符号 | 桌面 | 移动 | 差 |
+|---|---|---|---|
+| `fn reject` | 8 行 | 8 行 | **逐字节相同** |
+| `async fn notera_command` | 17 行 | 17 行 | 只差**一行注释** |
+| `fn pump_events` | 24 行 | 26 行 | 同一套逻辑，注释与 `eprintln!` 前缀不同 |
+| `const EVENT_NAME` / `struct Shell` | 有 | 有 | 两边都在 |
+
+那种形状下"两条壳共用一条契约"只在**注释**里成立：任何一边改了命令拒绝载荷的形状、
+事件名、或"哪些事件要响通知"，另一边会静默不一致，而**两边的门禁都不会红**。
+
+**做法**：新增 `crates/notera-shell`（壳共用层），把**两端必须一样**的东西收进去 ——
+数据目录口径、`App::boot`、命令转发（`dispatch_command`）、事件泵、通知判定、
+能力协商的调用顺序（`boot_surface`）、整段启动流程（`boot`）。
+两个壳从此只留**平台表面**：
+
+- **桌面**：`impl PlatformSurface`，四个面全用桌面自己的 API 实现
+  （原生菜单 / 托盘 / 全局快捷键 / 窗口装饰）；
+- **移动**：`impl PlatformSurface`，三个面都是**写出来的空实现**（Android 上不存在，
+  所以也不上报那三个能力）—— 空实现是显式的，不是靠 `#[cfg]` 消失的。
+
+**为什么用 trait 而不是 `#[cfg]`**：`#[cfg]` 让"移动端不注册托盘"变成编译期的**缺席**，
+读代码的人看不出这里本该有什么；trait 把"这个平台有哪些表面"变成一张**必须被显式填写的清单** ——
+加一个新平台面（比如分享入口）时两个 impl 同时编译不过，逼着每个平台表态（ARCHITECTURE-MAP P2）。
+
+**四条新门禁，各自有变异自证**（`.logs/shell-dedup-mut.mjs`、`shell-dep-mut.mjs`、`shell-testpolicy-mut.mjs`）：
+
+1. `layer:shell-wiring-single-source` —— 接线符号出现在**任一**壳即红。
+   **第一版写的是"两边都有才算重复"，变异台 K1/K2 当场证明它是钝的**：
+   往移动壳里补一份 `pump_events` 只算"一处"，于是绿着放行。
+   （"两个壳各写一份"只是重复的一种形状；更常见的是"某一端悄悄多写了一份、另一端没有"——
+   那正是漂移的起点。）改判"出现即红"之后 K1/K2/K2b/K3 四刀各自红。
+2. `layer:platform-surface-declared` —— 壳里没有 `impl PlatformSurface` 即红（K4）。
+3. `dep:notera-shell` —— 壳共用层不许依赖任何具体壳或领域层（变异：加 `notera-store` ⇒ 红）。
+4. `layer:shell-crate-test-policy` —— `notera-shell` 声明了 `test = false`，
+   所以**源码里一旦出现 `#[test]` 就红**（变异：塞一条 `#[test]` ⇒ 红，
+   报错直接点名"它们不会跑"）。`test = false` 最危险的形状是静默吃掉后来新写的测试。
+5. **顺带补上一个真实的门禁盲区**：`notera-mobile` 此前**不在** `arch-check` 的 crate 表里，
+   于是所有基于 `all` 的门禁（依赖方向 / raw socket / rusqlite / SQL 字面量…）**对它是盲的**。
+   现已并入，`srcDirOf` 也认它。
+
+**踩到并修掉的两件事（按实记，都不遮）**：
+
+- **`cargo test --workspace` 一度整棵红**：`notera-shell` 的测试二进制
+  `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`。根因是它与两个壳一样链了 tauri，
+  而测试二进制住在 `target/<profile>/deps/`，那里没有 tauri-build 铺过去的
+  `WebView2Loader.dll`（`tauri-build-2.7.0/src/lib.rs:880-902` 才会铺）。
+  **第一版修法（照抄两个壳的 `tauri_build::build()` + 一份最小 conf）能让测试跑起来，
+  但引入了新缺陷**：tauri-build 会把应用资源编进本 crate，与桌面壳那份在最终 exe 里
+  撞成**重复叶** —— GNU ld 实测多出 **8 条** `duplicate leaf: type: 3 (ICON) /
+  type: 10 (VERSION) / type: e (GROUP_ICON)`，而本仓基线**恰好 1 条**
+  （`multiple non-default manifests`，已留档）。重复叶意味着链接器丢掉其中一份 ⇒
+  exe 的图标/版本变成"看谁先来"。**最终做法**：`[lib] test = false` + `doctest = false`
+  （本 crate 此刻**一条 `#[test]` 都没有**，它只做接线），并由上面第 4 条门禁看守。
+  实测：桌面壳的链接警告回到**基线 1 条 / 重复叶 0 条**，`cargo test --workspace` 退出码 0。
+- **一处注释写错过并按实更正**：我第一版把根因写成"测试二进制的 PE 导入表里多出
+  `WebView2Loader.dll`"。加上 tauri-build 之后**导入表里仍然有它**（拿 PE 解析逐条比过）——
+  真正变的是**那个 DLL 有没有被铺到二进制找得到的位置**。注释已按实测改写。
+
+**读数（本机独占机器实测，都是这一棵树上的数）**：
+`cargo test --workspace -- --test-threads=1` **716 通过 / 0 失败 / 6 ignored**（99 个 result 行）
+—— 与重构前**逐数相同**（716/0/6），这就是"行为没变"的证据；
+`cargo clippy --workspace --all-targets -- -D warnings` **0 error / 0 warning**；
+`cargo fmt --all --check` **退出码 0**；`node scripts/arch-check.mjs` **38/38**（新增 4 条）；
+`check-versions` 一致。桌面壳 `cargo build -p notera-desktop` 成功，
+链接警告 **1 条**（与基线一致）、**重复叶 0 条**。
+
+**按口径不升版本**：本批只重排代码与门禁，产品行为零改动（716/0/6 逐数相同即证据）。
+
 ### 门禁补强（2026-10-12）：G61 关闭 —— 前端产物的体积第一次有**上界**，"包在长"从此有人看
 
 - **缺口**：`scripts/check-frontend-dist.mjs` 此前只有**下界**（`--min-bytes` 40 KiB），

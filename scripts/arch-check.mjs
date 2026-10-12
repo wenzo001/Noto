@@ -41,7 +41,10 @@ const crates = readdirSync(join(ROOT, 'crates'))
   .filter((d) => statSync(join(ROOT, 'crates', d)).isDirectory())
   .map((d) => [d, cargoDeps(join(ROOT, 'crates', d, 'Cargo.toml'))]);
 const desktop = ['notera-desktop', cargoDeps(join(ROOT, 'apps/desktop/src-tauri/Cargo.toml'))];
-const all = [...crates, desktop];
+// 移动壳以前**不在**这张表里 —— 于是所有基于 `all` 的门禁（依赖方向、raw socket、
+// rusqlite、SQL 字面量…）对它是**盲的**。它和桌面壳一样是产品 crate，必须一起被看。
+const mobile = ['notera-mobile', cargoDeps(join(ROOT, 'apps/mobile/src-tauri/Cargo.toml'))];
+const all = [...crates, desktop, mobile];
 const byName = Object.fromEntries(all);
 
 /**
@@ -102,6 +105,9 @@ const FORBIDDEN = {
   'notera-config': ['notera-sync', 'notera-webdav', 'notera-net', 'notera-host'],
   'notera-sync': ['notera-host', 'tauri'],
   'notera-importer': ['notera-net', 'notera-webdav', 'notera-host'],
+  // 壳共用层：只许依赖 host/core/tauri。它**不许**依赖任何一个具体壳（那会成环），
+  // 也不许把领域层的东西拉进来 —— 它只做接线，不做业务。
+  'notera-shell': ['notera-desktop', 'notera-mobile', 'notera-cli', 'notera-store', 'notera-sync', 'notera-webdav', 'notera-net', 'notera-importer', 'notera-config'],
 };
 for (const [crate, banned] of Object.entries(FORBIDDEN)) {
   const sec = byName[crate];
@@ -114,7 +120,138 @@ for (const [crate, banned] of Object.entries(FORBIDDEN)) {
   check(`dep:${crate}`, 'ARCHITECTURE-MAP §1 依赖方向', bad, `${crate} 的正常依赖里出现了禁止项：${bad.join(', ')}`);
 }
 
-// ------------------------------------------------- 单一出口（依赖 + 源码 grep）---
+// ---------------------------------------------- 两个壳之间不许有第二份接线 ---
+//
+// 缺口形状（这一条就是为它立的）：`apps/desktop/src-tauri/src/lib.rs` 与
+// `apps/mobile/src-tauri/src/lib.rs` 原先各自抄了一份壳接线 —— 实测
+// `fn reject` 两边**逐字节相同**、`async fn notera_command` 只差一行注释、
+// `fn pump_events` 是同一套逻辑。那种形状下"两条壳共用一条契约"只在**注释**里成立：
+// 任何一边改了命令拒绝载荷的形状、事件名、或"哪些事件要响通知"，另一边静默不一致，
+// 而两边的门禁都不会红（本仓反复吃过这一类亏，见 ARCHITECTURE-MAP §5 / §39）。
+//
+// 判据：**壳源码里不许出现这些接线符号** —— 它们只许住在 `notera-shell`。
+//
+// 为什么是"一处都不许"而不是"两边都有才算重复"：第一版写的是后者，而变异台
+// **K1/K2 当场证明它是钝的** —— 往移动壳里补一份 `pump_events` 只算"一处"，
+// 于是那条判据绿着放行（"两个壳各写一份"只是重复的一种形状，更常见的是
+// "某一端悄悄多写了一份、另一端没有"，那正是漂移的起点）。
+// 改判"出现即红"之后，任何一端重新长出第二份实现都会被当场拦下。
+//
+// 允许每个壳各留一份的只有 `notera_command`：`#[tauri::command]` 的属性宏必须在
+// **各自 crate 的**注册表里生成（tauri 的要求），所以它只能各写一遍 ——
+// 但下面那条"必须只是转发"的判据保证它不会变成第二份实现。
+//
+// 空转保护：两个壳源码都要扫到，且必须真的扫到 `notera_command` ——
+// 否则"没扫到"与"扫了个空"看起来一模一样。
+const SHELL_WIRING_SYMBOLS = [
+  'fn reject(',
+  'fn pump_events(',
+  'fn resolve_data_dir(',
+  'const EVENT_NAME',
+  'struct Shell',
+];
+const shellDupes = [];
+{
+  const shells = [
+    ['notera-desktop', join(ROOT, 'apps/desktop/src-tauri/src')],
+    ['notera-mobile', join(ROOT, 'apps/mobile/src-tauri/src')],
+  ];
+  let scanned = 0;
+  for (const [name, dir] of shells) {
+    const files = sources(dir, ['.rs']);
+    if (files.length === 0) {
+      shellDupes.push(`${name} 一个 .rs 都没扫到 —— 本条在空转`);
+      continue;
+    }
+    for (const f of files) {
+      const body = read(f);
+      if (body.includes('async fn notera_command(')) scanned += 1;
+      for (const sym of SHELL_WIRING_SYMBOLS) {
+        if (body.includes(sym)) {
+          shellDupes.push(`${name}: ${rel(f)} 里出现了 \`${sym}\` —— 接线只许住在 notera-shell（本仓的壳共用层）`);
+        }
+      }
+    }
+  }
+  if (scanned < 2) {
+    shellDupes.push(`只扫到 ${scanned} 个壳定义了 notera_command —— 本条在空转（两个壳都要有它）`);
+  }
+  // 命令薄壳必须只是转发：出现 `commands::dispatch` 就说明它自己又实现了一遍转发。
+  for (const [name, dir] of shells) {
+    for (const f of sources(dir, ['.rs'])) {
+      if (read(f).includes('commands::dispatch')) {
+        shellDupes.push(`${name}: ${rel(f)} 直接调了 commands::dispatch —— 转发实现只许有一份（notera-shell::dispatch_command）`);
+      }
+    }
+  }
+}
+check('layer:shell-wiring-single-source', 'ARCHITECTURE-MAP §5/§39（壳接线只有一份，平台差异只经 PlatformSurface 表达）',
+  shellDupes, `两个壳之间的接线出现了第二份：\n    ${shellDupes.join('\n    ')}`);
+
+// ---------------------------------------- 平台表面必须被两个壳显式表态 ---
+//
+// 每个壳都必须有一个 `impl PlatformSurface for …`。这不是形式主义：
+// trait 的每个方法都对应"这个平台上有没有这件事"，加一个新平台面时
+// 两个 impl 会同时编译不过，逼着每个平台明确表态 —— 而不是靠 `#[cfg]` 让它静默缺席。
+// 移动端"三个面都没有"也必须是**写出来的**空实现，不能是"忘了写"。
+const surfaceMissing = [];
+{
+  for (const [name, dir] of [
+    ['notera-desktop', join(ROOT, 'apps/desktop/src-tauri/src')],
+    ['notera-mobile', join(ROOT, 'apps/mobile/src-tauri/src')],
+  ]) {
+    const files = sources(dir, ['.rs']);
+    const has = files.some((f) => /impl\s+PlatformSurface\s+for\s+/.test(read(f)));
+    if (!has) surfaceMissing.push(`${name} 没有 impl PlatformSurface —— 这个平台有哪些表面没有表态`);
+  }
+}
+check('layer:platform-surface-declared', 'ARCHITECTURE-MAP P2（平台差异只经能力协商表达）',
+  surfaceMissing, `这些壳没有声明平台表面：\n    ${surfaceMissing.join('\n    ')}`);
+
+// ------------------------------ 壳共用层的 test=false 必须有门禁看着 ---
+//
+// `crates/notera-shell/Cargo.toml` 写了 `test = false`（理由：它链了 tauri，
+// 测试二进制在 `target/<profile>/deps/` 起不来，`STATUS_ENTRYPOINT_NOT_FOUND`）。
+// 那是**当前没有测试**的事实陈述 —— 但 `test = false` 最危险的形状是
+// "后来有人往这个 crate 里加了 `#[test]`，它静默地一条都不跑，而门禁全绿"。
+// 所以这条判据把两件事钉在一起：**写了 `test = false` 的 crate，源码里不许有 `#[test]`**。
+// 一旦有，本条立刻红，逼着改的人重新评估"测试二进制起不来"这件事，
+// 而不是让新写的测试变成摆设（§45：不会红的断言比没有断言更糟）。
+const shellTestPolicy = [];
+{
+  const shellCargo = join(ROOT, 'crates/notera-shell/Cargo.toml');
+  if (!statSafe(shellCargo)) {
+    shellTestPolicy.push('crates/notera-shell/Cargo.toml 不在 —— 本条在空转');
+  } else {
+    const cargo = read(shellCargo);
+    const disablesTests = /^\s*test\s*=\s*false\s*$/m.test(cargo);
+    const srcFiles = sources(join(ROOT, 'crates/notera-shell/src'), ['.rs']);
+    if (srcFiles.length === 0) {
+      shellTestPolicy.push('notera-shell 一个 .rs 都没扫到 —— 本条在空转');
+    }
+    const testFns = srcFiles.flatMap((f) =>
+      read(f)
+        .split(/\r?\n/)
+        .map((l, i) => ({ f, i: i + 1, l }))
+        .filter(({ l }) => /#\[test\]|#\[tokio::test\]/.test(l)),
+    );
+    if (disablesTests && testFns.length > 0) {
+      shellTestPolicy.push(
+        `notera-shell 声明了 test = false，但源码里有 ${testFns.length} 条 #[test]：` +
+          testFns.map((t) => `${rel(t.f)}:${t.i}`).join('、') +
+          ' —— 它们不会跑。要么让测试二进制能起来（见 Cargo.toml 的注释），要么把测试搬到能跑的地方',
+      );
+    }
+    // 反向：`test = false` 被摘掉之后如果仍然一条测试都没有，也要说一句 ——
+    // 否则这条判据在那种状态下会静默变成恒真。
+    if (!disablesTests && testFns.length === 0) {
+      shellTestPolicy.push('notera-shell 既没声明 test = false 也没有任何 #[test] —— 请确认这是有意的');
+    }
+  }
+}
+check('layer:shell-crate-test-policy', '§45（test = false 不许静默吃掉新写的测试）',
+  shellTestPolicy, `壳共用层的测试策略不一致：\n    ${shellTestPolicy.join('\n    ')}`);
+
 
 const withReqwest = all.filter(([, s]) => s.dependencies.includes('reqwest')).map(([n]) => n);
 check('egress:reqwest-dep', 'PROXY.md §1（唯一 HTTP 出口）', withReqwest.filter((n) => n !== 'notera-net'),
@@ -165,9 +302,14 @@ check('hygiene:rust-message-keys-registered', 'ARCHITECTURE-MAP §5（文案键�
   `核心发出了未登记的 messageKey（界面会退化成兜底文案）：\n    ${[...new Set(unregistered)].join('\n    ')}`);
 
 const RAW_SOCKET = /std::net::(TcpListener|TcpStream|UdpSocket)|std::net::\{[^}]*\b(TcpListener|TcpStream|UdpSocket)\b/;
-// 桌面壳不在 crates/ 下：按名字取源码目录，否则 `crates/notera-desktop/src` 这个
+// 两个壳都不在 crates/ 下：按名字取源码目录，否则 `crates/notera-desktop/src` 这个
 // 不存在的目录会让"壳有没有自己开 socket"这条检查空转（实测就是这样漏的）。
-const srcDirOf = (n) => (n === 'notera-desktop' ? join(ROOT, 'apps/desktop/src-tauri/src') : join(ROOT, 'crates', n, 'src'));
+// 移动壳是同一形状的第二处 —— 它以前连 `all` 都不在，所以这两处都得点名。
+const SHELL_SRC = {
+  'notera-desktop': join(ROOT, 'apps/desktop/src-tauri/src'),
+  'notera-mobile': join(ROOT, 'apps/mobile/src-tauri/src'),
+};
+const srcDirOf = (n) => SHELL_SRC[n] ?? join(ROOT, 'crates', n, 'src');
 const rawNet = all.filter(([n]) => n !== 'notera-net' && !n.startsWith('notera-test-'))
   .map(([n]) => [n, sources(srcDirOf(n), ['.rs'])])
   .flatMap(([n, files]) => files.filter((f) => RAW_SOCKET.test(read(f))).map((f) => `${rel(f)}  [${n}]`));

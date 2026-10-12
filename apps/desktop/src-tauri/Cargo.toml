@@ -38,6 +38,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-shell = "2"
+# 壳的接线（命令转发、事件泵、数据目录、boot 流程）在 notera-shell 里只有一份；
+# 本 crate 只提供**桌面自己的平台表面**（菜单 / 托盘 / 快捷键 / 窗口装饰）。
+notera-shell = { workspace = true }
 notera-host = { workspace = true }
 notera-core = { workspace = true }
 serde = { workspace = true }

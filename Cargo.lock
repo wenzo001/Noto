@@ -2791,6 +2791,7 @@ version = "0.0.125"
 dependencies = [
  "notera-core",
  "notera-host",
+ "notera-shell",
  "notera-test-webdav",
  "serde",
  "serde_json",
@@ -2854,6 +2855,7 @@ version = "0.0.125"
 dependencies = [
  "notera-core",
  "notera-host",
+ "notera-shell",
  "serde",
  "serde_json",
  "tauri",
@@ -2888,6 +2890,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+]
+
+[[package]]
+name = "notera-shell"
+version = "0.0.125"
+dependencies = [
+ "notera-core",
+ "notera-host",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin-notification",
 ]
 
 [[package]]

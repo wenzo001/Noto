@@ -1,0 +1,51 @@
+[package]
+name = "notera-shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Noto 壳共用层：命令转发 / 事件泵 / 数据目录 / 启动装配（桌面与移动共用一份）"
+
+[lib]
+# 本 crate **不产出单元测试二进制**。理由是一条实测出来的装载约束，不是"省事"：
+#
+# 它和两个壳一样链了 `tauri`，而 tauri 的 Windows 后端静态导入 `WebView2Loader.dll`。
+# 测试二进制住在 `target/<profile>/deps/`，在那里起不来 ——
+# `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`，整个 `cargo test --workspace` 退出 1。
+# 两个壳不受影响是因为 cargo 不会为 `bin` / `staticlib` 目标另生成"独立测试二进制"这一形。
+#
+# **这不是在藏测试**：本 crate 里此刻**一条 `#[test]` 都没有**（它只做接线，
+# 没有可脱离 tauri 运行时验证的逻辑）。这条 `test = false` 是把"没有单元测试"这件事
+# 写成事实，而不是让一个跑不起来的二进制每次都把整棵树的 `cargo test` 拖红。
+#
+# **它由门禁看守**（`layer:shell-crate-test-policy`）：本 crate 一旦出现 `#[test]`，
+# 那条门禁立刻红，提醒你重新评估"测试二进制起不来"这件事 —— 而不是让新测试静默不跑。
+test = false
+# 文档测试同理（它们也是独立二进制）。本 crate 的文档注释里没有 ```rust 例子。
+doctest = false
+
+# 这是**唯一**允许同时被两个壳依赖的壳层 crate。
+# 为什么要有它：`apps/desktop/src-tauri` 与 `apps/mobile/src-tauri` 原先各自抄了一份
+# `reject` / `notera_command` / `pump_events` / `Shell` / `EVENT_NAME`，
+# 实测 `reject` 逐字节相同、`notera_command` 只差一行注释 —— 两处会各自漂移，
+# 而"两条壳共用一条契约"这句话不能只写在注释里（ARCHITECTURE-MAP §5 / §39）。
+# 抽出来之后：**壳只留平台表面**（桌面 = 菜单/托盘/快捷键；移动 = 无），
+# 其余一行都不许再写第二遍。
+#
+# ⚠ 这里不许出现业务规则，也不许直接碰 SQL / HTTP（与两个壳同一套约束）。
+
+# ⚠ 这里**没有** `[build-dependencies] tauri-build` —— 这是有意的，完整理由在 build.rs 里。
+# 一句话：tauri-build 确实能把 WebView2Loader.dll 铺好（本 crate 的测试二进制需要），
+# 但它**同时会把应用资源（ICON / GROUP_ICON / VERSION）编进本 crate**，
+# 与桌面壳自己那份在最终 exe 里撞成**重复叶** —— GNU ld 实测多出 8 条
+# `duplicate leaf: type: 3 (ICON) / type: 10 (VERSION) / type: e (GROUP_ICON)`，
+# 而本仓在这之前的基线是**恰好 1 条**（`multiple non-default manifests`，已在 CHANGELOG 留档）。
+# 重复叶意味着链接器丢掉其中一份 ⇒ exe 的图标/版本变成"看谁先来"。
+# 所以本 crate 的 build.rs 只做"铺 DLL + 发 cfg"那一小段，一条资源都不嵌。
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-notification = "2"
+notera-host = { workspace = true }
+notera-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

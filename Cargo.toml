@@ -13,6 +13,7 @@ members = [
   "crates/notera-host",
   "crates/notera-cli",
   "crates/notera-test-webdav",
+  "crates/notera-shell",
   "apps/desktop/src-tauri",
   "apps/mobile/src-tauri",
 ]
@@ -36,6 +37,7 @@ notera-webdav = { path = "crates/notera-webdav" }
 notera-sync = { path = "crates/notera-sync" }
 notera-importer = { path = "crates/notera-importer" }
 notera-host = { path = "crates/notera-host" }
+notera-shell = { path = "crates/notera-shell" }
 notera-test-webdav = { path = "crates/notera-test-webdav" }
 
 serde = { version = "1", features = ["derive"] }

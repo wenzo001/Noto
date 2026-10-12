@@ -22,10 +22,12 @@ custom-protocol = ["tauri/custom-protocol"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# 这里**只**依赖 notera-host / notera-core：壳不许有业务规则（ARCHITECTURE-MAP §5），
-# 移动壳与桌面壳共用的是同一个 `commands::dispatch`，不是第二份状态机（§39）。
+# 这里**只**依赖 notera-shell / notera-host / notera-core：壳不许有业务规则
+# （ARCHITECTURE-MAP §5）。壳的接线（命令转发、事件泵、数据目录、boot 流程）
+# 在 `notera-shell` 里**只有一份**，两个壳共用的是它，不是各自抄一份（§39）。
 tauri = { version = "2", features = [] }
 tauri-plugin-notification = "2"
+notera-shell = { workspace = true }
 notera-host = { workspace = true }
 notera-core = { workspace = true }
 serde = { workspace = true }

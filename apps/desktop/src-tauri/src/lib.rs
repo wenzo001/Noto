@@ -1,84 +1,35 @@
-//! Tauri 壳：窗口生命周期 + **一条**命令转发到 `notera_host::commands::dispatch`。
+//! 桌面壳：**平台表面**（原生菜单 / 托盘 / 全局快捷键 / 窗口装饰）+ 一条命令转发。
 //!
 //! 这里不允许出现业务规则，也不允许出现存储调用（ARCHITECTURE-MAP §5）。
-//! 壳的职责只有四件：定位数据目录、装配 `App`、把命令搬出主线程、把总线事件推给 WebView。
+//! 它与移动壳共用的东西**全在 `notera_shell` 里**：数据目录口径、`App::boot`、
+//! 命令转发、事件泵、通知判定、能力协商的调用顺序、后台同步的启动。
+//! 这个文件只回答一个问题：**桌面上有哪些平台表面，各自怎么用桌面自己的 API 实现**。
+//!
+//! 抽取之前这里与移动壳各抄了一份接线，实测 `fn reject` 逐字节相同、
+//! `notera_command` 只差一行注释、`pump_events` 是同一套逻辑 —— 现在那三样
+//! 在 `notera_shell` 里各只有一份。
 
-use notera_host::{commands, App, BusEvent, NativeCap};
+use notera_host::platform::{global_shortcut_plan, menu_plan, tray_plan, ShortcutRoute};
+use notera_shell::{dispatch_command, PlatformSurface, Shell};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
-use tauri_plugin_notification::NotificationExt;
 
-use notera_host::platform::{
-    global_shortcut_plan, menu_plan, notice_for, tray_plan, ShortcutRoute,
-};
-
-/// 事件名。前端 `api/bridge.ts` 订阅的是同一个字面量，改动必须同步。
-const EVENT_NAME: &str = "notera://event";
 /// 原生菜单被点击 → 前端按 `id` 路由到界面动作（新建、搜索、去冲突收件箱…）。
 /// 菜单**不**自己碰业务：它和键盘快捷键是同一个入口的两种外壳。
+///
+/// ⚠ 这个事件名只有桌面用（移动端没有菜单），所以它留在这里而不是 `notera_shell`；
+/// 前端 `api/bridge.ts` 订阅的是同一个字面量，改动必须两边一起看。
 const MENU_EVENT_NAME: &str = "notera://menu";
 
-struct Shell {
-    app: Arc<App>,
-}
-
-/// 命令拒绝载荷：UI 只认 `code` / `messageKey` / `retryable` / `detail`。
-fn reject(code: &str, retryable: bool, why: String) -> serde_json::Value {
-    serde_json::json!({
-        "code": code,
-        "messageKey": format!("cmd.{code}"),
-        "retryable": retryable,
-        "detail": { "why": why },
-    })
-}
-
-#[tauri::command]
-async fn notera_command(
-    shell: tauri::State<'_, Shell>,
-    name: String,
-    args: serde_json::Value,
-) -> Result<serde_json::Value, serde_json::Value> {
-    let app = Arc::clone(&shell.app);
-    // SQLite 是同步的：绝不在主线程跑命令，否则一次列表扫描就能冻结窗口。
-    let joined =
-        tauri::async_runtime::spawn_blocking(move || commands::dispatch(&app, &name, args)).await;
-    match joined {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(err)) => {
-            Err(serde_json::to_value(&err).unwrap_or_else(|_| reject("serialize", false, err.code)))
-        }
-        Err(e) => Err(reject("handler_panic", true, e.to_string())),
-    }
-}
-
-fn pump_events(app: &App, handle: &tauri::AppHandle) {
-    let rx = app.subscribe();
-    let sink = handle.clone();
-    std::thread::spawn(move || {
-        while let Ok(event) = rx.recv() {
-            if sink.emit(EVENT_NAME, &event).is_err() {
-                return;
-            }
-            // 窗口不在前台时，"要人裁决"的那两类事实只能靠系统通知递到手边。
-            // 判定是纯函数（`notice_for`），所以"哪些事件会响"这件事本身有测试。
-            if let Some(n) = notice_for(&event) {
-                if let Err(e) = sink
-                    .notification()
-                    .builder()
-                    .title(&n.title)
-                    .body(&n.body)
-                    .show()
-                {
-                    eprintln!("[notera] 系统通知没送出去：{e}（界面上的冲突收件箱不受影响）");
-                }
-            }
-        }
-    });
-}
+/// 托盘的 id：`on_tray_icon_event` 与菜单事件都按它归口，改名要连窗口事件一起看。
+const TRAY_ID: &str = "notera-tray";
 
 /// 按平台把菜单计划摆成原生菜单。摆不上去要**吵**，不能静默退回"没有菜单"——
 /// 那正是"能力声明说有你却看不到"的那种假。
-fn attach_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+///
+/// 返回 `Result<(), String>`（与 `PlatformSurface` 的契约一致）：tauri 的 `Error` 在这里
+/// 就地折成一句话，因为跨到 `notera_shell` 之后那边不依赖 tauri 的错误类型。
+fn attach_menu(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
     let plan = menu_plan(cfg!(target_os = "macos"));
     let mut builder = MenuBuilder::new(app);
@@ -91,16 +42,14 @@ fn attach_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
                 // 快捷键（菜单项还在），也不要把整条菜单构建搞崩。
                 b = b.accelerator(a.replace("Cmd", "Command").as_str());
             }
-            sub = sub.item(&b.build(app)?);
+            sub = sub.item(&b.build(app).map_err(|e| e.to_string())?);
         }
-        builder = builder.item(&sub.build()?);
+        builder = builder.item(&sub.build().map_err(|e| e.to_string())?);
     }
-    app.set_menu(builder.build()?)?;
+    app.set_menu(builder.build().map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
-
-/// 托盘的 id：`on_tray_icon_event` 与菜单事件都按它归口，改名要连窗口事件一起看。
-const TRAY_ID: &str = "notera-tray";
 
 /// 显示 / 隐藏主窗口。托盘左键、托盘菜单、全局快捷键三条路都汇到这一个函数 ——
 /// "怎么算显示"只有一份实现（§39 不许复制状态机）。
@@ -154,10 +103,10 @@ fn attach_tray(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// 注册系统级快捷键。返回**全部**注册成功才叫成功 —— 注册了一半就报 true，
 /// 设置页会摆出一个按了没反应的组合键，那正是被 §40 明令禁止的那种"看着有"。
-fn register_global_shortcuts(app: &tauri::AppHandle) -> bool {
+fn register_global_shortcuts(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
     let gs = app.global_shortcut();
-    let mut all_ok = true;
+    let mut failed: Vec<String> = Vec::new();
     for spec in global_shortcut_plan(cfg!(target_os = "macos")) {
         let sink = app.clone();
         let route = spec.route.clone();
@@ -177,10 +126,67 @@ fn register_global_shortcuts(app: &tauri::AppHandle) -> bool {
         });
         if let Err(e) = result {
             eprintln!("[notera] 全局快捷键 {accel} 没注册上：{e}");
-            all_ok = false;
+            failed.push(accel.to_string());
         }
     }
-    all_ok
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("这些键位没注册上：{}", failed.join(", ")))
+    }
+}
+
+/// 桌面的平台表面：三个面都有。
+struct DesktopSurface;
+
+impl PlatformSurface for DesktopSurface {
+    fn has_native_menu(&self) -> bool {
+        // 移动端没有原生菜单栏，`set_menu` 在那里是**会失败**的；
+        // 桌面这三个平台都有（Windows / macOS / Linux）。
+        cfg!(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "linux"
+        ))
+    }
+    fn has_tray(&self) -> bool {
+        true
+    }
+    fn has_global_shortcuts(&self) -> bool {
+        true
+    }
+
+    fn attach_menu(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        attach_menu(app).map_err(|e| format!("原生菜单挂载失败：{e}"))
+    }
+    fn attach_tray(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        attach_tray(app)
+    }
+    fn register_shortcuts(&self, app: &tauri::AppHandle) -> Result<(), String> {
+        register_global_shortcuts(app)
+    }
+
+    fn adjust_main_window(&self, window: &tauri::WebviewWindow) {
+        // Windows：去掉系统标题栏，前端那一行就是唯一的把手与窗口按钮。
+        // macOS 不在这里动 —— conf 的 `titleBarStyle: Overlay` 已经把系统标题栏
+        // 收成零高度、只留红绿灯浮在那一行上（在这里 set_decorations(false) 会连灯一起没）。
+        #[cfg(target_os = "windows")]
+        let _ = window.set_decorations(false);
+        #[cfg(not(target_os = "windows"))]
+        let _ = window;
+    }
+}
+
+#[tauri::command]
+async fn notera_command(
+    shell: tauri::State<'_, Shell>,
+    name: String,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, serde_json::Value> {
+    // 转发的实现只有一份（`notera_shell::dispatch_command`）。
+    // 这个薄壳留在本 crate 里是因为 `#[tauri::command]` 的属性宏必须在
+    // **每个 crate 自己的**注册表里生成 —— 那是 tauri 的要求，不是重复。
+    dispatch_command(Arc::clone(&shell.app), name, args).await
 }
 
 pub fn run() {
@@ -223,69 +229,13 @@ pub fn run() {
                 toggle_main_window(tray.app_handle());
             }
         })
+        // setup 只剩一句：共用流程（数据目录 → boot → 事件泵 → 平台表面 → 允许碰网络）
+        // 全在 `notera_shell::boot` 里，所以两端不可能把顺序写岔。
+        // `String` → `Box<dyn Error>` 这一步是 tauri 的 `setup` 签名要求
+        // （它收 `Result<(), Box<dyn Error>>`），与共用层的 `Result<(), String>` 无关。
         .setup(|handle| {
-            // 数据目录的入口与 `notera-cli` 保持一致：`NOTERA_DATA_DIR` 优先，否则用系统
-            // 给本应用的目录。留这个口子不是为了"配置产品"，是为了**可测**：冷启动与大列表
-            // 渲染的性能基线（PERF-01/13）必须在真实 release 壳里量，而那需要预先装着几千
-            // 条笔记的库 —— 把测试库写进用户真实的 app data 目录是不可接受的。
-            let dir = match std::env::var_os("NOTERA_DATA_DIR") {
-                Some(v) if !v.is_empty() => std::path::PathBuf::from(v),
-                _ => handle
-                    .path()
-                    .app_data_dir()
-                    .map_err(|e| format!("无法确定数据目录：{e}"))?,
-            };
-            let app = App::boot(&dir).map_err(|e| format!("核心启动失败：{e}"))?;
-            let app = Arc::new(app);
-            pump_events(&app, handle.app_handle());
-            handle.app_handle().manage(Shell {
-                app: Arc::clone(&app),
-            });
-            // 原生菜单在窗口显示**之前**挂好：第一帧就该看到本应用的菜单，
-            // 而不是 Tauri 那份只有 Cut/Copy/Quit 的默认菜单。
-            // 移动端没有原生菜单栏，`set_menu` 在那里是**会失败**的 —— 不加这道
-            // 守卫，同一个 setup 会把 Android/iOS 构建直接顶死在启动上。
-            if cfg!(any(
-                target_os = "windows",
-                target_os = "macos",
-                target_os = "linux"
-            )) {
-                attach_menu(handle.app_handle()).map_err(|e| format!("原生菜单挂载失败：{e}"))?;
-                // 托盘与系统级快捷键：这两件**可以失败**（系统不让挂、键位被别的应用占了），
-                // 所以它们不像菜单那样 `?` 上去把启动顶死，而是把结果如实写回能力声明 ——
-                // 设置页随之自己回到"这台设备不支持"，同时吵一声让用户知道刚刚没成。
-                let tray_on = match attach_tray(handle.app_handle()) {
-                    Ok(()) => true,
-                    Err(e) => {
-                        eprintln!("[notera] 托盘没挂上：{e}（设置页那两项会显示为不支持）");
-                        false
-                    }
-                };
-                let shortcuts_on = register_global_shortcuts(handle.app_handle());
-                app.report_native_cap(NativeCap::Tray, tray_on);
-                app.report_native_cap(NativeCap::GlobalShortcuts, shortcuts_on);
-                if !tray_on || !shortcuts_on {
-                    app.emit(BusEvent::Toast {
-                        message_key: "platform.caps_degraded".into(),
-                        level: "warn".into(),
-                    });
-                }
-            }
-            if let Some(w) = handle.get_webview_window("main") {
-                // Windows：去掉系统标题栏，前端那一行就是唯一的把手与窗口按钮。
-                // macOS 不在这里动 —— conf 的 `titleBarStyle: Overlay` 已经把系统标题栏
-                // 收成零高度、只留红绿灯浮在那一行上（在这里 set_decorations(false) 会连灯一起没）。
-                #[cfg(target_os = "windows")]
-                let _ = w.set_decorations(false);
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
-            // 窗口已经出首帧，**这时**才允许碰网络（PLATFORM.md §3）。
-            // 引擎的生命周期交给宿主托管（缺口 G50）：以前这里是"开机那一刻配好才起、
-            // 且只起一次"，于是全新安装填好 WebDAV 之后点同步，徽标会停在"正在同步"
-            // 直到重启 —— 而界面那句文案写的是"配好凭据后会自动开始同步"。
-            app.enable_background_sync();
-            Ok(())
+            notera_shell::boot(&DesktopSurface, handle.app_handle())
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
         })
         .build(tauri::generate_context!())
         .unwrap_or_else(|e| {

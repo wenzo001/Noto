@@ -46,11 +46,16 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | `notera-host` | 装配根、用例编排、调度、事件总线、Commands、启动自检 | 以上全部 | 直接 SQL、直接 HTTP | L1,L5 | 1,4 |
 | `notera-cli` | 诊断与 E2E 驱动（sync-once / net probe / verify） | host 及其全部 | 独立实现任何逻辑 | L3,L4 | 2 |
 | `notera-test-webdav` | 真实 HTTP + 故障注入（仅 dev/test） | 无（独立实现 DAV 子集） | 不得被产品 crate 依赖 | 测试基建 | 1末,2 |
+| `notera-shell` | **壳共用层**：数据目录口径、`App::boot`、命令转发（`dispatch_command`）、事件泵、通知判定、`PlatformSurface` 契约、启动顺序（`boot` / `boot_surface`） | host, core, tauri | 业务规则、直接 SQL/HTTP、菜单/托盘/快捷键的**实现**（那是平台表面） | L3 | 6 |
 | `apps/desktop/src` | 三栏 UI、编辑器 View、命令构造、4 态徽标 | 仅经 Commands/事件与 host 交互 | **reqwest/webdav/协议词汇** | L5 | 4 |
-| `apps/mobile/src-tauri`（`notera-mobile`） | **移动壳**：与桌面壳同一条 `notera_command` 转发 + 同一事件名 + 同一 `App::boot` 数据目录口径；**不注册**托盘/全局快捷键/原生菜单（Android 上没有这三个面，所以也**不上报**那两个能力） | host 及其全部 | 业务规则、第二份命令词表、按机型分支 | L3 | 1 |
+| `apps/desktop/src-tauri`（`notera-desktop`） | **桌面壳**：`impl PlatformSurface`（原生菜单 / 托盘 / 全局快捷键 / 窗口装饰，全用桌面自己的 API）+ 一条命令薄壳 | `notera-shell`, host | 业务规则、第二份命令词表、**任何共用接线的第二份实现** | L3,L5 | 4,6 |
+| `apps/mobile/src-tauri`（`notera-mobile`） | **移动壳**：`impl PlatformSurface`（三个面都是**写出来的空实现**，因为 Android 上不存在，所以也**不上报**那两个能力）+ 同一条命令薄壳 | `notera-shell`, host | 业务规则、第二份命令词表、按机型分支、**任何共用接线的第二份实现** | L3 | 1,6 |
 | `platform/*` | 窗口、托盘、菜单、通知、后台任务、分享、钥匙串 | Tauri 插件 + 原生 API | 业务规则、同步判定 | L5,L6 | 4,5 |
 
 **判据**：若一个 crate 需要知道"同步"这件事，它就不该知道。业务规则放领域层，否则 Rust 侧测不到。
+
+**壳接线只有一份**（2026-10-12 收口）：两个壳的共用接线此前**各抄了一份** —— 实测 `fn reject` 逐字节相同、`async fn notera_command` 只差一行注释、`fn pump_events` 是同一套逻辑。那形状下"两条壳共用一条契约"只在注释里成立。现在共用部分全在 `notera-shell`，**平台差异只经 `PlatformSurface` 表达**：每个平台必须显式表态"有哪些面"（加一个新面时两个 impl 会同时编译不过，逼着各端表态），而不是靠 `#[cfg]` 让某一端静默缺席。门禁：`layer:shell-wiring-single-source`（接线符号出现在任一壳即红）+ `layer:platform-surface-declared`（没有 `impl PlatformSurface` 即红），两条各有变异自证（K1–K5）。
+
 
 ---
 

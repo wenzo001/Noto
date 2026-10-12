@@ -13,6 +13,11 @@ coverage/
 
 # Tauri generated
 apps/desktop/src-tauri/gen/schemas/
+# 壳共用层也会生成同一套 schema（它同样链 tauri）。这两条以前只点名了两个壳的目录，
+# 于是 `crates/notera-shell/gen/schemas/*` 被 `git add -A` 顺手收进了版本库 ——
+# 那些是构建产物（`capabilities.json` 是 `{}`），不该进历史。按模式挡住而不是再加一条路径。
+**/src-tauri/gen/schemas/
+crates/*/gen/
 /gen/android/build/
 /gen/ios/build/
 *.xcframework/
