@@ -5160,6 +5160,48 @@ X 那遍它红过一次、被**环境噪声名单**放行（连跑整门禁把 l
 `arch-check 34/34`、vitest **72 文件 / 607 条**、`vue-tsc` 0、`eslint` 0。Rust 侧零改动。
 **不改产品行为 ⇒ 按口径不升版本**（产品文件里只有 `scripts/verify-layout.mjs` 动了）。
 
+### 发布：0.0.125（自 0.0.63 起的第一次出包，含 62 个补丁的全部改动）
+
+- **第一次出可装包：Noto 0.0.125（版本 0.0.124 → 0.0.125）** —— 本仓自 `v0.0.63` 以来第一次真正出包，
+  含 0.0.64 ~ 0.0.125 共 **62 个补丁**的全部改动。三平台产物由 `.github/workflows/release.yml` 出：
+  Windows `.msi`/`.exe`、macOS `.dmg`/`.app.zip`、Android `.apk`。
+
+本批**不改产品行为**，只做两件"让这一版真的能被用户装到"的事：补上本仓发布口径要求的那条版本条目，
+并把工作树收拾干净（`tag-release.mjs` 要求"tag 指着一个就是这些内容的提交"）。
+
+**为什么需要这一条**：本仓的发布口径（§5）是"版本号、构建产物、更新说明三样一起走"，
+而 `scripts/tag-release.mjs` 与 `.github/workflows/release.yml` 用的是**同一个判据** ——
+CHANGELOG 里必须恰好有一条标着「版本 … → 0.0.125」。此前最后一条这样的条目停在 **0.0.63**，
+0.0.64 起改用 `###` 小节标题记批次，于是那条判据从 0.0.64 一直到现在都取不到东西：
+`tag-release.mjs --check` 当场红，即使绕过它手打 tag，release.yml 里那段 awk 也会抽出 **0 字节**，
+Release 正文会退化成一句"找不到条目"的占位。这条是**结构性**的，不是措辞问题。
+
+**这一版里到底有什么**（逐条账在下面各批的小节里，这里只汇总口径）：
+- 界面重构 v2 全程序列（token 层 → 图标系统 → 侧栏/工具条/移动端胶囊栏 → 五态规格）；
+- §6 那张"已实现但没入口"的表**逐格接线**：备份选择器、系统文件对话框（仓库第一份 capability）、
+  拖文件进窗口、同步详情、搜索分档、偏好过桥、文件夹/笔记颜色、设备身份、版本历史含块级 diff、附件管理器；
+- 缺口 G60（文件夹只允许一层进核心）、G75、G87、G92（撤销登记）、G93–G122 等逐条关闭；
+- 迁移 `0009_attachment_reclaims.sql`（回收字节数的持久账）；
+- Rust 侧：`rebase_unpublishable_head` 的 rev 口径、`remote_rev` 单调写回、设备身份署名不再被盖成本机。
+
+**读数**（2026-10-12 本机独占机器实测，都是这一棵树上的数）：
+`cargo test --workspace` **716 通过 / 0 失败 / 6 ignored**（99 个 `test result` 行）；
+前端 vitest **627 通过（72 文件）**；`vue-tsc --noEmit` **0 错**；`eslint` **0 输出**；
+`cargo fmt --all --check` **退出码 0**；`cargo clippy --workspace --all-targets -- -D warnings` **0 error / 0 warning**；
+`node scripts/arch-check.mjs` **34/34**；`node scripts/check-versions.mjs` 一致。
+
+**Windows 出货产物本机实测**（GNU 工具链，`node scripts/build-dist.mjs --bundles nsis,msi`）：
+`Noto_0.0.125_x64_zh-CN.msi` **8 015 872 B** + `Noto_0.0.125_x64-setup.exe` **5 935 754 B**，
+`BUILD_EXIT=0`；同一条 CI 门禁本机复演 ⇒ `verify-windows-package.ps1` **13 条 PASS、PSEXIT=0**
+（`msiexec /a` 退 0、解出 `notera-desktop.exe` 16 709 120 B 与 `WebView2Loader.dll` 160 880 B、
+包内与 NSIS 的 FileVersion/ProductVersion 四个都是 **0.0.125**、三个体积都过关）。
+**文件名的形状与 `collect-release-assets.mjs` 要的一致**（`_0.0.125_` 在 MSI 与 NSIS 两个名字里都在）。
+
+**仍未验的（不许当成已通过）**：macOS `.dmg`/`.app.zip` 与 Android `.apk` 只有 CI 能出，
+本机没有对应工具链（B1/B3）；三平台的"装到真机上能启动 + 基础功能"归用户（§49）；
+代码签名与公证要证书（D3）。macOS / Android 那两台**没有系统凭据库**，
+按 G38 选 B 的口径**口令只活一次运行 ⇒ 每次启动要重填** —— 这一句必须进对外发布说明。
+
 ### 界面重构 v2 · 第二十三批（2026-10-12）：G122 关闭 —— §1.5 那张表第一次量到编辑器里那两格，并钉死"档位被乘两次"这一族（0.0.125）
 
 **量的是渲染后的计算值，不是源码里的声明**（上一批腿 66 只有五个角色，编辑器那一格没人量过）：

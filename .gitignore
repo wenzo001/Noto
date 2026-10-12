@@ -58,6 +58,9 @@ secrets.*
 
 # 本地验证日志（不参与版本控制）
 .logs/
+# cargo test 的落盘输出（用来加总 passed/failed/ignored 的那份），属于现场而非产物。
+# 此前它落在仓库根上而不是 `.logs/` 里，于是把工作树弄脏、`tag-release.mjs` 的工作树判据过不去。
+.logs-ci-cargo-test.txt
 
 # 移动壳由 CI 的 `tauri android init` 生成，本机一般不跑
 apps/mobile/src-tauri/gen/
@@ -68,3 +71,10 @@ apps/mobile/src-tauri/gen/
 # AOCI agent host integration (machine-bound; do not commit)
 .mcp.json
 .mcp.json.backup.*
+
+# AOCI 认知层的根入口与决议资产（`.aoci/` 自己那份白名单只管目录内的东西，
+# 根上这三个文件由本条看守；`aoci.code.txt` 目前只是体积声明、没有正文，
+# 但它的**存在**是 `aoci.txt` 那两行 Volume 声明的前提，所以一起忽略而不是删掉）。
+aoci.txt
+aoci.code.txt
+aoci.meta.txt

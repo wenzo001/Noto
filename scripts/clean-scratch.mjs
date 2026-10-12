@@ -9,7 +9,7 @@
  *
  *   node scripts/clean-scratch.mjs              # 清理并打印
  *   node scripts/clean-scratch.mjs --check      # 只报不删，超预算 exit 1（CI / 门禁那一头用这个）
- *   node scripts/clean-scratch.mjs --self-test  # "何时该删"那套数学的三臂自检
+ *   node scripts/clean-scratch.mjs --self-test  # "何时该删"那套数学的合成序列自检（臂数由脚本自己报）
  *
  * 三条口径写死在这里，改口径就改这一处：
  *  · **过期的就删**：超过 `logsKeepDays` 的删掉；`perf-*` 夹具目录只等 `perfKeepDays`
@@ -29,10 +29,21 @@ const DAY = 86400000;
 
 export const BUDGET = {
   logsDir: '.logs',
-  logsMaxMb: 60,
+  // **两个口径，各自有实测的两点**（第卅二批改的就是这一格，缺口 G125）：
+  //  · `logsMaxMb` 只管**残骸**（下面 `resident` 之外的那些项）。今天这台机器：残骸 1.5 MB；
+  //    当年立这条守卫的病态形状是单次 43 MB 的 perf 夹具 / 累积 197 MB ⇒ 24 MB 落在两点之上、病灶之下。
+  //  · `totalMaxMb` 管 `.logs` **总量**（含常驻现场）。常驻现场实测 57 MB（`g102-data`：布局门禁的库 + 3 份设计内备份），
+  //    历史上最脏是 197 MB ⇒ 128 MB 是"总量还有余量、但涨到病灶那一级必红"。
+  logsMaxMb: 24,
+  totalMaxMb: 128,
   logsKeepDays: 3,
-  logsKeepNewest: 40,
+  // 地板从 40 降到 8：**这一条以前是恒真的** —— `.logs` 一共 42 项，"保护最近 40 项"等于
+  // 每一项都在保护里，于是预算那一轮在任何磁盘状态下都删不掉东西，只能喊"请人工看"
+  // （与 ㊻ 那次"假豁免宽过样本全体"同族）。留 8 项是"正在排查这一轮的东西"的真实量级。
+  logsKeepNewest: 8,
   perfKeepDays: 1,
+  // 被脚本引用的**常驻现场**：不是残骸，预算与删除都绕开它们（名单必须能被证伪 —— 列了却不存在就报）。
+  resident: ['g102-data'],
   backupsDir: '.notera-dev/backups',
   backupsKeep: 1,
 };
@@ -44,9 +55,13 @@ export const BUDGET = {
  */
 export function planPrune(entries, b = BUDGET) {
   const maxBytes = b.logsMaxMb * 1048576;
-  const sorted = [...entries].sort((x, y) => x.ageDays - y.ageDays);
+  // 常驻现场（被脚本引用的那几格）**不进残骸这一本账**：既不预算轮里砍，也不计入超预算的分子。
+  const resident = (e) => (b.resident ?? []).includes(e.name);
+  const pool = entries.filter((e) => !resident(e));
+  const residentBytes = entries.filter(resident).reduce((a, e) => a + e.bytes, 0);
+  const sorted = [...pool].sort((x, y) => x.ageDays - y.ageDays);
   const doomed = new Set();
-  let bytes = entries.reduce((a, e) => a + e.bytes, 0);
+  let bytes = pool.reduce((a, e) => a + e.bytes, 0);
   // 第一轮：过期。 newest-N 那条地板只管预算那一轮 —— 放了三天的一篇日志不是"现场"。
   for (const e of sorted) {
     if (e.perf ? e.ageDays > b.perfKeepDays : e.ageDays > b.logsKeepDays) { doomed.add(e.path); bytes -= e.bytes; }
@@ -59,7 +74,7 @@ export function planPrune(entries, b = BUDGET) {
     if (floor.has(e.path) || doomed.has(e.path)) continue;
     doomed.add(e.path); bytes -= e.bytes;
   }
-  return { doomed: [...doomed], remainingBytes: bytes };
+  return { doomed: [...doomed], remainingBytes: bytes, residentBytes, totalBytes: bytes + residentBytes };
 }
 
 function stat(path) {
@@ -115,7 +130,13 @@ export function sweep(b = BUDGET, { dryRun = false, nowMs = Date.now() } = {}) {
     beforeMb: mb(items.reduce((a, e) => a + e.bytes, 0)),
     doomed: plan.doomed,
     afterMb: mb(plan.remainingBytes),
+    residentMb: mb(plan.residentBytes),
+    totalMb: mb(plan.totalBytes),
+    // 残骸超预算，或**总量**超预算（常驻现场失控是另一件事，也要红）。
     overBudget: plan.remainingBytes > b.logsMaxMb * 1048576,
+    overTotal: plan.totalBytes > (b.totalMaxMb ?? 1e9) * 1048576,
+    // 豁免名单要能被证伪：列了却不在盘上 = 这条名单已经过期（与 §㉕ 那条"把手数量"同族）。
+    staleResident: (b.resident ?? []).filter((n) => !items.some((e) => e.name === n)),
     leftovers: [],
     backupsRemoved: 0,
   };
@@ -162,15 +183,36 @@ function selfTest() {
       want: [],
     },
     { name: '空输入不该编出删除项', in: [], want: [] },
+    // ↓ 这两臂是缺口 G125 补的：**旧的五臂永远测不到生产那档地板**（生产 `logsKeepNewest = 40`，
+    //   而盘上一共 42 项 ⇒ 每一项都在"现场保护"里，预算那一轮恒久删不掉东西）。
+    //   这一臂拿**生产的地板 8** 与**12 项**一起过：最旧的 4 项必须被砍（项数多于地板时砍得动）。
+    {
+      name: '项数多于地板时预算那一轮真的砍得动（生产档地板 8、12 项 ×2 MB、上限 10 MB ⇒ 最旧 4 项该走）',
+      bp: { ...b, logsKeepNewest: 8, logsMaxMb: 10 },
+      in: Array.from({ length: 12 }, (_, i) => ({ path: `p${i + 1}`, name: `p${i + 1}`, bytes: 2 * MB, ageDays: 0.01 * (i + 1) })),
+      want: ['p9', 'p10', 'p11', 'p12'],
+    },
+    // 常驻现场不是残骸：放了九天也不许砍（它被脚本引用着，砍了就是把门禁的库删了）。
+    {
+      name: 'resident 名单里那一格即便过期也不进删除集（其余过期的照砍）',
+      bp: { ...b, resident: ['lib'] },
+      in: [{ path: 'lib', name: 'lib', bytes: 40 * MB, ageDays: 9 },
+        { path: 'x', name: 'x', bytes: MB, ageDays: 9 }, { path: 'y', name: 'y', bytes: MB, ageDays: 0.2 }],
+      want: ['x'],
+    },
   ];
   let bad = 0;
   for (const c of cases) {
-    const got = planPrune(c.in, b).doomed;
-    const ok = JSON.stringify(got) === JSON.stringify(c.want);
+    // **按身份比，不按顺序比**：`doomed` 是一个集合（删除顺序不进契约），
+    // 而 `for` 循环遍历的是"从最旧开始"，于是数组字面量当期望就会因位置而假红 ——
+    // 这一臂第一跑就是这么红的（要 ["p9","p10","p11","p12"]，实际 ["p12","p11","p10","p9"]，是同一批东西）。
+    const norm = (a) => [...a].sort().join('|');
+    const got = planPrune(c.in, c.bp ?? b).doomed;
+    const ok = norm(got) === norm(c.want);
     if (!ok) bad += 1;
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.name} ⇒ 该删 ${JSON.stringify(c.want)}，实际 ${JSON.stringify(got)}`);
   }
-  console.log(bad === 0 ? '五臂全过（这条看守自己是活的）' : `${bad} 臂不符 —— 判据坏了，别看磁盘结论`);
+  console.log(bad === 0 ? `${cases.length} 臂全过（这条看守自己是活的）` : `${bad} 臂不符 —— 判据坏了，别看磁盘结论`);
   return bad === 0 ? 0 : 1;
 }
 
@@ -180,8 +222,11 @@ if (isCli) {
   const arg = process.argv[2] ?? '';
   if (arg === '--self-test') process.exit(selfTest());
   const r = sweep(BUDGET, { dryRun: arg === '--check' });
-  console.log(`${arg === '--check' ? '预算检查' : '清理'}：${r.files} 项 / ${r.beforeMb} MB ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份）⇒ 剩 ${r.afterMb} MB`);
+  console.log(`${arg === '--check' ? '预算检查' : '清理'}：${r.files} 项 ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份）`);
+  console.log(`  残骸 ${r.afterMb} MB / 上界 ${BUDGET.logsMaxMb} MB ·（另有常驻现场 ${r.residentMb} MB，不计入这本账）· 总量 ${r.totalMb} MB / 上界 ${BUDGET.totalMaxMb} MB`);
   for (const l of r.leftovers) console.log(`  带不走（下次再收）：${l}`);
-  if (r.overBudget) console.log(`  ⚠ 砍完仍超预算（还剩 ${r.afterMb} MB > ${BUDGET.logsMaxMb} MB）—— 只剩"最近 ${BUDGET.logsKeepNewest} 项"那一形，请人工看`);
-  process.exit(arg === '--check' && (r.overBudget || r.doomed.length > 0) ? 1 : 0);
+  for (const n of r.staleResident) console.log(`  豁免名单过期：${n} 不在盘上 —— 要么把它加回来，要么把这一格从名单里删掉`);
+  if (r.overBudget) console.log(`  ⚠ 残骸砍完仍超预算（${r.afterMb} MB > ${BUDGET.logsMaxMb} MB）—— 只剩"最近 ${BUDGET.logsKeepNewest} 项"那一形，请人工看`);
+  if (r.overTotal) console.log(`  ⚠ 总量超预算（${r.totalMb} MB > ${BUDGET.totalMaxMb} MB）—— 常驻现场本身在长，看 ` + BUDGET.resident.join('/') + ` 那几格`);
+  process.exit(arg === '--check' && (r.overBudget || r.overTotal || r.doomed.length > 0 || r.staleResident.length > 0) ? 1 : 0);
 }

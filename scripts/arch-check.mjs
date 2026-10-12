@@ -654,31 +654,23 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
 
 /**
  * 工装残骸的看守自己也得是活的（缺口 G97）。
- * 两臂：① 拿合成序列验"何时该删"那套数学（`--self-test` 的五臂）；
+ * 两臂：① 拿合成序列验"何时该删"那套数学（`--self-test`，臂数以脚本自己报的为准）；
  * ② 对盘上的 `.logs` 做一次真预算检查 —— 这一臂以前**根本没有**，
  *   所以 `verify-perf` 每换一个 RUN_TAG 留下 43 MB 也没人红，实测涨到 197 MB。
+ *   **口径只有一处**（缺口 G125 之后改的）：这里不再自己算字节、自己比阈值，而是直接跑
+ *   `clean-scratch --check` 拿它的退出码 —— 本地门禁与清理脚本各写一份判据迟早分叉，
+ *   而且分叉的形状正是"这边红在那边绿"这种查一小时的东西。
  * `.logs` 不存在（CI 的干净工作树）时第二臂跳过，不编造违规。
  */
 {
   const { spawnSync } = await import('node:child_process');
-  const { BUDGET } = await import('./clean-scratch.mjs');
-  const bytesOf = (dir) => {
-    let sum = 0;
-    for (const name of readdirSync(dir)) {
-      const full = join(dir, name);
-      let s = null;
-      try { s = statSync(full); } catch { continue; }
-      sum += s.isDirectory() ? bytesOf(full) : s.size;
-    }
-    return sum;
-  };
   const scratch = [];
   const probe = spawnSync(process.execPath, [join(ROOT, 'scripts', 'clean-scratch.mjs'), '--self-test'], { encoding: 'utf8' });
   if (probe.status !== 0) scratch.push(`clean-scratch --self-test 退出码 ${probe.status}\n    ${(probe.stdout ?? '') + (probe.stderr ?? '')}`);
   const logsDir = join(ROOT, '.logs');
   if (existsSync(logsDir)) {
-    const mb = bytesOf(logsDir) / 1048576;
-    if (mb > BUDGET.logsMaxMb) scratch.push(`.logs 已 ${mb.toFixed(1)} MB > 预算 ${BUDGET.logsMaxMb} MB —— 跑 \`node scripts/clean-scratch.mjs\` 收`);
+    const chk = spawnSync(process.execPath, [join(ROOT, 'scripts', 'clean-scratch.mjs'), '--check'], { encoding: 'utf8' });
+    if (chk.status !== 0) scratch.push(`clean-scratch --check 退出码 ${chk.status}\n    ${(chk.stdout ?? '') + (chk.stderr ?? '')}`);
   }
   check('hygiene:scratch-budget-guarded', 'ARCHITECTURE-MAP §8（工装残骸要有上界，删除判据要能被合成序列验）', scratch,
     scratch.join('\n    '));
