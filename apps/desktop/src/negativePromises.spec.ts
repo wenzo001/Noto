@@ -26,6 +26,19 @@ const SRC = fileURLToPath(new URL('.', import.meta.url));
 
 const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
 
+/**
+ * 去注释：**只删"从行首开批"的块注释**。行中间的 `/*` 不算注释开头 ——
+ * `settings.proxyBypass` 的值里就写着 `/*.域名`，把它当开把会把 297→388 整段涂黑：
+ * 我因此扫到"0 条 sidebar.color*"，而那十行明明躺在文件里（同一族坑与 `awk` 字段错位那次一样，
+ * 是仪器坏了不是产品没有）。行注释与 `<!-- -->` 同样只认行首。
+ */
+function stripComments(text: string): string {
+  return text
+    .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '')
+    .replace(/^[ \t]*<!--[\s\S]*?-->$/gm, '');
+}
+
 /** 递归枚举目录里的文件（相对 `src/`），只留给定后缀。 */
 function listFiles(ext: string[], dir = SRC, prefix = ''): string[] {
   const out: string[] = [];
@@ -39,8 +52,19 @@ function listFiles(ext: string[], dir = SRC, prefix = ''): string[] {
 
 /** i18n 的 `'key': 'value'` 对（这个文件就是这一种形状，不需要 AST）。 */
 function i18nPairs(): Array<{ key: string; value: string }> {
-  const text = read('i18n.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const text = stripComments(read('i18n.ts'));
   return [...text.matchAll(/'([a-zA-Z][\w.]*?)'\s*:\s*'([^']*)'/g)].map((m) => ({ key: m[1], value: m[2] }));
+}
+
+/** 全仓的 `data-testid` 值（去注释后扫；模板串那种 `` `x-${id}` `` 不匹配，落不进名单也不该落进）。
+ *  §3.3 与 §6 标签那一格都用这一份名单 —— 两处各写一遍抽取器迟早会长成两套口径。 */
+function allTestIds(): string[] {
+  const ids: string[] = [];
+  for (const rel of listFiles(['.vue', '.ts'])) {
+    const text = stripComments(read(rel));
+    for (const m of text.matchAll(/data-testid="([^"$`]+)"/g)) ids.push(m[1]);
+  }
+  return ids;
 }
 
 describe('§2.5 能力不存在的控件必须不渲染（不许画一颗灰的骗人）', () => {
@@ -49,7 +73,7 @@ describe('§2.5 能力不存在的控件必须不渲染（不许画一颗灰的�
   const disabledHits: string[] = [];
   let vIfOnCaps = 0;
   for (const rel of files) {
-    const text = read(rel).replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s\S]*?-->/g, '');
+    const text = stripComments(read(rel));
     for (const m of text.matchAll(/:disabled="([^"]*)"/g)) {
       if (CAPABILITY.test(m[1] ?? '')) disabledHits.push(`${rel} :disabled="${m[1]}"`);
     }
@@ -132,13 +156,20 @@ describe('§6 不做厂商账号、不做多账户（只有 WebDAV 那一格自�
 
 describe('§6 搜索只搜本机：不许说"服务器/远端在替你搜"', () => {
   const pairs = i18nPairs();
-  const SERVER_SIDE = /(服务器|远端|云端|服务端).{0,8}(搜索|检索|索引|查)|搜索.{0,6}(来自|在)服务器/i;
+  // 只钉"搜索这件事发生在服务器那一侧"。`查` 单独进判据会把 §6-9 附件那格「服务器上还没查过」
+  // 也圈进来 —— 那一句说的是这份附件的字节在不在远端，与搜索无关（它是下面那条反面对照的对象）。
+  const SERVER_SIDE = /(服务器|远端|云端|服务端).{0,8}(搜索|检索|索引)|搜索.{0,6}(来自|在)服务器/i;
   it('对照①：搜索这一族键是真的在场（搜索做了，扫描面不为空）', () => {
     expect(pairs.filter((p) => /search/i.test(p.key) || /搜索/.test(p.value)).length).toBeGreaterThanOrEqual(5);
   });
   it('对照②：正则对"服务端搜索"那句假话必须命中', () => {
     expect(SERVER_SIDE.test('服务器正在为你搜索')).toBe(true);
     expect(SERVER_SIDE.test('搜索结果来自服务器')).toBe(true);
+  });
+  it('对照③：合法在场的那句"服务器上还没查过"（附件的远端账）不许被误伤', () => {
+    const ledger = pairs.find((p) => p.key === 'settings.attRemoteUnknown');
+    expect(ledger, '被扫的那一句已经不在了，对照失效').not.toBeUndefined();
+    expect(SERVER_SIDE.test(ledger?.value ?? ''), ledger?.value).toBe(false);
   });
   it('没有任何一句文案把搜索说成发生在服务器那一侧', () => {
     const hits = pairs.filter((p) => SERVER_SIDE.test(p.value)).map((p) => `${p.key}=${p.value}`);
@@ -267,19 +298,6 @@ describe('§3.3 搜索只有"一个词"这一件事：没有筛选器 / 正则 /
   // 控件面用的是**入口名**（英文 testid），与文案面两套词 —— 一把尺子量不到两边。
   const BAN_TESTID = /(filter|facet|regex|scope|date-?range|advanced)/i;
 
-  /** 全仓的 `data-testid` 值（去注释后扫；模板串那种 `` `x-${id}` `` 不匹配，落不进名单也不该落进）。 */
-  function allTestIds(): string[] {
-    const ids: string[] = [];
-    for (const rel of listFiles(['.vue', '.ts'])) {
-      const text = read(rel)
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/<!--[\s\S]*?-->/g, '')
-        .replace(/^\s*\/\/.*$/gm, '');
-      for (const m of text.matchAll(/data-testid="([^"$`]+)"/g)) ids.push(m[1]);
-    }
-    return ids;
-  }
-
   it('对照①：搜索那一族的文案真在场（≥5 条）—— 否则"零违规"只是没扫到东西', () => {
     expect(searchKeys.length).toBeGreaterThanOrEqual(5);
   });
@@ -333,10 +351,6 @@ describe('§3.3 搜索只有"一个词"这一件事：没有筛选器 / 正则 /
  */
 describe('§5 文案死键：登记的每一句都必须有人引用（前端字面量 / 核心 messageKey / 动态前缀）', () => {
   const ROOT = join(SRC, '..', '..', '..');
-  const strip = (t: string) => t
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '')
-    .replace(/<!--[\s\S]*?-->/g, '');
 
   const registered = new Set(i18nPairs().map((p) => p.key));
   const NAMESPACE_SET = new Set([...registered].map((k) => k.split('.')[0] ?? ''));
@@ -364,12 +378,12 @@ describe('§5 文案死键：登记的每一句都必须有人引用（前端字
   const dynamicPrefixes = new Set<string>();
   for (const rel of listFiles(['.ts', '.vue'])) {
     if (rel.endsWith('.spec.ts') || rel === 'i18n.ts') continue;
-    scanFrontend(strip(read(rel)), frontendUsed, dynamicPrefixes);
+    scanFrontend(stripComments(read(rel)), frontendUsed, dynamicPrefixes);
   }
 
   const hostUsed = new Set<string>();
   for (const f of rustFiles(join(ROOT, 'crates'))) {
-    for (const m of strip(readFileSync(f, 'utf8')).matchAll(/"([a-zA-Z_]+\.[A-Za-z0-9_]+)"/g)) {
+    for (const m of stripComments(readFileSync(f, 'utf8')).matchAll(/"([a-zA-Z_]+\.[A-Za-z0-9_]+)"/g)) {
       if (NAMESPACE_SET.has(m[1].split('.')[0] ?? '')) hostUsed.add(m[1]);
     }
   }
@@ -405,5 +419,143 @@ describe('§5 文案死键：登记的每一句都必须有人引用（前端字
 
   it('每一句登记的文案都有人引用（死键必须点名）', () => {
     expect(dead, JSON.stringify(dead)).toEqual([]);
+  });
+});
+
+/**
+ * §6 的最后一格「标签（tag）不做（数据模型里根本不存在）」—— **2026-10-13 按用户拍板改口**：
+ * 归类语义由笔记 / 文件夹的**单值颜色**承担，不提供 tag 数据结构（改口全文见 `docs/design/SPEC-AMENDMENTS.md`）。
+ * 这一格此前是 §6 十条里唯一零证人的那一格，其余九条各有执行者（上面那九个 describe）。
+ *
+ * 判**四面**，因为每一面各自会漏，而"改口"只有落在数据模型上才分辨得出是口径还是撒谎：
+ *  · **schema 面**：往迁移里加一个 `tags` 表 / `notes.tags` 列 = 把标签系统做进数据模型；
+ *  · **DTO 面**：表还没动而行类型先长出 `tags: Vec<String>` —— 下一步界面就能用它，且这一层漂移不留 SQL 痕迹；
+ *  · **控件面**：画了入口却没起中文名字（文案面干净，入口照样在屏幕上）；
+ *  · **文案面**：模型没变而界面上先说"给笔记打标签" = 发明能力（与 §4.8、§3.3 同族）。
+ *
+ * **命名撞车必须分辨得出来**（与「合并」那一格同一个教训）：`notera-importer` 的 `unknown_enml_tags`
+ * 是 ENEX 里没映射上的 **ENML 元素名**，`version-now-tag` 是版本历史"当前那一版"的记号 —— 两位都不许被冤枉；
+ * 而"不许被冤枉"本身也要一条在场的反向自检守着：豁免名单一旦退化成"永远命中不到东西"就是假绿。
+ */
+describe('§6 标签那一格（改口后）：没有 tag 数据结构，归类的唯一入口是单值颜色', () => {
+  const REPO = join(SRC, '..', '..', '..');
+  const readRepo = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
+  /** 违规的名字集合：**整段**叫 tag/tags/label/labels（撞名的长名字不进这一族）。 */
+  const TAG_NAME = /^(tags?|labels?)$/i;
+
+  const sqlBlock = (text: string, table: string): string => {
+    const hit = new RegExp(`CREATE TABLE (?:IF NOT EXISTS )?${table} \\(`, 'i').exec(text);
+    if (!hit) return '';
+    const end = text.indexOf('\n);', hit.index);
+    return end < 0 ? text.slice(hit.index) : text.slice(hit.index, end);
+  };
+  /** 列名 = 每行第一个小写标识符、后面紧跟大写类型名（`CHECK` / `PRIMARY` 那类约束行自然落不进）。 */
+  const sqlColumns = (block: string): string[] =>
+    [...block.matchAll(/^\s*([a-z_][a-z0-9_]*)\s+[A-Z]/gm)].map((m) => m[1] ?? '');
+  const rustStruct = (text: string, name: string): string => {
+    const hit = new RegExp(`pub struct ${name} \\{`).exec(text);
+    if (!hit) return '';
+    const end = text.indexOf('\n}', hit.index);
+    return end < 0 ? text.slice(hit.index) : text.slice(hit.index, end);
+  };
+  const rustFields = (block: string): string[] =>
+    [...block.matchAll(/^\s*pub\s+([a-z_][a-z0-9_]*)\s*:/gm)].map((m) => m[1] ?? '');
+  const tsInterface = (text: string, name: string): string => {
+    const hit = new RegExp(`export interface ${name} \\{`).exec(text);
+    if (!hit) return '';
+    const end = text.indexOf('\n}', hit.index);
+    return end < 0 ? text.slice(hit.index) : text.slice(hit.index, end);
+  };
+  const tsFields = (block: string): string[] =>
+    [...block.matchAll(/^\s*(?:readonly\s+)?(\w+)\??\s*:/gm)].map((m) => m[1] ?? '');
+
+  const migrationFiles = readdirSync(join(REPO, 'migrations')).filter((f) => f.endsWith('.sql')).sort();
+  const migrationSql = migrationFiles.map((f) => readRepo(join('migrations', f))).join('\n');
+  const tableNames = [...migrationSql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)/gi)].map((m) => m[1] ?? '');
+  const noteCols = sqlColumns(sqlBlock(migrationSql, 'notes'));
+  const folderCols = sqlColumns(sqlBlock(migrationSql, 'folders'));
+
+  const storeTypes = readRepo('crates/notera-store/src/types.rs');
+  const rustBlocks = ['Note', 'NoteListRow', 'Folder'].map((n) => rustStruct(storeTypes, n));
+  const frontTypes = read('api/types.ts');
+  const tsBlocks = ['Note', 'Folder'].map((n) => tsInterface(frontTypes, n));
+  const enexFields = rustFields(rustStruct(readRepo('crates/notera-importer/src/enex.rs'), 'EnexNote'));
+  const ids = new Set(allTestIds());
+
+  it('对照①：schema 面真读到了那两个块（表名、列数、color 都在）—— 抽到空块的话"没有标签列"等于没扫', () => {
+    expect(migrationFiles.length).toBeGreaterThanOrEqual(3);
+    expect(tableNames.length).toBeGreaterThanOrEqual(10);
+    expect(tableNames).toContain('notes');
+    expect(noteCols.length).toBeGreaterThanOrEqual(10);
+    expect(folderCols.length).toBeGreaterThanOrEqual(8);
+    expect(noteCols).toContain('color');
+    expect(folderCols).toContain('color');
+  });
+
+  it('对照②：DTO 面真读到了那五块，且每块都带 color（颜色的替身在模型里是在场的）', () => {
+    const blocks: Array<[string, string[]]> = [
+      ...['Note', 'NoteListRow', 'Folder'].map((n) => [`rust:${n}`, rustFields(rustStruct(storeTypes, n))] as [string, string[]]),
+      ...['Note', 'Folder'].map((n) => [`ts:${n}`, tsFields(tsInterface(frontTypes, n))] as [string, string[]]),
+    ];
+    for (const [label, fields] of blocks) {
+      expect(fields.length, `${label} 只读到 ${fields.length} 个字段（块没解析到）`).toBeGreaterThanOrEqual(6);
+      expect(fields, `${label} 块里读不到 color`).toContain('color');
+    }
+  });
+
+  it('对照③·牙齿：三支抽取器面对故意写的标签形状必须都抓到（否则"零违规"可以是"解析器没在看"）', () => {
+    expect(sqlColumns('CREATE TABLE notes (\n  id TEXT PRIMARY KEY,\n  tags TEXT,\n)')).toContain('tags');
+    expect(rustFields('pub struct Note {\n    pub id: EntityId,\n    pub tags: Vec<String>,\n}')).toContain('tags');
+    expect(tsFields('export interface Note {\n  id: Uuid;\n  labels?: string[];\n}')).toContain('labels');
+    expect(TAG_NAME.test('tags')).toBe(true);
+    expect(TAG_NAME.test('unknown_enml_tags')).toBe(false);
+  });
+
+  it('对照④·撞名的两位真在场并被放过（ENML 元素名 ≠ 笔记的标签；版本记号 ≠ 标签入口）', () => {
+    expect(enexFields.filter((f) => /tags/i.test(f))).toEqual(['unknown_enml_tags']);
+    expect(enexFields.filter((f) => TAG_NAME.test(f))).toEqual([]);
+    expect(ids.has('version-now-tag'), '名单里读不到 version-now-tag（豁免的对象已经不在了）').toBe(true);
+  });
+
+  it('主判据·schema 面：没有任何一张表的表名落进标签那一族', () => {
+    const hits = tableNames.filter((t) => TAG_NAME.test(t));
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+
+  it('主判据·schema 面：notes / folders 两块的列名里没有标签那一族', () => {
+    const hits = [...noteCols, ...folderCols].filter((c) => TAG_NAME.test(c));
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+
+  it('主判据·DTO 面（Rust）：Note / NoteListRow / Folder 三块都不许长出标签字段', () => {
+    const hits = rustBlocks.flatMap(rustFields).filter((f) => TAG_NAME.test(f));
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+
+  it('主判据·DTO 面（前端）：Note / Folder 两个 interface 都不许长出标签字段', () => {
+    const hits = tsBlocks.flatMap(tsFields).filter((f) => TAG_NAME.test(f));
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+
+  it('主判据·控件面：全仓入口的名字里没有标签那一族，而颜色那一族真在场', () => {
+    const hits = [...ids].filter((id) => /(^|-)tags?(-|$)/i.test(id) && id !== 'version-now-tag');
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+    // 替身真的在场：归类的入口只有颜色那一族（§6-11 + 2026-10-09 拍板"只做侧栏小色点"）
+    for (const ok of ['note-color-panel', 'folder-color-panel', 'note-color-none', 'folder-color-none']) {
+      expect(ids.has(ok), `名单里读不到 ${ok}`).toBe(true);
+    }
+  });
+
+  it('主判据·文案面：没有任何一句把"打标签 / 标签库"说成产品能力，而颜色的说法在场', () => {
+    const pairs = i18nPairs();
+    const BAN = /(打标签|加标签|添加标签|新建标签|标签库|标签管理|标签系统|标签列表|多个标签|按标签(找|搜)|给笔记标签)/;
+    for (const lie of ['给笔记打标签', '标签管理', '支持多个标签', '按标签搜索笔记']) {
+      expect(BAN.test(lie), lie).toBe(true);
+    }
+    const hits = pairs.filter((p) => BAN.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+    // 替身那一族按**名字**钉住，不只数条数：只写"≥3 条"的话，删掉其中一句也不会红（k7 那把空刀就是这么留下的）
+    expect(pairs.find((p) => p.key === 'sidebar.colorTitle'), '颜色选择器那一句标题不在了').not.toBeUndefined();
+    expect(pairs.filter((p) => p.key.startsWith('sidebar.color')).length).toBeGreaterThanOrEqual(3);
   });
 });

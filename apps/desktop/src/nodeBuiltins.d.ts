@@ -12,6 +12,8 @@ declare module 'node:fs' {
     isDirectory(): boolean;
   }
   export function readdirSync(path: string, options: { withFileTypes: true }): Dirent[];
+  /** §6 标签那一格要按后缀挑迁移文件，取的是**名字**而不是 Dirent（两参那一支重载挑不到它）。 */
+  export function readdirSync(path: string): string[];
   export function readFileSync(path: string, encoding: 'utf8'): string;
 }
 
