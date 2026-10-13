@@ -128,15 +128,17 @@ function selectTrash(): void {
         @close="newFolderOpen = false"
         @confirm="commitNewFolder"
       >
-        <input
-          v-model="newName"
-          class="input"
-          type="text"
-          data-testid="new-folder-input"
-          :aria-label="t('sidebar.newFolder')"
-          :placeholder="t('sidebar.newFolder')"
-          @keydown.enter.prevent="commitNewFolder"
-        />
+        <label class="input-hit">
+          <input
+            v-model="newName"
+            class="input"
+            type="text"
+            data-testid="new-folder-input"
+            :aria-label="t('sidebar.newFolder')"
+            :placeholder="t('sidebar.newFolder')"
+            @keydown.enter.prevent="commitNewFolder"
+          />
+        </label>
       </AppDialog>
 
       <FolderTree />

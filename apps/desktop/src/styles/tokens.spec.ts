@@ -131,10 +131,34 @@ describe('token 结构约束', () => {
     expect(combined).toContain('var(--');
   });
 
-  it('按钮/输入/徽标的最小命中尺寸来自 token', () => {
-    expect(baseCss).toMatch(/\.btn\s*\{[\s\S]*?min-height:\s*var\(--touch\)/);
-    expect(baseCss).toMatch(/\.input[\s\S]*?min-height:\s*var\(--touch\)/);
-    expect(baseCss).toMatch(/\.badge\s*\{[\s\S]*?min-height:\s*var\(--touch\)/);
+  /**
+   * §1.4 与 §5 分层之后（G127 拍 B，2026-10-13），"输入框"这一格判的是**两件事**：
+   * 涂装那一档走 `--h-input`（36），命中那一档走外层 `.input-hit` 的 `--touch`（44）。
+   *
+   * ⚠ 两条都**按声明取**（先把那个规则块切出来，再在块内按行认property），不许写成
+   * "`.input` 后面某处出现 44"那种：旧写法就是那样的，而 `.input-hit` 恰好带着 `.input` 这个前缀 ——
+   * 谁把 label 那层删掉，旧写法照样绿（缺口 #74 那一族的同一个形状，只是这次长在期望值这一侧）。
+   * ⚠ 涂装那一格必须认 `height` 而不是只认 `min-height`：单行输入框的自然高度是 45（行盒 27 + 8 + 8 + 边框），
+   * 只写 `min-height:36` 会**一句都不生效**，而静态判据与"这是 36 那一档"的说法都还绿着 —— 这一条今天真撞上了。
+   * 渲染结果归整跑那枚矩形（实测不是 36 就红），这里守的是机制。
+   */
+  it('按钮/徽标的命中、输入框的涂装与 label 那层的命中，都来自 token 且各在自己那个块里', () => {
+    const css = stripComments(baseCss);
+    const body = (selector: string) => {
+      const m = new RegExp(`^${selector}\\s*\\{([^}]*)\\}`, 'm').exec(css);
+      expect(m, `base.css 里找不到 ${selector} 这一个规则块`).not.toBeNull();
+      return (m?.[1] ?? '');
+    };
+    const declares = (text: string, property: string, token: string) =>
+      new RegExp(`(^|\\n)\\s*${property}:\\s*var\\(${token}\\)\\s*;`).test(text);
+
+    expect(declares(body('\\.btn'), 'min-height', '--touch'), '.btn 的命中没有走 --touch').toBe(true);
+    expect(declares(body('\\.badge'), 'min-height', '--touch'), '.badge 的命中没有走 --touch').toBe(true);
+    expect(declares(body('\\.input-hit'), 'min-height', '--touch'), '.input-hit 那层没有把命中补回 --touch').toBe(true);
+    expect(declares(body('\\.input'), 'height', '--h-input'), '.input 的涂装没有钉死在 --h-input（只写 min-height 会被自然高度顶过去）').toBe(true);
+    expect(declares(body('\\.input'), 'min-height', '--h-input'), '.input 的 min-height 没跟着走 --h-input，共用那条 44 就会赢').toBe(true);
+    // 共用那一档留给 `.textarea`：多行框要是被顺手削成 36，编辑区就塌了
+    expect(declares(body('\\.textarea'), 'min-height', '--touch'), '共用的那一条不再给 textarea 撑 44').toBe(true);
   });
 
   it('尊重系统"减少动效"', () => {

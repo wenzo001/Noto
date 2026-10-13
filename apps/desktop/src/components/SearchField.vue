@@ -25,7 +25,10 @@ defineExpose({ focus, clear });
 </script>
 
 <template>
-  <div class="search">
+  <!-- 这一层必须是 label：§1.4 把输入框的涂装收成 36，§5 的 44 由这一层补 —— 而"点行里的空白也能
+       聚焦输入框"靠的是 label 的原生转发，换成 div 就只剩样式，命中区会静默缩回 36。
+       输入框排在这颗 label 的第一个可标注后代位上（清除那颗在它后面），转发才落得对。 -->
+  <label class="search input-hit">
     <input
       id="note-search"
       ref="inputEl"
@@ -44,7 +47,7 @@ defineExpose({ focus, clear });
     <button v-if="notes.query" type="button" class="btn btn--quiet btn--icon search__clear" :aria-label="t('state.dismiss')" data-testid="search-clear" @click="clear">
       <AppIcon :size="18" name="close" />
     </button>
-  </div>
+  </label>
 </template>
 
 <style scoped>

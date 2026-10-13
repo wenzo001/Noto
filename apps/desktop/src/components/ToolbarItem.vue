@@ -182,14 +182,16 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
     </button>
 
     <form v-if="item.kind === 'link' && linkOpen" class="tb__link" @submit.prevent="applyLink">
-      <input
-        v-model="linkValue"
-        class="input"
-        type="url"
-        :placeholder="t('tb.linkPrompt')"
-        :aria-label="t('tb.linkPrompt')"
-        data-testid="tb-link-input"
-      />
+      <label class="input-hit tb__link-field">
+        <input
+          v-model="linkValue"
+          class="input"
+          type="url"
+          :placeholder="t('tb.linkPrompt')"
+          :aria-label="t('tb.linkPrompt')"
+          data-testid="tb-link-input"
+        />
+      </label>
       <button type="submit" class="btn btn--primary">{{ t('tb.linkApply') }}</button>
     </form>
 
@@ -409,5 +411,12 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
   align-items: center;
   gap: var(--sp-2);
   width: min(340px, 60vw);
+}
+
+/* 包输入框的那层 label 接手"填满剩下那一截"（原先是 input 自己 width:100% 在 flex 里撑开的）。
+   min-width:0 是给 label 里那颗 width:100% 的 input 让路 —— 不给，长 URL 会把表单顶出容器。 */
+.tb__link-field {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 </style>

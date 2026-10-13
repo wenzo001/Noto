@@ -177,18 +177,19 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
         </div>
       </div>
 
-      <input
-        v-if="editingId === row.node.id"
-        :ref="rowRef"
-        v-model="nameDraft"
-        class="input tree__input"
-        type="text"
-        data-testid="folder-rename-input"
-        :aria-label="t('sidebar.rename')"
-        @keydown.enter.prevent="commitRename(row.node.id)"
-        @keydown.escape.prevent="editingId = null"
-        @blur="commitRename(row.node.id)"
-      />
+      <label v-if="editingId === row.node.id" class="input-hit tree__edit">
+        <input
+          :ref="rowRef"
+          v-model="nameDraft"
+          class="input tree__input"
+          type="text"
+          data-testid="folder-rename-input"
+          :aria-label="t('sidebar.rename')"
+          @keydown.enter.prevent="commitRename(row.node.id)"
+          @keydown.escape.prevent="editingId = null"
+          @blur="commitRename(row.node.id)"
+        />
+      </label>
     </li>
 
     <li v-if="rows.length === 0" class="tree__empty text-sm text-muted">{{ t('sidebar.folders') }}：0</li>
@@ -367,14 +368,21 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   z-index: 3;
 }
 
-.tree__input {
+/* 就地改名框浮在这一行上面，所以"命中 44"那一档只能由 label 自己当那个定位盒：
+   把它留在流里，`min-height:--touch` 会把下面每一行顶下去（这一族栽过一次 —— 行距 44,44 变 96,44）。
+   底色画在 label 上：涂装只有 36，上下那两圈不留底的话下面的行会透上来。 */
+.tree__edit {
   position: absolute;
   top: 50%;
   right: var(--sp-3);
   left: var(--sp-3);
-  width: auto;
-  margin: 0;
   transform: translateY(-50%);
+  background: var(--canvas);
+}
+
+.tree__input {
+  width: 100%;
+  margin: 0;
   background: var(--canvas);
 }
 

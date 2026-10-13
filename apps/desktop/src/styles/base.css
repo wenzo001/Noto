@@ -358,6 +358,27 @@ button:active:not(:disabled),
   color: var(--mute);
 }
 
+/* §1.4 给"输入框"那一档的数是 **36**，而 §5 的 44 说的是**命中区**（G127 拍 B「分层」）。
+   上面那条共用规则里 `.input` 原本是 44 —— 那是冲突期"两个数只能活一层"的产物，现在按分层拆开：
+   涂装收成 `--h-input`，命中由下面那层 `.input-hit` 的 label 补回 `--touch`。
+   ⚠ 只改 `.input`，不改 `.select` / `.textarea`：多行框收到 36 就是把编辑区削掉一截。
+   ⚠ 这里必须写 **`height`，不能只写 `min-height`**：单行输入框的自然高度是"行盒 27 + 上下内边距 8 + 边框 1 = 45"，
+   只给 `min-height:36` 永远不生效，界面上照旧 45（2026-10-13 实测，那条静态判据当时是绿的而渲染没变）。
+   36 装得下 27 那一行字（内容盒 34），所以不会裁字形。 */
+.input {
+  height: var(--h-input);
+  min-height: var(--h-input);
+}
+
+/* 原生 `<input>` 是替换元素，画不出 `::after`，所以"命中比涂装高"这一档只能靠**外面包一层 label**：
+   label 会把落在自己区域内的点击原生转发给它的第一个可标注后代，点那一圈真的能聚焦输入框。
+   换成 `<div>` / `<span>` 就不吃这个转发 —— 这是组件契约，不是样式。 */
+.input-hit {
+  display: flex;
+  align-items: center;
+  min-height: var(--touch);
+}
+
 /* §4.9 聚焦：**同底** + 2px `--accent` 外描边。以前这里顺手把底从 sunken 换成 canvas，
    于是"聚焦"看起来像"这一格变了状态"—— 规格要的是只加焦点环，别动底色。 */
 .input:focus,

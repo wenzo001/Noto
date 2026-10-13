@@ -3946,13 +3946,20 @@ function contrastRatio(fg, bg) {
    * G127 选 B「分层」的那张表：§1.4 管**涂装高度**，§5 管**命中区**，两半各自判。
    * `want` 那一列的数**从规范 §1.4 那张表抄**（工具条图标 32 · 导航行 32 · 侧栏文件夹行 34 · 输入框 36 ·
    * 主按钮 40 · 分组标题行 24 —— 最后一档没有命中区那一半，由腿 71 单独量），不许由被测 CSS 反推。
-   * 一条角色进这张表，就必须**同时**进上面的 `TAKEOVER`：涂装收成 32 之后，
-   * 全应用那一把 44 的尺子只有靠"落点证明"那一臂才认它，否则它就是那条 ㊲ 里的违规。
+   * 每一行还必须带 `hit`：**涂装收小之后凭什么把命中补回来**，两条臂机制不同、判法也不同。
+   * · `band` = 控件自己的透明伪元素（这一类要同时进上面的 `TAKEOVER`，判据是中心上下各 21px 落回自己）；
+   * · `label` = 外层 `<label>` 的原生转发（原生 `<input>` 是替换元素，画不出伪元素，只有这一条路。
+   *   它**不进** `TAKEOVER`：全应用那一把尺子里它走 `byLabel` 那一臂。这一臂判三件事 ——
+   *   label 的盒子 ≥44×44、转发真的落到这颗控件（HTML 的规矩是"label 的第一个可标注后代"，不是"里面碰巧有个 input"），
+   *   以及落在 label 正中间那一点归 label 自己或它内部非可交互的节点，没被别的东西盖住）。
    */
   const ROLE_TIERS = [
     // 按**身份**配对，不按位置：`--wide` 是带文字的那一颗（行盒约 39，压到 32 就是裁字，腿 ㊻ 抓到过），
     // 它不属于 §1.4 的图标档。写 `.tb__btn` 第一个匹配项的话，DOM 顺序一变就会假红。
-    { key: '工具条图标', cls: 'tb__btn', sel: '.tb__btn:not(.tb__btn--wide)', want: 32 },
+    { key: '工具条图标', cls: 'tb__btn', sel: '.tb__btn:not(.tb__btn--wide)', want: 32, hit: 'band' },
+    // 代表取这一档当前渲染出来的第一颗（此刻是列表栏那枚搜索框）；**其余每一颗**由上面那把全应用的
+    // 尺子兜：谁没被 label 包住，36 的涂装就会在触摸档和鼠标档同时报成命中区违规。
+    { key: '输入框', cls: 'input', sel: '.input', want: 36, hit: 'label' },
   ];
   const HIT_EDGE = 21;
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="checkbox"],[role="switch"],[role="button"],[role="menuitem"],[role="tab"]';
@@ -4035,13 +4042,15 @@ function contrastRatio(fg, bg) {
       /**
        * 分层之后每一角色量**两枚**，各自归不同的规范：
        * · `painted` = 控件自己渲染后的盒子高度 → 归 §1.4 那一档；
-       * · `up`/`down` = 以控件中心向上、下各 21px（44 那一档"还在带内"的最后一像素）打 `elementFromPoint`，
-       *   落点必须是控件本身或它内部的节点 → 归 §5。**落在祖先上不算**（点 `.tb__cell` 不会按下里面的 button）。
-       * 还没有迁进 §1.4 的那三类继续量它们自己的盒子（今天它们"涂装 = 命中 = 44"，两个数尚未分层）。
+       * · 命中那一半按 `hit` 那一臂判：`band` 以控件中心向上、下各 21px 打 `elementFromPoint`，
+       *   落点必须是控件本身或它内部的节点；`label` 判外层 label 的那三件事（见 ROLE_TIERS 那段注释）。
+       * 落在别的祖先上不算（点 `.tb__cell` 不会按下里面的 button），label 那一臂是唯一的例外 ——
+       * 因为它不是"猜祖先会代点"，而是 HTML 写死的转发规则，且判据把"转发落到谁身上"也量了。
+       * 还没有迁进 §1.4 的那两类继续量它们自己的盒子（见下面 unmoved；它们按 A3.3 结案，不再等迁移）。
        */
       roleHeights.tiers = await page.evaluate((rows) => rows.map((r) => {
         const el = document.querySelector(r.sel);
-        if (!el) return { key: r.key, want: r.want, missing: true };
+        if (!el) return { key: r.key, want: r.want, hit: r.hit, missing: true };
         const b = el.getBoundingClientRect();
         const cx = Math.round(b.left + b.width / 2);
         const cy = Math.round(b.top + b.height / 2);
@@ -4052,12 +4061,38 @@ function contrastRatio(fg, bg) {
           if (!t) return 'none';
           return t === el || el.contains(t) ? 'self' : 'other';
         };
-        return { key: r.key, want: r.want, painted: Math.round(b.height), up: at(-21), down: at(21) };
+        let lab = null;
+        const wrap = r.hit === 'label' ? el.closest('label') : null;
+        if (wrap) {
+          const lr = wrap.getBoundingClientRect();
+          const first = wrap.querySelector('button,input,meter,output,progress,select,textarea');
+          const lx = Math.round(lr.left + lr.width / 2);
+          const ly = Math.round(lr.top + lr.height / 2);
+          const mid = lx >= 0 && lx < window.innerWidth && ly >= 0 && ly < window.innerHeight
+            ? document.elementFromPoint(lx, ly) : null;
+          const coveredByOther = mid !== null && mid !== el && mid.matches('button,input,select,textarea,[role="checkbox"],[role="switch"],[role="button"]');
+          lab = {
+            box: [Math.round(lr.width), Math.round(lr.height)],
+            big: lr.width >= 43.5 && lr.height >= 43.5,
+            forwards: first === el,
+            clear: mid !== null && (mid === wrap || wrap.contains(mid)) && !coveredByOther,
+          };
+          lab.ok = lab.big && lab.forwards && lab.clear;
+        }
+        return {
+          key: r.key,
+          want: r.want,
+          hit: r.hit,
+          painted: Math.round(b.height),
+          up: at(-21),
+          down: at(21),
+          label: lab,
+          labelHit: lab ? lab.ok : null,
+        };
       }), ROLE_TIERS);
       roleHeights.unmoved = await page.evaluate(() => ({
         navBtn: Math.round(document.querySelector('.nav-btn')?.getBoundingClientRect().height ?? 0),
         treeRow: Math.round(document.querySelector('.tree__row')?.getBoundingClientRect().height ?? 0),
-        input: Math.round(document.querySelector('.input')?.getBoundingClientRect().height ?? 0),
       }));
     }
     // 搜索那一格（搜索框 + 清除那颗都在这一屏）
@@ -4135,8 +4170,8 @@ function contrastRatio(fg, bg) {
    * 这一条原来写的是"这四类控件跟的是 §5 的 44，不是 §1.4 的 32 / 34 / 36" —— 那是**冲突期**的裁定
    * （两层只能活一层）。G127 选 B「分层」之后这句话的主语散了：44 归**命中区**，§1.4 那一档归**涂装高度**，
    * 于是拆成三条各自判：① 登记表本身不许残留、也不许"声明撑开了其实点不着"；② 已迁角色的涂装高度；
-   * ③ 同一批角色的命中带（只认落点）。再加一条 ④ 给**还没迁**的那三类继续钉"盒子 ≥44" ——
-   * 那三条不是给迁移让路，是在等迁移：谁把它们迁了，就要同时进 ROLE_TIERS 与 TAKEOVER，并把 ④ 的主语一起换。
+   * ③ 同一批角色的命中带（**两条臂**：伪元素那一臂只认落点回自己，label 那一臂认"够 44 + 转发落到这颗 + 正中没被盖"）。
+   * 再加一条 ④ 给按 A3.3 结案、不进 §1.4 小档的那两类继续钉"盒子 ≥44"。
    */
   const tiers = roleHeights.tiers ?? [];
   const unmoved = roleHeights.unmoved ?? {};
@@ -4150,17 +4185,30 @@ function contrastRatio(fg, bg) {
   check('㊲ 分层·涂装档：ROLE_TIERS 里每一档渲染后的涂装高度必须正好是规范 §1.4 的那个数（节点缺失也算红 —— 这一条不认声明，只认矩形）',
     tiers.length > 0 && tiers.every((t) => !t.missing && t.painted === t.want),
     JSON.stringify(tiers.map((t) => (t.missing ? `${t.key} 缺节点` : `${t.key} 实测 ${t.painted} 要 ${t.want}`))));
-  check('㊲ 分层·命中带：同一批角色中心上下各 21px 那两格必须落回控件自己或它内部的节点（落在祖先上不算 —— 点 cell 不会按下里面的 button）',
-    tiers.length > 0 && tiers.every((t) => !t.missing && t.up === 'self' && t.down === 'self'),
-    JSON.stringify(tiers.map((t) => `${t.key} ${t.up}/${t.down}`)));
-  check('㊲ 还没迁进 §1.4 的那三类今天仍然是"涂装 = 命中 = 44"（迁它们时要把这条的主语一起换掉，不许让它悄悄恒真）',
-    unmoved.navBtn >= 44 && unmoved.treeRow >= 44 && unmoved.input >= 44,
+  check('㊲ 分层·命中带：每一档按自己登记的那条臂证明 —— band 要中心上下 21px 落回控件自己，label 要外层 label 够 44、转发真的落到这颗控件、且它正中没被别的东西盖住（落在不转发的祖先上不算）',
+    tiers.length > 0 && tiers.every((t) => !t.missing
+      && (t.hit === 'label' ? t.labelHit === true : t.up === 'self' && t.down === 'self')),
+    JSON.stringify(tiers.map((t) => `${t.key}/${t.hit} ${t.hit === 'label' ? JSON.stringify(t.label) : `${t.up}|${t.down}`}`)));
+  /**
+   * 两条臂都得**这次真的判过**：只剩一条臂在跑，另一臂的角色就变成"表里登了、界面上没验"。
+   * 这一条不是给规范作证，是给这张表自己作证（同"扫到 0 项要显式失败"那一族）。
+   */
+  check('㊲ 分层·两条臂这次都真的判过东西（band 与 label 各至少一档，一条臂空转整条判据就只剩一半）',
+    tiers.some((t) => !t.missing && t.hit === 'band') && tiers.some((t) => !t.missing && t.hit === 'label'),
+    JSON.stringify(tiers.map((t) => `${t.key}:${t.hit}:${t.missing ? 'missing' : t.hit === 'label' ? t.labelHit : `${t.up}|${t.down}`}`)));
+  /**
+   * 剩下这两类**不会再迁**：A3.3（2026-10-13 用户拍 C）说的是"小于行节距的那一档只适用于不堆叠的控件"，
+   * 而侧栏文件夹行与导航行是堆叠的 —— 涂装 34/32 与相邻行的命中会互相压住，所以它们就按 §5 的 44 画。
+   * 这条判据钉住的是那个结果；谁把 A3.3 推翻，才轮到把它们请进 ROLE_TIERS。
+   */
+  check('㊲ 按 A3.3 结案的那两类仍然是"涂装 = 命中 = 44"（堆叠行不吃 §1.4 的小档；要改这一条先把 A3.3 推翻）',
+    unmoved.navBtn >= 44 && unmoved.treeRow >= 44,
     JSON.stringify(unmoved));
   notes.push(`     §5 全应用扫描：${swept.total} 颗可交互元素；触摸档小命中区 ${swept.touch.length} 颗`
     + `（整行接管 ${labelOf(swept.touch).length}、伪元素撑开 ${swept.touch.filter((s) => s.byTakeover).length}、违规 ${touchViolations.length}），鼠标档 ${swept.desktop.length} 颗`
     + `（登记那一族 ${deskSmall.length}）；把手实测 鼠标 ${gripDesktop ? gripDesktop.h : '?'}`
-    + ` / 触摸 ${gripInTouch}；分层实测 ${tiers.map((t) => `${t.key} 涂装 ${t.painted}/档 ${t.want}/命中 ${t.up}|${t.down}`).join(' · ')}`
-    + `；未迁三类实测 ${unmoved.navBtn}/${unmoved.treeRow}/${unmoved.input}`);
+    + ` / 触摸 ${gripInTouch}；分层实测 ${tiers.map((t) => `${t.key} 涂装 ${t.painted}/档 ${t.want}/命中 ${t.hit === 'label' ? `label ${JSON.stringify(t.label?.box)}转发${t.label?.forwards}` : `${t.up}|${t.down}`}`).join(' · ')}`
+    + `；A3.3 结案那两类实测 ${unmoved.navBtn}/${unmoved.treeRow}`);
 }
 
 /**
