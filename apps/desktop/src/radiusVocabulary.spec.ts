@@ -3,6 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { stripComments } from './testing/corpus';
 
 /**
  * §1.3「圆角只允许这三种，不混用第四种」第一次有执行者。
@@ -41,7 +42,7 @@ listFiles(SRC, '', files);
 type Decl = { file: string; value: string };
 const decls: Decl[] = [];
 for (const rel of files) {
-  const text = readFileSync(join(SRC, rel), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s\S]*?-->/g, '');
+  const text = stripComments(readFileSync(join(SRC, rel), 'utf8'));
   for (const m of text.matchAll(/border(?:-[a-z-]+)?-radius\s*:\s*([^;{}]+)/g)) {
     decls.push({ file: rel, value: (m[1] ?? '').trim().toLowerCase() });
   }

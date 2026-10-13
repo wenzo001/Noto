@@ -50,7 +50,7 @@ function srcTexts() {
   return walk(path.join(repoRoot, SRC)).map((file) => ({
     rel: path.relative(repoRoot, file).replace(/\\/g, '/'),
     abs: file,
-    text: readFileSync(file, 'utf8').replace(/\/\*[^\n]*?\*\//g, '').replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '').replace(/^[ \t]*\/\/.*$/gm, ''),
+    text: stripCssComments(readFileSync(file, 'utf8')),
   }));
 }
 
@@ -81,9 +81,36 @@ function consumedTokens() {
   return map;
 }
 
+/**
+ * 去注释。**与 `apps/desktop/src/testing/corpus.ts` 里那一份必须同形状** —— `.mjs` 不能 import TS，
+ * 只能各留一份，所以下面那段自检每次跑都验一遍这把尺子的关键形状：
+ * 两份哪天分叉、或有人又手写成"跨行非贪婪不锚行首"，这里立刻响，而不是让这条扫描器安静地变瞎。
+ * （缺口 #74 的根因就是六处各写一遍、其中几处不锚行首。）
+ */
+function stripCssComments(text) {
+  return text
+    .replace(/\/\*[^\n]*?\*\//g, '')
+    .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+}
+
+// 自检（每次跑都过）：值里出现的块注释开批符号不许把后面整段吞掉 —— i18n.ts 那次一次吞了 191 行。
+// ⚠ 夹具形状要"开批在一行中间、收批在两行之后"，中间那行就是被吞的受害者：
+//   把收批写在紧邻下一行的话，"跨行非贪婪不锚行首"那把刀也只吞到它为止，自检照样绿（空判据）。
+//   这条是变异跑出来的：我把实现退回那一把旧刀，spec 那边 ① 立刻红、这一条若写成旧形状就抓不到。
+{
+  const probe = 'a { content: "/*"; }\n.b { --must-survive: 1px; }\n/* ZH-NORMAL-COMMENT */\n:root { --ink-x: 1px; }\n';
+  const got = stripCssComments(probe);
+  if (!got.includes('--must-survive') || !got.includes('--ink-x') || got.includes('ZH-NORMAL-COMMENT')) {
+    console.error(`check-tokens-intake: 自检失败 —— 去注释这把尺子又会吞语料了（剥完剩 ${JSON.stringify(got.slice(0, 80))}）`);
+    process.exit(1);
+  }
+}
+
 /** 把 CSS 里所有 `选择器 { … }` 的自定义属性收下来（注释与嵌套花括号先抹平）。 */
 function parseVars(css) {
-  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const stripped = stripCssComments(css);
   const blocks = [];
   for (const m of stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const selector = m[1].trim().replace(/^@media[^{]*$/i, '');

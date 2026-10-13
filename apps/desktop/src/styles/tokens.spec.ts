@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import tokensCss from './tokens.css?raw';
 import baseCss from './base.css?raw';
 import editorCss from './editor.css?raw';
+import { stripComments } from '../testing/corpus';
 
 /**
  * design token 契约测试：
@@ -14,7 +15,7 @@ import editorCss from './editor.css?raw';
 type Vars = Record<string, string>;
 
 function blocks(css: string): Array<{ selector: string; vars: Vars }> {
-  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const stripped = stripComments(css);
   const out: Array<{ selector: string; vars: Vars }> = [];
   for (const match of stripped.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
     const selector = (match[1] ?? '').trim();
@@ -221,7 +222,7 @@ describe('token 引用完整性（每个 var(--x) 都要真有出处）', () => 
    * 注释里的 `var(--x)` 不是消费点。第一版我没抹注释，于是 `editor/dom.ts` 里那句散文
    * （"渲染成 `var(--ink-*)`"）被当成一次真引用而报红 —— **红的是判据，不是产品**。
    */
-  const decomment = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const decomment = (text: string) => stripComments(text);
 
   /** 定义侧：CSS 里的 `--x: 值`、内联样式对象里的 `'--x': 值`，以及 setProperty('--x', …)。 */
   const defined = new Set<string>();
