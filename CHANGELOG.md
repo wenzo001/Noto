@@ -4824,6 +4824,23 @@ G116 保持打开，带着 `drag-handle` 这一个**具体**的问题下去。
 教训一条：**清盘之前先查谁指着它**（`restore-pending.json`、`*.pre-restore.*` 都是引用方），
 这条与 G97"残骸要有上界"不冲突 —— 上界要收，但按引用收。
 
+### 台账（2026-10-13 第四十批）：两条 FAIL 里的一条当场结案（超时来自夹具配的不可达源站，产品没联网）+ 一条量具缺陷登记成 #78
+
+`.logs` 式全仓扫外链：前端源码里出现的 `https://…` 只有 `dav.home.example`、`dav.example.com`、`*.test`、`dav.invalid`、`http://x`
+—— **全是 spec/夹具占位符**（`attachmentRecovery.spec.ts`、`settingsCredential.spec.ts`、`accountWire.spec.ts`、`syncClickGate.spec.ts`
+与 `crates/notera-host/src/lib.rs`），且 `.example`/`.test`/`.invalid` 是 RFC 保留域、不会解析 ⇒ 那条 `ERR_CONNECTION_TIMED_OUT`
+**不是产品在联网取资源**，是同步引擎在拨常驻夹具库里那台不可达的 WebDAV（环境噪声）；规范"不引 webfont、离线可用是硬要求"没有被违反。
+—— 但这件事实**只能靠源码反推**，读不出来：`scripts/verify-layout.mjs:351-354` 为了压掉那句没头没尾的
+`Failed to load resource: 400`，把 console 消息里的 **URL 整段剪掉了**。这是仪器自己把判据需要的字段删掉
+（同那条"错误消息截断会把根因那行切掉"），登记成 **#78**：补一条 `requestfailed` 读数、把 URL 打进 detail；
+⚠ **不要**顺手把"有 requestfailed 就红"写进判据 —— 夹具里的不可达源站本来就拨不通，红了是噪声，这条要改的是可读性不是严格度。
+
+另一半没结：`TLS 面板完整在视口内` 红在 `bottom 992` 对 950 视口 ⇒ **真几何缺陷**（落点算错还是这一档装不下 4 项，要有能跑到那里的整跑现场）。
+`#76（G128 那一族）`已升成 `docs/NEEDS-OTHER-MACHINE-TESTING.md` 的 **D10** 等拍：抽屉化到底是设计意图还是壳重构的副作用。
+自查记账：写 D10 的第一版 Edit 又把上一行（D9）的行首吃掉了 —— **同一个错今天第二次、累计第九次**；
+`git diff --numstat` 报 `2/1`（有删除）当场识破，`git checkout` 还原、改用短锚重插，最终 `1/0` 且 `grep` 到 D9/D10 各一行才提交。
+本批无产品改动，版本号不升。
+
 ### 停（2026-10-13 第三十九批）：配对的第二遍跑到 539 条之后崩在另一条腿上 —— 门禁现在不是绿的，B 分层这一刀没法配对
 
 上一条把腿 ⑨′ 改成"先拉开抽屉再等可见"之后重跑：**它确实过了**（从"崩在第 15 条"变成跑到 539 条 PASS），
