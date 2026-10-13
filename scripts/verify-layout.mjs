@@ -287,6 +287,47 @@ try {
 const seedNoteId = seed.noteId;
 
 const browser = await chromium.launch({ executablePath: CHROME });
+
+/**
+ * 缺口 #78：让仪器说得出"拨的是哪台"。
+ *
+ * 为什么要有这一臂：浏览器那句 `Failed to load resource: net::ERR_CONNECTION_REFUSED` **不带 URL**，
+ * 而传输层失败的请求根本没有 response（上面那条 4xx 的 arm 是绑在 `response` 上的，抓不到它）。
+ * 于是按名单放行噪声的那一遍只能写"有一发挂了"，挂在哪——不知道；2026-10-13 那两条放行的读数就是这个形状。
+ *
+ * ⚠ 这一臂**只记录、不判定**：判据照旧是各腿自己的"console error 为零"。
+ * 把"任何一个请求挂了"直接变成红，会把 dev 工装里那些合法的失败（故意让它 500 的那几发、
+ * 断线注入那几发）一并判成产品缺陷 —— 那一条口子不能开。
+ *
+ * 68 处 `newContext` 不可能逐个接线，所以在这里包一层（`newPage` 那三处走的是自动建的 context，
+ * 事件挂在 context 上收不到，故也一起包）。包错了怎么办？由腿 73 那条正对照当场红给我看。
+ */
+const failedRequests = [];
+const recordFailed = (req) => failedRequests.push(
+  `${req.url().replace(/^http:\/\/127\.0\.0\.1:17323\/cmd\//, 'cmd/')} ← ${req.failure()?.errorText ?? '?'}`,
+);
+{
+  const wrapped = new WeakSet();
+  const onContext = (ctx) => {
+    if (wrapped.has(ctx)) return;
+    wrapped.add(ctx);
+    ctx.on('page', (p) => p.on('requestfailed', recordFailed));
+  };
+  const origContext = browser.newContext.bind(browser);
+  const origPage = browser.newPage.bind(browser);
+  browser.newContext = async (...args) => {
+    const ctx = await origContext(...args);
+    onContext(ctx);
+    return ctx;
+  };
+  // `browser.newPage` 内部会自己建一个默认 context —— 那一发走的就是上面那个 newContext，
+  // 所以这里**只补没被包到的那种情况**，否则同一发失败会被记两遍（实测就会）。
+  browser.newPage = async (...args) => {
+    const p = await origPage(...args);
+    onContext(p.context());
+    return p;
+  };
+}
 const failures = [];
 const notes = [];
 
@@ -3995,6 +4036,12 @@ function contrastRatio(fg, bg) {
         h: Math.round(r.height),
         byLabel: !!rr && rr.height >= 43.5 && rr.width >= 43.5,
         byTakeover: tk !== null && tk.up === 'self' && tk.down === 'self',
+        /** 这两格打在**视口之外** —— 与"被祖先的裁剪盒裁掉"是两回事：真被祖先裁掉时
+         *  `elementFromPoint` 返回的是背后那个元素，报的是 `other`（工具条那 6 条红就是这个形状，A3.2 第①条）。
+         *  所以 `clipped` 只说明"这一屏没法判它"，不能算违规；但每一类接管角色必须在别处被真证明过一次
+         *  （见下面那条"至少一颗被落点证明"），否则"永远贴在边上"就成了新的免判通道。
+         *  这一条是 2026-10-13 那遍 4 红里三条教出来的：过去没有任何 takeover 角色会坐到视口下缘，所以这个形状没被测到。 */
+        byEdge: tk !== null && (tk.up === 'clipped' || tk.down === 'clipped'),
         tk,
         name: (el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent ?? '').trim()).slice(0, 16),
       });
@@ -4140,7 +4187,7 @@ function contrastRatio(fg, bg) {
   const isCovered = (s) => EXEMPT.some((e) => e.cls === s.cls);
   const takenOver = (s) => TAKEOVER.includes(s.cls);
   const labelOf = (list) => list.filter((s) => s.byLabel && !isCovered(s));
-  const touchViolations = swept.touch.filter((s) => !s.byLabel && !s.byTakeover && !isCovered(s));
+  const touchViolations = swept.touch.filter((s) => !s.byLabel && !s.byTakeover && !s.byEdge && !isCovered(s));
   check('㊲ 触摸档（390 + coarse）里没有任何一颗可交互控件的命中区小于 44 —— §5 那条说的就是这一档',
     touchViolations.length === 0, JSON.stringify(touchViolations.slice(0, 6)));
   check('㊲ "整行都是命中区"那一臂真的在判东西（复选框 / 滑杆这一族：原生控件小，label 是 44）',
@@ -4156,7 +4203,7 @@ function contrastRatio(fg, bg) {
    * 把手在鼠标端 24（与 27 那一行的行高配套）、在触摸端 44 —— 两边各一条判据钉住，
    * 于是"谁把 coarse 那条规则的数改了"与"谁新加了一颗小控件"都跑不掉。
    */
-  const deskSmall = swept.desktop.filter((s) => !s.byLabel && !s.byTakeover && !isCovered(s));
+  const deskSmall = swept.desktop.filter((s) => !s.byLabel && !s.byTakeover && !s.byEdge && !isCovered(s));
   const deskKinds = new Set(deskSmall.map((s) => s.cls));
   const deskUnknown = [...deskKinds].filter((c) => !DESKTOP_SMALL.some((e) => e.cls === c));
   const deskStale = DESKTOP_SMALL.filter((e) => !deskKinds.has(e.cls)).map((e) => e.cls);
@@ -4177,11 +4224,17 @@ function contrastRatio(fg, bg) {
   const unmoved = roleHeights.unmoved ?? {};
   const allSwept = swept.touch.concat(swept.desktop);
   const takeStale = TAKEOVER.filter((c) => !allSwept.some((s) => s.cls === c));
-  const takeUnproven = allSwept.filter((s) => takenOver(s) && !s.byTakeover)
+  const takeUnproven = allSwept.filter((s) => takenOver(s) && !s.byTakeover && !s.byEdge)
     .map((s) => `${s.cls}@${s.view} 上${s.tk?.up ?? '?'}/下${s.tk?.down ?? '?'}`);
   check('㊲ 分层·登记表：登记成"涂装收到 §1.4 那一档"的每一颗都必须真的在这一次界面上出现过，且命中带真的被落点证明接住（残留与"点不着"都算红）',
     takeStale.length === 0 && takeUnproven.length === 0,
     JSON.stringify({ 登记: TAKEOVER, 残留: takeStale, 没证明: takeUnproven.slice(0, 6) }));
+  /** `clipped` 那一格不判，不等于这一类可以永远不判：每一类接管角色**至少要有一颗被落点真证明过**。
+   *  少了这一条，"把控件统统摆到视口下缘"就成了新的免判通道（与"扫到 0 项要显式失败"同一族）。 */
+  const takeUnwitnessed = TAKEOVER.filter((c) => !allSwept.some((s) => s.cls === c && s.byTakeover));
+  check('㊲ 分层·登记表每一类都至少被真证明过一颗（贴视口边不判，但不许整类都贴在边上）',
+    takeUnwitnessed.length === 0,
+    JSON.stringify({ 没证人: takeUnwitnessed, 各类被证明的颗数: TAKEOVER.map((c) => `${c}:${allSwept.filter((s) => s.cls === c && s.byTakeover).length}`) }));
   check('㊲ 分层·涂装档：ROLE_TIERS 里每一档渲染后的涂装高度必须正好是规范 §1.4 的那个数（节点缺失也算红 —— 这一条不认声明，只认矩形）',
     tiers.length > 0 && tiers.every((t) => !t.missing && t.painted === t.want),
     JSON.stringify(tiers.map((t) => (t.missing ? `${t.key} 缺节点` : `${t.key} 实测 ${t.painted} 要 ${t.want}`))));
@@ -4467,14 +4520,45 @@ function contrastRatio(fg, bg) {
       position: cs?.position ?? null,
     };
     el.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
-    await new Promise((r) => setTimeout(r, 200));
+    /**
+     * 等的是**这条判据要的那个状态**（图片真画出来），不是固定 200ms。
+     * 2026-10-13 那一遍就是 200ms 只读到 `chips:1 / images:0`（附件字节还没回到本机、块还是占位那颗），
+     * 于是把仪器自己的抖动读成了产品红 —— 同一棵树 90 分钟前那一遍是 `chips:0 / images:1`。
+     * 这一族本仓已经修过两回（G121：㊿ 的 1400ms、64 的固定四帧），这是第三处漏网的。
+     * ⚠ 等待条件在事件发生之前必须是假的：夹具那篇只有一个文字块，`images` 在 drop 之前恒为 0。
+     */
+    /**
+     * 等的是**这一腿自己要的那个状态**（提示收掉 + 多出一块 + 该画图的画出图 / 该走芯片的走出芯片），
+     * 不是固定 200ms。2026-10-13 这一族连撞两次：先是固定 200ms 在负载机上只读到 `chips:1 / images:0`
+     * （把仪器的抖动读成产品红），我把固定等待换成"只等图片"之后，PDF 那一发又**一句都不等**就读了
+     * （`hintGone:false / blocksAfter 没变`）—— 两种错法同一个根：**等待的条件不是判据的条件**。
+     * 实测落定：图片那一发 ~110ms、芯片那一发 ~111ms（50ms 轮询），上限 5s 是给真不出来的时候留的失败路径。
+     * ⚠ 这些条件在 drop 之前都必须是假的：夹具那篇只有一个文字块、没有芯片、提示也没出现过。
+     */
+    const want = specs.some((s) => String(s.type).startsWith('image/'))
+      ? () => document.querySelectorAll('.nb-block img, .nb-block [data-shape="image"]').length >= 1
+      : () => document.querySelectorAll('.nb-chip').length >= 1;
+    const deadline = Date.now() + 5000;
+    let hintGone = false;
+    let blocksAfter = blocksBefore;
+    let images = 0;
+    let chips = 0;
+    for (;;) {
+      hintGone = document.querySelector('[data-testid="editor-drop"]') === null;
+      blocksAfter = document.querySelectorAll('.nb-block').length;
+      images = document.querySelectorAll('.nb-block img, .nb-block [data-shape="image"]').length;
+      chips = document.querySelectorAll('.nb-chip').length;
+      if ((hintGone && blocksAfter >= blocksBefore + 1 && want()) || Date.now() >= deadline) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
     return {
       ...seen,
-      hintGone: document.querySelector('[data-testid="editor-drop"]') === null,
+      hintGone,
       blocksBefore,
-      blocksAfter: document.querySelectorAll('.nb-block').length,
-      chips: document.querySelectorAll('.nb-chip').length,
-      images: document.querySelectorAll('.nb-block img, .nb-block [data-shape="image"]').length,
+      blocksAfter,
+      chips,
+      images,
+      waitedMs: 5000 - (deadline - Date.now()),
     };
   }, files);
 
@@ -8579,6 +8663,34 @@ async function purgeByTitle(prefix) {
   }
 }
 
+/**
+ * 73 · 缺口 #78 的执行者：那一臂**记录得对不对**，而不是"今天有没有噪声"。
+ *
+ * 现场是我自己造的：向端口 9（discard，本机没人听）要一张图 ⇒ 浏览器必定报一次传输层失败。
+ * 这条腿不判"有没有请求挂了"（那归各腿自己的 console error），只判**这台仪器还说不说得出拨的是哪台** ——
+ * 摘掉 `requestfailed` 那一句、或者记的时候不带 URL，这里就红。
+ * 这张图不挂任何一条"console error 为零"的数组，所以它**不占用**下面那条 ≤2 的放行额度。
+ */
+{
+  const before = failedRequests.length;
+  const ctx = await browser.newContext({ viewport: { width: 1200, height: 800 } });
+  const p = await ctx.newPage();
+  await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p.evaluate(() => new Promise((done) => {
+    const img = document.createElement('img');
+    img.src = 'http://127.0.0.1:17399/g73-probe.png';
+    img.onload = () => done();
+    img.onerror = () => done();
+    setTimeout(done, 5000);
+  }));
+  const mine = failedRequests.slice(before).filter((s) => s.includes('127.0.0.1:17399'));
+  check('73 仪器自检：requestfailed 那一臂真的在记，而且说得出拨的是哪台（现场 = 我自己造的一发对封闭端口的请求）',
+    mine.length === 1 && /net::ERR_[A-Z_]+/.test(mine[0] ?? '') && (mine[0] ?? '').includes('g73-probe.png'),
+    JSON.stringify({ 这一发的记录: mine, 全跑累计: failedRequests.length }));
+  await p.close();
+  await ctx.close();
+}
+
 await browser.close();
 // 夹具清干净：这条门禁反复跑，不许每次往开发库里多堆 31 篇。
 for (const id of [...fx.ids, fx.longId]) await cmd('purge_note', { id });
@@ -8597,6 +8709,11 @@ const envNoisy = failures.filter(isEnvOnly);
 if (envNoisy.length > 0 && envNoisy.length <= 2) {
   for (const line of envNoisy) failures.splice(failures.indexOf(line), 1);
   notes.push(`     环境噪声按名单放行 ${envNoisy.length} 条（机器 socket/超时，非产品；>2 条照样红）：${envNoisy.map((l) => l.slice(0, 60)).join(' ｜ ')}`);
+  /** 放行不等于没发生：那几条 console 文本本身不带 URL（传输层失败没有 response），
+   *  所以这里把 `requestfailed` 记到的地址一起打出来 —— 要能回答"拨的是哪台"（缺口 #78）。
+   *  腿 73 自己那发对端口 9 的探针不算，它不是现场。 */
+  const dialed = failedRequests.filter((s) => !s.includes('127.0.0.1:17399'));
+  notes.push(`     同一遍里 requestfailed 记到的失败请求 ${dialed.length} 发（只报地址，不参与判据）：${dialed.slice(0, 4).join(' ｜ ') || '（没有）'}`);
 }
 
 /**
