@@ -297,6 +297,24 @@ button:active:not(:disabled),
   background: var(--ink);
   border-color: var(--ink);
   color: var(--canvas);
+  /* §1.4「40px 主按钮」这一档今天第一次有主语（D12 拍 A，2026-10-13）：涂装 40，命中仍 ≥44。
+     `.btn` 的自然高度是 20 行高 + 上下 8 + 边框 2 = 30 < 40 ⇒ 这一档由 `min-height` 就钉得住
+     （与 `.input` 那一档相反 —— 那一句必须写 `height`，见 A3.4 第①条）。 */
+  position: relative;
+  min-height: var(--h-btn);
+}
+
+/* 命中带**只纵向撑**：横向撑出去会压住旁边那颗的命中区，把"点错目标"当成"目标够大"（A3.2 第②条同形）。
+   ⚠ 这两颗都住在裁剪盒里（设置页那条 auto/auto 的滚动栏、弹窗那层的 body），
+   所以带子超出盒边的那几像素会被裁掉而点不着 —— 不靠声明放行，由腿 ㊲ 的 band 那一臂按落点判。 */
+.btn--primary::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: var(--touch);
+  transform: translateY(-50%);
 }
 
 .btn--primary:hover:not(:disabled) {

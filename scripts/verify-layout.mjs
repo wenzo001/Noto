@@ -3253,7 +3253,16 @@ function contrastRatio(fg, bg) {
       return false;
     }
     await opt.click().catch(() => {});
-    await p31.waitForTimeout(500);
+    /**
+     * 等的是**"面板真的收了"**，不是固定 500ms。还挂着的面板会盖住下一格（那条显著告警）的中心点，
+     * 于是 ㉛ 会在仪器自己的动画窗口里读成 `hitSelf:false` —— 2026-10-13 真出过一次，
+     * 而且"有那批 CSS"与"没有那批 CSS"两种树上读数一字不差（`select底 404 / alert顶 428 / 命中 li.app-select__option`），
+     * 也就是说那次红从头到尾说的是这台仪器，不是产品。
+     * ⚠ 这里 `catch(() => {})` 是故意的：**收不掉不许在这里红**，要让下面那条"告警中心命中自己"去红 ——
+     * 那才是产品该负责的那一格（选完不关面板）。等待条件不许变成新的判据。
+     */
+    await p31.waitForSelector('[data-testid="app-select-panel"]', { state: 'detached', timeout: 3000 }).catch(() => {});
+    await p31.waitForTimeout(150);
     return true;
   };
   check('㉛ 仪器自检：TLS 那一档真的选得出来（选不出来下面几条全是空判据）',
@@ -3982,7 +3991,7 @@ function contrastRatio(fg, bg) {
    * 与豁免表同一条规矩：**每条都必须真的在这一次的界面上出现**（不然表里那条是历史残留），
    * 而且**必须通过落点证明**（不然"声明撑开了、其实点不着"会一路绿到底）。
    */
-  const TAKEOVER = ['tb__btn'];
+  const TAKEOVER = ['tb__btn', 'btn--primary'];
   /**
    * G127 选 B「分层」的那张表：§1.4 管**涂装高度**，§5 管**命中区**，两半各自判。
    * `want` 那一列的数**从规范 §1.4 那张表抄**（工具条图标 32 · 导航行 32 · 侧栏文件夹行 34 · 输入框 36 ·
@@ -3997,10 +4006,14 @@ function contrastRatio(fg, bg) {
   const ROLE_TIERS = [
     // 按**身份**配对，不按位置：`--wide` 是带文字的那一颗（行盒约 39，压到 32 就是裁字，腿 ㊻ 抓到过），
     // 它不属于 §1.4 的图标档。写 `.tb__btn` 第一个匹配项的话，DOM 顺序一变就会假红。
-    { key: '工具条图标', cls: 'tb__btn', sel: '.tb__btn:not(.tb__btn--wide)', want: 32, hit: 'band' },
+    { key: '工具条图标', cls: 'tb__btn', sel: '.tb__btn:not(.tb__btn--wide)', want: 32, hit: 'band', where: 'editor' },
     // 代表取这一档当前渲染出来的第一颗（此刻是列表栏那枚搜索框）；**其余每一颗**由上面那把全应用的
     // 尺子兜：谁没被 label 包住，36 的涂装就会在触摸档和鼠标档同时报成命中区违规。
-    { key: '输入框', cls: 'input', sel: '.input', want: 36, hit: 'label' },
+    { key: '输入框', cls: 'input', sel: '.input', want: 36, hit: 'label', where: 'editor' },
+    // D12 拍 A（2026-10-13）：§1.4 的 40 那一行有两个主语，标题栏早就吃 40，主按钮这一格今天才有执行者。
+    // 全仓只有两颗 `.btn--primary`，都在设置页与弹窗里 ⇒ 样本要在设置那一屏取（`where`）：
+    // 在笔记那一屏量它得到的只是 `missing` —— 那是探针站错了地方，不是产品坏。
+    { key: '主按钮', cls: 'btn--primary', sel: '.btn--primary', want: 40, hit: 'band', where: 'settings' },
   ];
   const HIT_EDGE = 21;
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="checkbox"],[role="switch"],[role="button"],[role="menuitem"],[role="tab"]';
@@ -4015,10 +4028,14 @@ function contrastRatio(fg, bg) {
       if (r.height >= 43.5 && r.width >= 43.5) continue;
       const row = el.closest('label');
       const rr = row ? row.getBoundingClientRect() : null;
-      const cls = (typeof el.className === 'string' ? el.className : '').split(/\s+/).filter(Boolean)[0] ?? '';
+      const classes = (typeof el.className === 'string' ? el.className : '').split(/\s+/).filter(Boolean);
+      const cls = classes[0] ?? '';
+      // ⚠ 按**完整类名 token** 认，不按"第一个类名"：`.btn--primary` 写出来是 `class="btn btn--primary"`，
+      //   拿首 token 比就永远认不出它（与"子串比对替旧类名背书"同一族）。
+      const isTaken = takeover.some((c) => classes.includes(c));
       // 分层那一臂：只在这颗控件确实"小"的时候才需要证明
       let tk = null;
-      if (takeover.includes(cls)) {
+      if (isTaken) {
         const cx = Math.round(r.left + r.width / 2);
         const cy = Math.round(r.top + r.height / 2);
         const at = (dy) => {
@@ -4032,6 +4049,7 @@ function contrastRatio(fg, bg) {
       small.push({
         tag: el.tagName.toLowerCase(),
         cls,
+        classes,
         w: Math.round(r.width),
         h: Math.round(r.height),
         byLabel: !!rr && rr.height >= 43.5 && rr.width >= 43.5,
@@ -4048,6 +4066,57 @@ function contrastRatio(fg, bg) {
     }
     return { total, small };
   }, { sel: INTERACTIVE, edge: HIT_EDGE, takeover: TAKEOVER });
+
+  /**
+   * 分层两半（涂装高度 / 命中区）的**唯一一份**取样代码 —— 两条臂都在里面，别在别处再抄一份。
+   * `where` 决定这一屏该量哪几档：主按钮只在设置页与弹窗里存在。
+   */
+  const measureTiers = (page, where) => page.evaluate((rows) => rows.map((r) => {
+    const el = document.querySelector(r.sel);
+    if (!el) return { key: r.key, want: r.want, hit: r.hit, missing: true };
+    // 样本必须先真在视口里。`at()` 报的 `clipped` 有两种意思："带子被祖先裁掉"（产品）与
+    // "探针站在没滚到的地方"（仪器）。设置页那颗「保存账户」在 900 高的视口外面，第一版就是被这一格报成 clipped 的。
+    // `behavior:'instant'` 是故意的：平滑滚动会让紧接着的那次读矩形落在动画中途。
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
+    const b = el.getBoundingClientRect();
+    const cx = Math.round(b.left + b.width / 2);
+    const cy = Math.round(b.top + b.height / 2);
+    const at = (dy) => {
+      const y = cy + dy;
+      if (y < 0 || y >= window.innerHeight || cx < 0 || cx >= window.innerWidth) return 'clipped';
+      const t = document.elementFromPoint(cx, y);
+      if (!t) return 'none';
+      return t === el || el.contains(t) ? 'self' : 'other';
+    };
+    let lab = null;
+    const wrap = r.hit === 'label' ? el.closest('label') : null;
+    if (wrap) {
+      const lr = wrap.getBoundingClientRect();
+      const first = wrap.querySelector('button,input,meter,output,progress,select,textarea');
+      const lx = Math.round(lr.left + lr.width / 2);
+      const ly = Math.round(lr.top + lr.height / 2);
+      const mid = lx >= 0 && lx < window.innerWidth && ly >= 0 && ly < window.innerHeight
+        ? document.elementFromPoint(lx, ly) : null;
+      const coveredByOther = mid !== null && mid !== el && mid.matches('button,input,select,textarea,[role="checkbox"],[role="switch"],[role="button"]');
+      lab = {
+        box: [Math.round(lr.width), Math.round(lr.height)],
+        big: lr.width >= 43.5 && lr.height >= 43.5,
+        forwards: first === el,
+        clear: mid !== null && (mid === wrap || wrap.contains(mid)) && !coveredByOther,
+      };
+      lab.ok = lab.big && lab.forwards && lab.clear;
+    }
+    return {
+      key: r.key,
+      want: r.want,
+      hit: r.hit,
+      painted: Math.round(b.height),
+      up: at(-21),
+      down: at(21),
+      label: lab,
+      labelHit: lab ? lab.ok : null,
+    };
+  }), ROLE_TIERS.filter((r) => r.where === where));
 
   const swept = { total: 0, touch: [], desktop: [] };
   const roleHeights = {};
@@ -4095,48 +4164,7 @@ function contrastRatio(fg, bg) {
        * 因为它不是"猜祖先会代点"，而是 HTML 写死的转发规则，且判据把"转发落到谁身上"也量了。
        * 还没有迁进 §1.4 的那两类继续量它们自己的盒子（见下面 unmoved；它们按 A3.3 结案，不再等迁移）。
        */
-      roleHeights.tiers = await page.evaluate((rows) => rows.map((r) => {
-        const el = document.querySelector(r.sel);
-        if (!el) return { key: r.key, want: r.want, hit: r.hit, missing: true };
-        const b = el.getBoundingClientRect();
-        const cx = Math.round(b.left + b.width / 2);
-        const cy = Math.round(b.top + b.height / 2);
-        const at = (dy) => {
-          const y = cy + dy;
-          if (y < 0 || y >= window.innerHeight || cx < 0 || cx >= window.innerWidth) return 'clipped';
-          const t = document.elementFromPoint(cx, y);
-          if (!t) return 'none';
-          return t === el || el.contains(t) ? 'self' : 'other';
-        };
-        let lab = null;
-        const wrap = r.hit === 'label' ? el.closest('label') : null;
-        if (wrap) {
-          const lr = wrap.getBoundingClientRect();
-          const first = wrap.querySelector('button,input,meter,output,progress,select,textarea');
-          const lx = Math.round(lr.left + lr.width / 2);
-          const ly = Math.round(lr.top + lr.height / 2);
-          const mid = lx >= 0 && lx < window.innerWidth && ly >= 0 && ly < window.innerHeight
-            ? document.elementFromPoint(lx, ly) : null;
-          const coveredByOther = mid !== null && mid !== el && mid.matches('button,input,select,textarea,[role="checkbox"],[role="switch"],[role="button"]');
-          lab = {
-            box: [Math.round(lr.width), Math.round(lr.height)],
-            big: lr.width >= 43.5 && lr.height >= 43.5,
-            forwards: first === el,
-            clear: mid !== null && (mid === wrap || wrap.contains(mid)) && !coveredByOther,
-          };
-          lab.ok = lab.big && lab.forwards && lab.clear;
-        }
-        return {
-          key: r.key,
-          want: r.want,
-          hit: r.hit,
-          painted: Math.round(b.height),
-          up: at(-21),
-          down: at(21),
-          label: lab,
-          labelHit: lab ? lab.ok : null,
-        };
-      }), ROLE_TIERS);
+      roleHeights.tiers = await measureTiers(page, 'editor');
       roleHeights.unmoved = await page.evaluate(() => ({
         navBtn: Math.round(document.querySelector('.nav-btn')?.getBoundingClientRect().height ?? 0),
         treeRow: Math.round(document.querySelector('.tree__row')?.getBoundingClientRect().height ?? 0),
@@ -4152,6 +4180,10 @@ function contrastRatio(fg, bg) {
     for (const nav of ['nav-trash', 'nav-conflicts', 'nav-settings']) {
       await page.evaluate((id) => document.querySelector(`[data-testid="${id}"]`)?.click(), nav);
       await page.waitForTimeout(700);
+      // 主按钮那一档的样本只在设置页这一屏存在，所以换一屏再取一次（同一份 measureTiers，不另抄）
+      if (width === 1440 && nav === 'nav-settings') {
+        roleHeights.tiers = roleHeights.tiers.concat(await measureTiers(page, 'settings'));
+      }
       await sweepView(page, `${width}/${nav}`, touch);
     }
     if (touch) {
@@ -4185,7 +4217,7 @@ function contrastRatio(fg, bg) {
   check('㊲ 触摸档里块把手真的是 44 高（`pointer: coarse` 那条放大规则还在，且真的画得出来）',
     gripInTouch !== null && gripInTouch >= 44, JSON.stringify({ gripInTouch }));
   const isCovered = (s) => EXEMPT.some((e) => e.cls === s.cls);
-  const takenOver = (s) => TAKEOVER.includes(s.cls);
+  const takenOver = (s) => TAKEOVER.some((c) => (s.classes ?? []).includes(c));
   const labelOf = (list) => list.filter((s) => s.byLabel && !isCovered(s));
   const touchViolations = swept.touch.filter((s) => !s.byLabel && !s.byTakeover && !s.byEdge && !isCovered(s));
   check('㊲ 触摸档（390 + coarse）里没有任何一颗可交互控件的命中区小于 44 —— §5 那条说的就是这一档',
@@ -4223,7 +4255,7 @@ function contrastRatio(fg, bg) {
   const tiers = roleHeights.tiers ?? [];
   const unmoved = roleHeights.unmoved ?? {};
   const allSwept = swept.touch.concat(swept.desktop);
-  const takeStale = TAKEOVER.filter((c) => !allSwept.some((s) => s.cls === c));
+  const takeStale = TAKEOVER.filter((c) => !allSwept.some((s) => (s.classes ?? []).includes(c)));
   const takeUnproven = allSwept.filter((s) => takenOver(s) && !s.byTakeover && !s.byEdge)
     .map((s) => `${s.cls}@${s.view} 上${s.tk?.up ?? '?'}/下${s.tk?.down ?? '?'}`);
   check('㊲ 分层·登记表：登记成"涂装收到 §1.4 那一档"的每一颗都必须真的在这一次界面上出现过，且命中带真的被落点证明接住（残留与"点不着"都算红）',
@@ -4231,10 +4263,10 @@ function contrastRatio(fg, bg) {
     JSON.stringify({ 登记: TAKEOVER, 残留: takeStale, 没证明: takeUnproven.slice(0, 6) }));
   /** `clipped` 那一格不判，不等于这一类可以永远不判：每一类接管角色**至少要有一颗被落点真证明过**。
    *  少了这一条，"把控件统统摆到视口下缘"就成了新的免判通道（与"扫到 0 项要显式失败"同一族）。 */
-  const takeUnwitnessed = TAKEOVER.filter((c) => !allSwept.some((s) => s.cls === c && s.byTakeover));
+  const takeUnwitnessed = TAKEOVER.filter((c) => !allSwept.some((s) => (s.classes ?? []).includes(c) && s.byTakeover));
   check('㊲ 分层·登记表每一类都至少被真证明过一颗（贴视口边不判，但不许整类都贴在边上）',
     takeUnwitnessed.length === 0,
-    JSON.stringify({ 没证人: takeUnwitnessed, 各类被证明的颗数: TAKEOVER.map((c) => `${c}:${allSwept.filter((s) => s.cls === c && s.byTakeover).length}`) }));
+    JSON.stringify({ 没证人: takeUnwitnessed, 各类被证明的颗数: TAKEOVER.map((c) => `${c}:${allSwept.filter((s) => (s.classes ?? []).includes(c) && s.byTakeover).length}`) }));
   check('㊲ 分层·涂装档：ROLE_TIERS 里每一档渲染后的涂装高度必须正好是规范 §1.4 的那个数（节点缺失也算红 —— 这一条不认声明，只认矩形）',
     tiers.length > 0 && tiers.every((t) => !t.missing && t.painted === t.want),
     JSON.stringify(tiers.map((t) => (t.missing ? `${t.key} 缺节点` : `${t.key} 实测 ${t.painted} 要 ${t.want}`))));
