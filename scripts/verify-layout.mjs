@@ -8472,6 +8472,55 @@ async function pressSweep(p) {
   }
 }
 
+/**
+ * 72 侧栏文件夹行：涂装必须画在**带圆角的那一层**上（A3.3 那一批里顺手修掉的一条真缺陷）。
+ *
+ * 原来这两条规则写成 `.tree__row:hover / [data-active] { background }`，而 `border-radius: var(--r-row)`
+ * 在**从不涂装的** `.tree__name` 上 ⇒ 那圈圆角从来没有东西可画，界面上 hover 出来是一条顶到行的左右缘的方带子。
+ * 这一条**不碰高度**（节距仍是 44，`㊲ 侧栏那排的节距` 那条钉着；34 那一档按 A3.3 已判为不适用），
+ * 只钉四件事各自一条，每件被撤掉时只有它那一条红：
+ * ① 现场：真悬停到了那一行，且胶囊仍 ≥44；② 底色在胶囊上；③ 行容器自己透明（两处都画=重影，也会让 ② 变成恒真）；
+ * ④ 胶囊确实带着非零圆角 —— 圆角为 0 时 ②③ 照样"对"，界面上却仍然是一方块。
+ */
+{
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 950 } });
+  const p72 = await ctx.newPage();
+  const errs = [];
+  p72.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 140)); });
+  p72.on('pageerror', (e) => errs.push(String(e).slice(0, 140)));
+  await p72.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+  await p72.waitForSelector('[data-testid="folder-row"]', { timeout: 15000 });
+  await p72.hover('[data-testid="folder-row"]');
+  await p72.waitForTimeout(300);
+  const got = await p72.evaluate(() => {
+    const row = document.querySelector('[data-testid="folder-row"]');
+    const pill = row ? row.querySelector('.tree__name') : null;
+    if (!row || !pill) return { missing: true };
+    const cs = getComputedStyle(pill);
+    const rs = getComputedStyle(row);
+    return {
+      hovered: row.matches(':hover'),
+      pillH: Math.round(pill.getBoundingClientRect().height),
+      pillBg: cs.backgroundColor,
+      rowBg: rs.backgroundColor,
+      radius: cs.borderTopLeftRadius,
+    };
+  });
+  const TRANSPARENT = new Set(['rgba(0, 0, 0, 0)', 'transparent']);
+  check('72 现场：那一行真被悬停到了，且胶囊高度仍按节距 ≥44（这一条不改高度 —— 34 那一档已按 A3.3 判为不适用）',
+    !got.missing && got.hovered === true && got.pillH >= 44, JSON.stringify(got));
+  check('72 涂装层：hover 的底色必须画在**带圆角的那颗胶囊**上（画在行容器上就是方带子，那圈圆角等于没画）',
+    !TRANSPARENT.has(got.pillBg), JSON.stringify({ 胶囊底色: got.pillBg }));
+  check('72 反面那一半：行容器自己不许再画底色 —— 两处都画会重影，也会让上面那条变成恒真',
+    TRANSPARENT.has(got.rowBg), JSON.stringify({ 行底色: got.rowBg }));
+  check('72 那颗胶囊确实带着非零圆角（圆角为 0 时上面两条也"对"，界面上仍然是一方块）',
+    parseFloat(got.radius) > 0, JSON.stringify({ 圆角: got.radius }));
+  check('72 这一腿 console error 为零', errs.length === 0, errs.slice(0, 3).join(' | '));
+  notes.push(`     72 侧栏行涂装实测：胶囊 ${got.pillH} 高 · 底色 ${got.pillBg} · 行底色 ${got.rowBg} · 圆角 ${got.radius}`);
+  await p72.close();
+  await ctx.close();
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

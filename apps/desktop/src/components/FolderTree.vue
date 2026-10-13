@@ -216,14 +216,25 @@ function rowRef(el: Element | ComponentPublicInstance | null): void {
   --row-bg: var(--canvas);
 }
 
+/* 底色画在**带圆角的那颗节点**上，不是画在方的行容器上。
+   原来这两条写 `.tree__row:hover / [data-active] { background }`，而 `border-radius: var(--r-row)` 在 `.tree__name` 上 ——
+   于是那圈圆角从来没有东西可涂，界面上 hover 出来是一条顶到行的左右缘的**方带子**（一条真缺陷，与 A3.3 那一档无关：
+   高度保持 `--touch` 44 不变，只把涂装挪到该涂的那一层）。
+   `--row-bg` 仍留在行上：工具层拿它遮名字的尾巴，那层是行的绝对子元素，继承关系不变。 */
 .tree__row:hover {
-  background: var(--hover);
   --row-bg: var(--hover);
 }
 
 .tree__row[data-active='true'] {
-  background: var(--accent-soft);
   --row-bg: var(--accent-soft);
+}
+
+.tree__row:hover .tree__name {
+  background: var(--hover);
+}
+
+.tree__row[data-active='true'] .tree__name {
+  background: var(--accent-soft);
 }
 
 .tree__name {
