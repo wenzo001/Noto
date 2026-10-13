@@ -20,7 +20,7 @@ members = [
 exclude = ["tools/feasibility-probe"]
 
 [workspace.package]
-version = "0.0.127"
+version = "0.0.128"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"

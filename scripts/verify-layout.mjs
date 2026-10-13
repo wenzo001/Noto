@@ -848,6 +848,57 @@ for (const width of WIDTHS) {
   await page.keyboard.press('Escape');
   await page.waitForTimeout(200);
 
+  /**
+   * 上面那一格**不够**：它量的是"这一屏当时装不装得下"，而 2026-10-13 同一棵树三遍读数里
+   * 面板落点是会自己动的（宽 1440 读到 745/931 绿、806/992 红 出屏 42px）—— 因为 `AppSelect` 的面板
+   * 原先是流内 `static`，**完全不认视口**，装不装得下取决于它上面画了多少别的东西。
+   *
+   * ⚠ 第一版这里写的是"把触发键 scrollIntoView 到贴底再开"，跑出来才发现**那个现场压根没被造出来**：
+   * 设置页没那么长，滚到底余量还剩 213–257px，而面板只有约 186 高 —— 也就是说
+   * **不会翻上去的实现在那一档也不会红**，我写的那条自检还因为多给了 40px 余量而"绿"过去。
+   * 一条抓不住缺陷的判据比没有判据更糟（它会让人以为抓过了）。现在改成**把视口压矮**来造深度：
+   * 视口 720 时触发键底沿必然贴近视口底（余量 < 面板高），下面装不下 ⇒ 不会翻的实现在四个宽度上必然红。
+   * 那条现场自检这次量的是"开面板那一刻的真实余量"，不再是事先猜的位置。
+   */
+  await page.setViewportSize({ width, height: 720 });
+  await page.waitForTimeout(300);
+  await page.click('[data-testid="account-tls"]');
+  await page.waitForTimeout(400);
+  const deepPanel = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="app-select-panel"]');
+    const btn = document.querySelector('[data-testid="account-tls"]');
+    if (!el || !btn) return { missing: true };
+    const r = el.getBoundingClientRect();
+    const t = btn.getBoundingClientRect();
+    const vh = document.documentElement.clientHeight;
+    const opts = Array.from(el.querySelectorAll('[role="option"]'));
+    return {
+      top: Math.round(r.top),
+      bottom: Math.round(r.bottom),
+      height: Math.round(r.height),
+      triggerBottom: Math.round(t.bottom),
+      vh,
+      inside: r.top >= 0 && r.bottom <= vh,
+      itemHits: opts.map((o) => {
+        const q = o.getBoundingClientRect();
+        const hit = document.elementFromPoint(Math.round(q.left + q.width / 2), Math.round(q.top + q.height / 2));
+        return hit === o || (hit instanceof Node && o.contains(hit));
+      }),
+    };
+  });
+  check(`宽 ${width} TLS 下拉·最坏深度 现场自检：开面板那一刻，触发键下面的余量必须小于面板自身高度（余量够就说明这一格又变回"恰好装得下"，抓不住不翻转的实现）`,
+    !deepPanel.missing
+      && deepPanel.triggerBottom > 0
+      && deepPanel.vh - deepPanel.triggerBottom < deepPanel.height,
+    JSON.stringify({ 触发底: deepPanel.triggerBottom, 视口: deepPanel.vh, 面板高: deepPanel.height, 余量: deepPanel.missing ? null : deepPanel.vh - deepPanel.triggerBottom }));
+  check(`宽 ${width} TLS 下拉·最坏深度：面板必须完整在视口里，且四行选项每行的中心都点得着自己（不会翻上去的实现在这一档必然红）`,
+    !deepPanel.missing && deepPanel.inside === true && deepPanel.itemHits.length === 4 && deepPanel.itemHits.every(Boolean),
+    JSON.stringify({ 触发底: deepPanel.triggerBottom, 视口: deepPanel.vh, 落点: [deepPanel.top, deepPanel.bottom], 行命中: deepPanel.itemHits }));
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(200);
+  await page.setViewportSize({ width, height: 950 });
+  await page.waitForTimeout(200);
+
   check(`宽 ${width}：console error 为零`, errors.length === 0, errors.slice(0, 3).join(' | '));
   await page.close();
 }
