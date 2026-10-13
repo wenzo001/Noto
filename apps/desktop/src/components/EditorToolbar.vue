@@ -335,6 +335,15 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--line);
   background: var(--canvas);
   overflow-x: auto;
+  /**
+   * 条子的高度**钉住**，不让它跟着按钮的涂装档一起塌下去。
+   * 两件事叠在这里：① `overflow-x: auto` 会连带把纵向也变成 auto（CSS 规格里 `visible` 配不上单独一轴），
+   *    于是裁剪盒就是这条带子本身 —— 按钮那颗 44 的透明命中带要是有 6px 落在带子外面，它**被裁掉的那部分不吃指针**，
+   *    `elementFromPoint` 会打到带子背后的东西（今天整跑那六条红就是这么来的，不是伪元素写错了）；
+   * ② 涂装从 44 收到 §1.4 的 32 之后，这条带子按内容算只剩 41，界面上工具条会凭空细 12px。
+   * 44 + 上下 `--sp-1` 正好是改前那条带子的高度（44 + 8 + 描边 1 = 53），所以这一行同时是"别让裁剪盒裁命中"和"别改观感"。
+   */
+  min-height: calc(var(--touch) + var(--sp-1) * 2);
   /* 窄栏里工具条横向可滚，但不给那条滚动条留位置：
      一个 17px 的常驻横条会把编辑区第一行整个顶下去，而工具条本来就能滚。 */
   scrollbar-width: none;
@@ -374,10 +383,13 @@ onBeforeUnmount(() => {
   background: linear-gradient(to left, transparent, var(--canvas));
 }
 
+/* 与 `ToolbarItem.vue` 里那一份**必须同改**（scoped 样式，两处各有一份声明；改一处会得到"工具条一半 32 一半 44"）。
+   §1.4 图标档 32 管涂装，§5 的 44 交给下面的透明伪元素 —— 理由与那条注释一样，不重复。 */
 .tb__btn {
   flex: 0 0 auto;
+  position: relative;
   min-width: var(--touch);
-  min-height: var(--touch);
+  min-height: var(--h-icon);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -389,10 +401,24 @@ onBeforeUnmount(() => {
   border: 1px solid transparent;
 }
 
+.tb__btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: var(--touch);
+  transform: translateY(-50%);
+}
+
 .tb__btn--wide {
   padding: 0 var(--sp-2);
   font-size: var(--text-sm);
   font-weight: 550;
+  /* §1.4 的 32 那一档主语是**图标按钮**，不是带文字的那种：这一颗的行盒自己就有 ~39 高
+     （图标 + "正文"这类词），压到 32 会把字裁掉 —— 腿 ㊻（§5「文本不许静默裁掉」）抓的正是这件事。
+     所以带文字的变体回到命中档 44，涂装档 32 只作用在纯图标那几颗上。 */
+  min-height: var(--touch);
 }
 
 .tb__more-wrap {

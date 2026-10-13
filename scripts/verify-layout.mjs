@@ -79,13 +79,39 @@ const { chromium } = await (await import(PW)).default;
 
 const BRIDGE = process.env.BRIDGE || 'http://127.0.0.1:17323';
 
+/**
+ * 过桥调用。**只重试传输层**，且只重试三次。
+ *
+ * 为什么要有这一层：2026-10-13 一天之内两遍整跑没跑完（一遍崩在第 15 条、一遍崩在 582 条），
+ * 崩之前都是 **0 条 FAIL**，而桥与 vite 在崩前崩后都健康（`/health` 回 `{"ok":true}`）。
+ * 抛出来的是 `TypeError: fetch failed` —— undici 从连接池里拿了一条**服务端已经关掉的 keep-alive socket**。
+ * 那是仪器和内核之间的 socket 寿命，不是产品的行为；一次 13 分钟的整跑不该为它重跑一遍。
+ *
+ * ⚠ 不许把范围扩到"任何异常都重试"：核心返回的错误体、非 2xx、JSON 解析失败**一律照原样抛出去**
+ * （下面那句 `if (!TRANSPORT.test(...)) throw` 就是这条边界）。那些正是判据要抓的东西，
+ * 重试一次就把一条真红抹成绿 —— 那比崩在半路危险得多。
+ * 每次重试都往 stdout 打一行：读数里出现这行，就说明这一遍的现场是抖的，值得复核而不是当结论。
+ */
 async function cmd(name, args = {}) {
-  const res = await fetch(`${BRIDGE}/cmd/${name}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args),
-  });
-  return res.json();
+  const TRANSPORT = /fetch failed|ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|socket hang up|UND_ERR_|EADDRINUSE|EADDRNOTAVAIL/i;
+  const send = async () => {
+    const res = await fetch(`${BRIDGE}/cmd/${name}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    });
+    return res.json();
+  };
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await send();
+    } catch (error) {
+      const why = `${error?.message ?? error} ${error?.cause?.code ?? ''} ${error?.cause?.message ?? ''}`;
+      if (attempt >= 3 || !TRANSPORT.test(why)) throw error;
+      console.log(`  桥的传输层抖了一下（第 ${attempt} 次），重试 ${name}：${String(why).trim().slice(0, 120)}`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 400 * attempt);
+    }
+  }
 }
 
 /** 核心给界面的 `list_folders` 是一棵树（子层嵌在 `children`），要按 id 找东西就得先摊平。 */
@@ -3298,6 +3324,24 @@ function contrastRatio(fg, bg) {
       moreThere: Boolean(more),
       moreH: Math.round(r?.height ?? 0),
       moreHit: Boolean(hit && more?.contains(hit)),
+      /**
+       * 分层（G127 选 B）之后这一条判的是**命中带**，不是盒子：涂装档 32 之外那 6px 由伪元素撑到 44。
+       * 尺子与 ㉟/㊲ 同一把（中心上下各 21px 必须落回这颗按钮自己或它内部），这里不另立一套。
+       */
+      moreBand: (() => {
+        if (!r || !more) return 'missing';
+        const cx = Math.round(r.left + r.width / 2);
+        const cy = Math.round(r.top + r.height / 2);
+        const at = (dy) => {
+          const y = cy + dy;
+          if (y < 0 || y >= window.innerHeight) return 'clipped';
+          const t = document.elementFromPoint(cx, y);
+          return (t === more || (t && more.contains(t))) ? 'self' : 'other';
+        };
+        const u = at(-21);
+        const d = at(21);
+        return u === 'self' && d === 'self' ? 'self' : `${u}|${d}`;
+      })(),
       moreText: (more?.textContent ?? '').replace(/\s+/g, ' ').trim(),
       moreRight: Math.round(bar.getBoundingClientRect().right - (r?.right ?? 0)),
       dataMoreRight: bar.getAttribute('data-more-right'),
@@ -3309,8 +3353,8 @@ function contrastRatio(fg, bg) {
   check('㉝ 仪器自检：390 那一档真的放不下（放得下的话下面全是空判据）',
     narrow.missing !== true && narrow.moreThere === true && narrow.onBar < 15,
     JSON.stringify(narrow));
-  check('㉝ 「更多 ›」画在最右、看得见点得着（≥44 高、中心命中自己）',
-    narrow.moreHit === true && narrow.moreH >= 44 && /更多/.test(narrow.moreText),
+  check('㉝ 「更多 ›」画在最右、看得见点得着（命中带 ≥44、中心命中自己 —— 涂装档收到 §1.4 之后"高"不再是"点得着"的证人）',
+    narrow.moreHit === true && narrow.moreBand === 'self' && /更多/.test(narrow.moreText),
     JSON.stringify(narrow));
   check('㉝ 收纳是真的收纳：条上不留任何视野外的格子（滚动宽 == 可视宽）',
     narrow.scrollWidth <= narrow.clientWidth + 1,
@@ -3594,6 +3638,24 @@ function contrastRatio(fg, bg) {
         stroke: svg?.querySelector('g')?.getAttribute('stroke-width') ?? null,
         w: Math.round(r.width),
         h: Math.round(r.height),
+        /**
+         * G127 选 B「分层」之后，这一条的主语从"盒子 ≥44"换成"**命中带** ≥44"：
+         * 盒子按 §1.4 收成图标档 32，纵向那两格靠按钮自己的透明伪元素撑开 —— 只认 `elementFromPoint` 的落点，
+         * 而且只认"落回按钮本身或它内部"：落在 `.tb__cell` 那层 div 上不会按下这颗按钮（今天已验过）。
+         */
+        hitBand: (() => {
+          const cx = Math.round(r.left + r.width / 2);
+          const cy = Math.round(r.top + r.height / 2);
+          const at = (dy) => {
+            const y = cy + dy;
+            if (y < 0 || y >= window.innerHeight || cx < 0 || cx >= window.innerWidth) return 'clipped';
+            const t = document.elementFromPoint(cx, y);
+            return (t === b || (t && b.contains(t))) ? 'self' : 'other';
+          };
+          const u = at(-21);
+          const d = at(21);
+          return u === 'self' && d === 'self' ? 'self' : `${u}|${d}`;
+        })(),
       });
     }
     return rows;
@@ -3625,9 +3687,9 @@ function contrastRatio(fg, bg) {
   check('㉟ 每颗都真的画得出东西：svg 里有 path、盒子不是 0×0（"有 svg"不等于"看得见"）',
     cells.every((c) => c.cell !== null && c.cell.paths >= 1 && c.cell.iconW >= 14),
     JSON.stringify(cells.map((c) => ({ key: c.key, paths: c.cell?.paths, iconW: c.cell?.iconW }))));
-  check('㉟ 六颗都还有可读名字、触摸目标 ≥44、条上没有残留的字母文本',
-    cells.every((c) => c.cell !== null && c.cell.name.length > 0 && c.cell.w >= 44 && c.cell.h >= 44 && c.cell.own === ''),
-    JSON.stringify(cells.map((c) => ({ key: c.key, w: c.cell?.w, h: c.cell?.h, own: c.cell?.own }))));
+  check('㉟ 六颗都还有可读名字、**命中带** ≥44（分层之后这一条判的是落点，不是盒子）、条上没有残留的字母文本',
+    cells.every((c) => c.cell !== null && c.cell.name.length > 0 && c.cell.w >= 44 && c.cell.hitBand === 'self' && c.cell.own === ''),
+    JSON.stringify(cells.map((c) => ({ key: c.key, w: c.cell?.w, h: c.cell?.h, hit: c.cell?.hitBand, own: c.cell?.own }))));
   const strokes = new Set(cells.map((c) => c.cell?.stroke).filter(Boolean));
   check('㉟ §2.1 同屏同粗细：这一排图标只用一个描边值（混粗细是"看着不专业"最常见的来源）',
     strokes.size === 1, JSON.stringify([...strokes]));
@@ -3796,10 +3858,13 @@ function contrastRatio(fg, bg) {
  * 所以这里加了两条自检：触摸档必须真的 `matchMedia('(pointer: coarse)')` 为真，
  * 且把手在那一档必须真是 44 —— 谁把 `pointer: coarse` 那条规则删了，红的是这两条而不是"用户目标太小"。
  *
- * ⚠ 顺带把规范内部的一处冲突钉成断言：§1.4 那张"控件高度"表给的是
- * 导航行 32 / 工具条图标 32 / 文件夹行 34 / 输入框 36，而 §5 要求一切触摸目标 ≥44 ——
- * 两个数不可能同时满足。应用一路选的是 §5（无障碍底线优先，实测这四类都是 44/45），
- * 所以这里断言的是"这四类 ≥44"，不是"它们等于 §1.4 的数"。冲突本身记在 CHANGELOG 第 17 刀。
+ * ⚠ 这一腿原来是 §1.4 与 §5 那条**冲突**的证人（"导航行 32 / 工具条图标 32 / 文件夹行 34 / 输入框 36"
+ * 对比"一切触摸目标 ≥44"，两个数在同一枚盒子上不可能同时成立，当时选的是 §5，见 CHANGELOG 第 17 刀）。
+ * 2026-10-13 用户把 G127 拍成 **B「分层」**：冲突消失的原因是主语分了 —— **§1.4 量涂装高度，§5 量命中区**，
+ * 两个数各管各的那一层，同一枚盒子上才不需要同时成立。于是这一腿里：
+ *   · "这四类 ≥44"那一条换成了 ①登记表 / ②涂装档 / ③命中带 三条（见下面 ROLE_TIERS 那段注释）；
+ *   · 全应用那一把 44 的尺子**继续判命中**，但命中不再等于盒子 —— 收到 §1.4 档的控件靠透明伪元素撑开，
+ *     只认 `elementFromPoint` 的落点证明（拿盒子或拿祖先容器当命中区，是这一族最贵的两种假绿）。
  */
 {
   const EXEMPT = [
@@ -3814,8 +3879,34 @@ function contrastRatio(fg, bg) {
    * 且**不许有第二样东西加进来**。
    */
   const DESKTOP_SMALL = [{ cls: 'nb-handle', h: 24, touchH: 44 }];
+  /**
+   * G127 选 B「分层」之后新增的一臂：**涂装盒收到 §1.4 那一档，命中区仍要 ≥44**。
+   * 那两件事分开之后，"这一颗的盒子只有 32"就**不再是违规** —— 前提是命中区真的被撑开了，
+   * 而撑开的方式（透明伪元素 / 整行 wrapper）不能靠声明，只认落点：
+   * 以控件自己的中心为原点向上、向下各 21px（44 那一档"还在带内"的最后一像素）打 `elementFromPoint`，
+   * 两侧都必须落回**控件本身或它内部的节点**。
+   * ⚠ 只认 self，不认"落点是控件的祖先"：今天已经验过 `.tb__cell > button.tb__btn` ——
+   *   点 cell 那一圈命中的是 `<div>`，压根不会按下那颗按钮。拿祖先当命中区是这一族最贵的假绿。
+   * 与豁免表同一条规矩：**每条都必须真的在这一次的界面上出现**（不然表里那条是历史残留），
+   * 而且**必须通过落点证明**（不然"声明撑开了、其实点不着"会一路绿到底）。
+   */
+  const TAKEOVER = ['tb__btn'];
+  /**
+   * G127 选 B「分层」的那张表：§1.4 管**涂装高度**，§5 管**命中区**，两半各自判。
+   * `want` 那一列的数**从规范 §1.4 那张表抄**（工具条图标 32 · 导航行 32 · 侧栏文件夹行 34 · 输入框 36 ·
+   * 主按钮 40 · 分组标题行 24 —— 最后一档没有命中区那一半，由腿 71 单独量），不许由被测 CSS 反推。
+   * 一条角色进这张表，就必须**同时**进上面的 `TAKEOVER`：涂装收成 32 之后，
+   * 全应用那一把 44 的尺子只有靠"落点证明"那一臂才认它，否则它就是那条 ㊲ 里的违规。
+   */
+  const ROLE_TIERS = [
+    // 按**身份**配对，不按位置：`--wide` 是带文字的那一颗（行盒约 39，压到 32 就是裁字，腿 ㊻ 抓到过），
+    // 它不属于 §1.4 的图标档。写 `.tb__btn` 第一个匹配项的话，DOM 顺序一变就会假红。
+    { key: '工具条图标', cls: 'tb__btn', sel: '.tb__btn:not(.tb__btn--wide)', want: 32 },
+  ];
+  const HIT_EDGE = 21;
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="checkbox"],[role="switch"],[role="button"],[role="menuitem"],[role="tab"]';
-  const scanSmall = (page) => page.evaluate((sel) => {
+  const scanSmall = (page) => page.evaluate((arg) => {
+    const { sel, edge, takeover } = arg;
     const small = [];
     let total = 0;
     for (const el of document.querySelectorAll(sel)) {
@@ -3825,17 +3916,33 @@ function contrastRatio(fg, bg) {
       if (r.height >= 43.5 && r.width >= 43.5) continue;
       const row = el.closest('label');
       const rr = row ? row.getBoundingClientRect() : null;
+      const cls = (typeof el.className === 'string' ? el.className : '').split(/\s+/).filter(Boolean)[0] ?? '';
+      // 分层那一臂：只在这颗控件确实"小"的时候才需要证明
+      let tk = null;
+      if (takeover.includes(cls)) {
+        const cx = Math.round(r.left + r.width / 2);
+        const cy = Math.round(r.top + r.height / 2);
+        const at = (dy) => {
+          const y = cy + dy;
+          if (y < 0 || y >= window.innerHeight || cx < 0 || cx >= window.innerWidth) return 'clipped';
+          const t = document.elementFromPoint(cx, y);
+          return t && (t === el || el.contains(t)) ? 'self' : 'other';
+        };
+        tk = { up: at(-edge), down: at(edge) };
+      }
       small.push({
         tag: el.tagName.toLowerCase(),
-        cls: (typeof el.className === 'string' ? el.className : '').split(/\s+/).filter(Boolean)[0] ?? '',
+        cls,
         w: Math.round(r.width),
         h: Math.round(r.height),
         byLabel: !!rr && rr.height >= 43.5 && rr.width >= 43.5,
+        byTakeover: tk !== null && tk.up === 'self' && tk.down === 'self',
+        tk,
         name: (el.getAttribute('aria-label') || el.getAttribute('title') || (el.textContent ?? '').trim()).slice(0, 16),
       });
     }
     return { total, small };
-  }, INTERACTIVE);
+  }, { sel: INTERACTIVE, edge: HIT_EDGE, takeover: TAKEOVER });
 
   const swept = { total: 0, touch: [], desktop: [] };
   const roleHeights = {};
@@ -3874,10 +3981,33 @@ function contrastRatio(fg, bg) {
     }
     await sweepView(page, `${width}/笔记+编辑器`, touch);
     if (width === 1440) {
-      roleHeights.navBtn = await page.evaluate(() => Math.round(document.querySelector('.nav-btn')?.getBoundingClientRect().height ?? 0));
-      roleHeights.treeRow = await page.evaluate(() => Math.round(document.querySelector('.tree__row')?.getBoundingClientRect().height ?? 0));
-      roleHeights.input = await page.evaluate(() => Math.round(document.querySelector('.input')?.getBoundingClientRect().height ?? 0));
-      roleHeights.tbBtn = await page.evaluate(() => Math.round(document.querySelector('.tb__btn')?.getBoundingClientRect().height ?? 0));
+      /**
+       * 分层之后每一角色量**两枚**，各自归不同的规范：
+       * · `painted` = 控件自己渲染后的盒子高度 → 归 §1.4 那一档；
+       * · `up`/`down` = 以控件中心向上、下各 21px（44 那一档"还在带内"的最后一像素）打 `elementFromPoint`，
+       *   落点必须是控件本身或它内部的节点 → 归 §5。**落在祖先上不算**（点 `.tb__cell` 不会按下里面的 button）。
+       * 还没有迁进 §1.4 的那三类继续量它们自己的盒子（今天它们"涂装 = 命中 = 44"，两个数尚未分层）。
+       */
+      roleHeights.tiers = await page.evaluate((rows) => rows.map((r) => {
+        const el = document.querySelector(r.sel);
+        if (!el) return { key: r.key, want: r.want, missing: true };
+        const b = el.getBoundingClientRect();
+        const cx = Math.round(b.left + b.width / 2);
+        const cy = Math.round(b.top + b.height / 2);
+        const at = (dy) => {
+          const y = cy + dy;
+          if (y < 0 || y >= window.innerHeight || cx < 0 || cx >= window.innerWidth) return 'clipped';
+          const t = document.elementFromPoint(cx, y);
+          if (!t) return 'none';
+          return t === el || el.contains(t) ? 'self' : 'other';
+        };
+        return { key: r.key, want: r.want, painted: Math.round(b.height), up: at(-21), down: at(21) };
+      }), ROLE_TIERS);
+      roleHeights.unmoved = await page.evaluate(() => ({
+        navBtn: Math.round(document.querySelector('.nav-btn')?.getBoundingClientRect().height ?? 0),
+        treeRow: Math.round(document.querySelector('.tree__row')?.getBoundingClientRect().height ?? 0),
+        input: Math.round(document.querySelector('.input')?.getBoundingClientRect().height ?? 0),
+      }));
     }
     // 搜索那一格（搜索框 + 清除那颗都在这一屏）
     await page.evaluate(() => {
@@ -3922,8 +4052,9 @@ function contrastRatio(fg, bg) {
   check('㊲ 触摸档里块把手真的是 44 高（`pointer: coarse` 那条放大规则还在，且真的画得出来）',
     gripInTouch !== null && gripInTouch >= 44, JSON.stringify({ gripInTouch }));
   const isCovered = (s) => EXEMPT.some((e) => e.cls === s.cls);
+  const takenOver = (s) => TAKEOVER.includes(s.cls);
   const labelOf = (list) => list.filter((s) => s.byLabel && !isCovered(s));
-  const touchViolations = swept.touch.filter((s) => !s.byLabel && !isCovered(s));
+  const touchViolations = swept.touch.filter((s) => !s.byLabel && !s.byTakeover && !isCovered(s));
   check('㊲ 触摸档（390 + coarse）里没有任何一颗可交互控件的命中区小于 44 —— §5 那条说的就是这一档',
     touchViolations.length === 0, JSON.stringify(touchViolations.slice(0, 6)));
   check('㊲ "整行都是命中区"那一臂真的在判东西（复选框 / 滑杆这一族：原生控件小，label 是 44）',
@@ -3939,7 +4070,7 @@ function contrastRatio(fg, bg) {
    * 把手在鼠标端 24（与 27 那一行的行高配套）、在触摸端 44 —— 两边各一条判据钉住，
    * 于是"谁把 coarse 那条规则的数改了"与"谁新加了一颗小控件"都跑不掉。
    */
-  const deskSmall = swept.desktop.filter((s) => !s.byLabel && !isCovered(s));
+  const deskSmall = swept.desktop.filter((s) => !s.byLabel && !s.byTakeover && !isCovered(s));
   const deskKinds = new Set(deskSmall.map((s) => s.cls));
   const deskUnknown = [...deskKinds].filter((c) => !DESKTOP_SMALL.some((e) => e.cls === c));
   const deskStale = DESKTOP_SMALL.filter((e) => !deskKinds.has(e.cls)).map((e) => e.cls);
@@ -3949,13 +4080,36 @@ function contrastRatio(fg, bg) {
   const gripDesktop = swept.desktop.find((s) => s.cls === 'nb-handle');
   check('㊲ 鼠标端把手仍是 24（与 27 的行高配套）—— 它与上面"触摸档 44"是一对，改任何一边都要同时改判据',
     gripDesktop !== null && gripDesktop.h === DESKTOP_SMALL[0].h, JSON.stringify({ gripDesktop }));
-  check('㊲ §1.4 与 §5 冲突的裁定写死：这四类控件跟的是 §5 的 44，不是 §1.4 的 32 / 34 / 36',
-    roleHeights.navBtn >= 44 && roleHeights.treeRow >= 44 && roleHeights.input >= 44 && roleHeights.tbBtn >= 44,
-    JSON.stringify(roleHeights));
+  /**
+   * 这一条原来写的是"这四类控件跟的是 §5 的 44，不是 §1.4 的 32 / 34 / 36" —— 那是**冲突期**的裁定
+   * （两层只能活一层）。G127 选 B「分层」之后这句话的主语散了：44 归**命中区**，§1.4 那一档归**涂装高度**，
+   * 于是拆成三条各自判：① 登记表本身不许残留、也不许"声明撑开了其实点不着"；② 已迁角色的涂装高度；
+   * ③ 同一批角色的命中带（只认落点）。再加一条 ④ 给**还没迁**的那三类继续钉"盒子 ≥44" ——
+   * 那三条不是给迁移让路，是在等迁移：谁把它们迁了，就要同时进 ROLE_TIERS 与 TAKEOVER，并把 ④ 的主语一起换。
+   */
+  const tiers = roleHeights.tiers ?? [];
+  const unmoved = roleHeights.unmoved ?? {};
+  const allSwept = swept.touch.concat(swept.desktop);
+  const takeStale = TAKEOVER.filter((c) => !allSwept.some((s) => s.cls === c));
+  const takeUnproven = allSwept.filter((s) => takenOver(s) && !s.byTakeover)
+    .map((s) => `${s.cls}@${s.view} 上${s.tk?.up ?? '?'}/下${s.tk?.down ?? '?'}`);
+  check('㊲ 分层·登记表：登记成"涂装收到 §1.4 那一档"的每一颗都必须真的在这一次界面上出现过，且命中带真的被落点证明接住（残留与"点不着"都算红）',
+    takeStale.length === 0 && takeUnproven.length === 0,
+    JSON.stringify({ 登记: TAKEOVER, 残留: takeStale, 没证明: takeUnproven.slice(0, 6) }));
+  check('㊲ 分层·涂装档：ROLE_TIERS 里每一档渲染后的涂装高度必须正好是规范 §1.4 的那个数（节点缺失也算红 —— 这一条不认声明，只认矩形）',
+    tiers.length > 0 && tiers.every((t) => !t.missing && t.painted === t.want),
+    JSON.stringify(tiers.map((t) => (t.missing ? `${t.key} 缺节点` : `${t.key} 实测 ${t.painted} 要 ${t.want}`))));
+  check('㊲ 分层·命中带：同一批角色中心上下各 21px 那两格必须落回控件自己或它内部的节点（落在祖先上不算 —— 点 cell 不会按下里面的 button）',
+    tiers.length > 0 && tiers.every((t) => !t.missing && t.up === 'self' && t.down === 'self'),
+    JSON.stringify(tiers.map((t) => `${t.key} ${t.up}/${t.down}`)));
+  check('㊲ 还没迁进 §1.4 的那三类今天仍然是"涂装 = 命中 = 44"（迁它们时要把这条的主语一起换掉，不许让它悄悄恒真）',
+    unmoved.navBtn >= 44 && unmoved.treeRow >= 44 && unmoved.input >= 44,
+    JSON.stringify(unmoved));
   notes.push(`     §5 全应用扫描：${swept.total} 颗可交互元素；触摸档小命中区 ${swept.touch.length} 颗`
-    + `（整行接管 ${labelOf(swept.touch).length}、违规 ${touchViolations.length}），鼠标档 ${swept.desktop.length} 颗`
+    + `（整行接管 ${labelOf(swept.touch).length}、伪元素撑开 ${swept.touch.filter((s) => s.byTakeover).length}、违规 ${touchViolations.length}），鼠标档 ${swept.desktop.length} 颗`
     + `（登记那一族 ${deskSmall.length}）；把手实测 鼠标 ${gripDesktop ? gripDesktop.h : '?'}`
-    + ` / 触摸 ${gripInTouch}；四类控件实测 ${roleHeights.navBtn}/${roleHeights.treeRow}/${roleHeights.input}/${roleHeights.tbBtn}`);
+    + ` / 触摸 ${gripInTouch}；分层实测 ${tiers.map((t) => `${t.key} 涂装 ${t.painted}/档 ${t.want}/命中 ${t.up}|${t.down}`).join(' · ')}`
+    + `；未迁三类实测 ${unmoved.navBtn}/${unmoved.treeRow}/${unmoved.input}`);
 }
 
 /**
@@ -8205,6 +8359,66 @@ async function pressSweep(p) {
   const left = ((after?.items ?? after) ?? []).filter((n) => (n.title ?? '').startsWith(`条位夹具 ${stamp}`));
   check('70 自己造的夹具笔记扫完要清干净（留着就变成下一遍的现场）', left.length === 0 && !!madeId,
     JSON.stringify({ left: left.length, made: !!madeId }));
+}
+
+/**
+ * 71 §1.4「24px 分组标题行」—— 按 A3.1 的裁定，这一档**只管没有控件的那一行**。
+ *
+ * 为什么要有这条：`--h-group: 24px` 从 token 落地那天起就没有消费者（G127 那张表里"五档零消费者"中的一档），
+ * 而这一格在屏幕上到底多高，是这条腿第一次去量的东西 —— 判据先立起来，红会打出实际读数（不拿算术当实测）。
+ * 修法是把这行的高度交给 `--h-group`（原来是 `padding 12/16/4` 把它凑成 32），于是 §1.4 的 24 与
+ * §1.5 的 11/16 同时成立，谁也没让位。
+ *
+ * 四件事各自一条，每件事被撤掉时只有它那条红：
+ *  ① 先证"这一行确实是纯文字的那一格"（里面可点控件数 = 0）—— 这是 A3.1 的主语守卫：哪天那颗「新建文件夹」
+ *     被挪进这一行，这条先红，提醒"24 那一档在这行装不下"（行自身的 border-box 至少 12 + 32 + 4 = 48）；
+ *  ② 那一行渲染成 24（**渲染后的矩形**，不是 CSS 声明），且 `--h-group` 这一档仍是 24px；
+ *  ③ 里面那句文字的字号/行高仍是 11/16（§1.5 那一格不许被顶掉 —— 只判 ② 的话，把 line-height 改成 24 也算"做到了"）；
+ *  ④ 这一腿自己 console error 为零。
+ *
+ * 量法：两栏/单栏档侧栏是抽屉，`.section-head--sync` 平时在画布外 —— **这不影响量高度**
+ * （`transform` 那一套照常参与布局、有矩形），所以这里不先去"拉开抽屉"：上一版为了"看得见"去点把手，
+ * 那个前提本身就是已撤回的 D10（见 CHANGELOG 第四十三批）；`在屏内` 只作为读数打出来，不参与判定。
+ */
+{
+  for (const [width, touch] of [[1440, false], [390, true]]) {
+    const ctx = await browser.newContext({
+      viewport: { width, height: width === 1440 ? 950 : 844 },
+      hasTouch: touch,
+      isMobile: touch,
+    });
+    const p = await ctx.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text().slice(0, 140)); });
+    p.on('pageerror', (e) => errs.push(String(e).slice(0, 140)));
+    await p.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
+    await p.waitForSelector('[data-testid="sidebar"]', { timeout: 15000 });
+    const got = await p.evaluate(() => {
+      const head = document.querySelector('.section-head--sync');
+      const title = head ? head.querySelector('.section-title') : null;
+      const s = title ? getComputedStyle(title) : null;
+      const r = head ? head.getBoundingClientRect() : null;
+      return {
+        hasHead: Boolean(head),
+        headH: r ? Math.round(r.height) : -1,
+        inViewport: r ? r.x >= 0 && r.right <= window.innerWidth : false,
+        hitKids: head ? head.querySelectorAll('button, a, input, select, [role="button"], [tabindex]').length : -1,
+        font: s ? Math.round(parseFloat(s.fontSize)) : -1,
+        lineHeight: s ? Math.round(parseFloat(s.lineHeight)) : -1,
+        token: getComputedStyle(document.documentElement).getPropertyValue('--h-group').trim(),
+      };
+    });
+    check(`71 §1.4 宽 ${width}：先认这一格是"纯文字"的分组标题行（里面可点控件必须为 0 —— A3.1 的主语）`,
+      got.hasHead === true && got.hitKids === 0, JSON.stringify(got));
+    check(`71 §1.4 宽 ${width}：那一行渲染成 24（= --h-group 那一档；改前它是 32，这一条就是这条刀的证人）`,
+      got.headH === 24 && got.token === '24px', JSON.stringify({ 行高: got.headH, token: got.token, 在屏内: got.inViewport }));
+    check(`71 §1.5 宽 ${width}：同档不许牺牲文字那一格 —— 字号 11 / 行高 16 原样在`,
+      got.font === 11 && got.lineHeight === 16, JSON.stringify({ 字号: got.font, 行高: got.lineHeight }));
+    check(`71 宽 ${width}：这一腿 console error 为零`, errs.length === 0, errs.slice(0, 3).join(' | '));
+    notes.push(`     71 §1.4 分组标题行 宽 ${width}：${got.headH}（token ${got.token} · 文字 ${got.font}/${got.lineHeight} · 画布内 ${got.inViewport}）`);
+    await p.close();
+    await ctx.close();
+  }
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */

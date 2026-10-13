@@ -268,10 +268,14 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
   flex: 0 0 auto;
 }
 
+/* §1.4（图标档 32）与 §5（命中区 ≥44）分层之后（G127 拍板选 B）：
+   这里**只**把涂装高度交给 --h-icon，命中区由下面那枚透明伪元素撑开。
+   改前两行都是 `--touch`，于是 §1.4 那一档零消费者、屏幕上跑的是 44 的方块。 */
 .tb__btn {
   flex: 0 0 auto;
+  position: relative;
   min-width: var(--touch);
-  min-height: var(--touch);
+  min-height: var(--h-icon);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -280,6 +284,20 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
   font-weight: 700;
   cursor: pointer;
   border: 1px solid transparent;
+}
+
+/* 命中带：纵向撑到 44（§5），横向**不撑**。
+   伪元素属于按钮自己，落在这条带上的指针算按下这颗按钮 —— 腿 ㊲/㉟ 用 elementFromPoint 验这件事，不认声明。
+   为什么不横向撑：工具条上按钮是横着排的，横向撑到 44 会让相邻两颗的命中区互相压住，
+   点左边那颗却按下右边那颗 —— 那是比"目标太小"更糟的错靶。 */
+.tb__btn::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  height: var(--touch);
+  transform: translateY(-50%);
 }
 
 .tb__btn:hover:not(:disabled) {
@@ -302,6 +320,10 @@ const isDisabled = computed(() => props.disabled || (props.item.needsIndent === 
   padding: 0 var(--sp-2);
   font-size: var(--text-sm);
   font-weight: 550;
+  /* 与 `EditorToolbar.vue` 里同一条**必须同改**。§1.4 的 32 那一档主语是纯图标按钮：
+     带文字的这一颗行盒本身约 39 高，压到 32 就是把字裁掉（腿 ㊻「文本不许静默裁掉」抓到过），
+     所以它回到命中档 44。 */
+  min-height: var(--touch);
 }
 
 /* 「更多 ›」面板里的那一行：与条上那颗是同一个组件，只是形状换成整行。 */

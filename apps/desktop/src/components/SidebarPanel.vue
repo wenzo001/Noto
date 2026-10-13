@@ -198,12 +198,18 @@ function selectTrash(): void {
    `.section-head` 原本给"文件夹"那块的用法是 `justify-content: space-between`
    + `min-height: var(--touch)`，因为它右边要放一个"＋"按钮。
    同步这块右边没东西，若沿用那套就会**左对齐但占满一整行高度**，
-   看起来又是一块空地。所以单列一个修饰符：只留上半padding、去掉 min-height，
-   让它紧贴上面的分隔线、下面是内容 —— 与"文件夹"那条标题的视觉重量对齐。 */
+   看起来又是一块空地。所以单列一个修饰符。
+
+   2026-10-13（G127 选 B「分层」之后）：这一行是 §1.4「分组标题行 = 24」那一档**唯一的纯文字消费者**
+   （A3.1 裁定：24 只管没有控件的那一行；带那颗「＋」的那一行按 §1.4 图标档 32 + §5 命中区 ≥44 走）。
+   原先这里写 `padding: 12/16/4`，于是 `--h-group` 从落地那天起零消费者、而屏幕上跑的是 32。
+   现在把高度交给 token、内缩距只留左右：分隔线与标题之间的那段留白本来就不归这一行管，
+   它由 `.side-sync` 自己的 `padding-top: --sp-2` + `gap: --sp-1` 提供，量子上还多出 4px 的居中余量。 */
 .section-head--sync {
   justify-content: flex-start;
   min-height: 0;
-  padding: var(--sp-3) var(--sp-4) var(--sp-1);
+  height: var(--h-group);
+  padding: 0 var(--sp-4);
 }
 
 .side-foot {

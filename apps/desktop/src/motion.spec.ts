@@ -33,8 +33,20 @@ const BANNED = [
 ];
 const ALLOWED = ['transform', 'opacity', 'background', 'background-color', 'border-color', 'color', 'filter', 'box-shadow'];
 
+/**
+ * 与 `negativePromises.spec.ts` 同一把尺子（那处修在 `dc8a03b`）：单行注释认任意位置，
+ * **多行块只认行首开批**。原来这一条是不锚行首的那把（正则里那段非贪婪跨行匹配），
+ * 一份**值**里偶然出现的块注释开批符号（例如 content 里写了一对斜杠加星号）会被当成"开批"，
+ * 一路吃到后面某处的收批符号，中间整段语料被静默吞掉 —— 这条门禁从此什么都不判，还一路绿。
+ * （2026-10-13 在 i18n.ts 上真的发生过，一次吞掉 191 行。）
+ * ⚠ 这段注释里不许出现那对收批符号本身 —— 写进去就会把这段注释当场关掉，剩下的句子变成代码。
+ *   本仓踩过这条，记在 "注释里那对符号会自己咬断自己" 那条口径里（这一版就犯过一次）。
+ */
 const stripComments = (text: string): string =>
-  text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/<!--[\s\S]*?-->/g, '');
+  text
+    .replace(/\/\*[^\n]*?\*\//g, '')
+    .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
 
 /** 一枚 transition / transition-property 声明里"第一个 token = 被动画的属性名"。 */
 function transitionProps(text: string): string[] {
