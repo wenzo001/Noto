@@ -80,7 +80,7 @@ describe('列表行高与溢出（用户截图：内容被下一行压住）', (
     const body = src.slice(start);
     // **先把注释剔掉**：这一格的注释里就写着 `-webkit-line-clamp` 与 `max-height` 两个词（那段话在解释
     // 为什么选前者），不剔注释的话，把声明整条删掉断言照绿 —— 变异实测过一次，所以才有的这一行。
-    return body.slice(0, body.indexOf('\n}')).replace(/\/\*[\s\S]*?\*\//g, '');
+    return body.slice(0, body.indexOf('\n}')).replace(/\/\*[^\n]*?\*\//g, '').replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '');
   }
 
   it('标题与摘要都要有高度封顶，否则溢出压到相邻行', () => {

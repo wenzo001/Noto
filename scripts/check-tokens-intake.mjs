@@ -50,7 +50,7 @@ function srcTexts() {
   return walk(path.join(repoRoot, SRC)).map((file) => ({
     rel: path.relative(repoRoot, file).replace(/\\/g, '/'),
     abs: file,
-    text: readFileSync(file, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, ''),
+    text: readFileSync(file, 'utf8').replace(/\/\*[^\n]*?\*\//g, '').replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '').replace(/^[ \t]*\/\/.*$/gm, ''),
   }));
 }
 
