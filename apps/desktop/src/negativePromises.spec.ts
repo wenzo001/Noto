@@ -318,3 +318,92 @@ describe('§3.3 搜索只有"一个词"这一件事：没有筛选器 / 正则 /
     expect(hits, JSON.stringify(hits)).toEqual([]);
   });
 });
+
+/**
+ * §5 / §8 交叉的一格：**注册了却没人引用的文案键**（死键）以前没有执行者。
+ * `i18n.spec.ts` 只管反方向（用到的键必须登记），所以"把一句界面说明改掉、屏幕上却一个字没变"没人守 ——
+ * 这一族在本仓库里已经撞过好几回（`list.rowsLoaded` 上岗前就是个死键）。
+ *
+ * 三条口径是这条能不能用的前提（都是量出来的，不是猜的）：
+ *  · **前端没有字面引用 ≠ 死键**：核心发出的 `messageKey` 也算消费者 ⇒ 扫 `crates/**` 的字面量。
+ *  · **动态拼接**（`` t(`sync.${badge}`) ``、`` labelKey: `editor.origin${…}` ``）要长出**前缀名单**，
+ *    且前缀的字符类**必须允许点** —— 第一版我写成 `[a-zA-Z_]+\.`，于是 `sync.cap.` 与 `editor.origin`
+ *    两种形状全漏，测出来的"死键"里十分之三是我的抽取器瞎（这条教训进台账）。
+ *  · 四本账各配下界自检，再加一条**牙齿自检**：抽取器要认得它声称认得的每一种位置。
+ */
+describe('§5 文案死键：登记的每一句都必须有人引用（前端字面量 / 核心 messageKey / 动态前缀）', () => {
+  const ROOT = join(SRC, '..', '..', '..');
+  const strip = (t: string) => t
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/<!--[\s\S]*?-->/g, '');
+
+  const registered = new Set(i18nPairs().map((p) => p.key));
+  const NAMESPACE_SET = new Set([...registered].map((k) => k.split('.')[0] ?? ''));
+
+  /** 前端这一侧取**高召回**口径：任何一处带命名空间前缀的字符串字面量都算"有人在引用"。
+   *  方向很重要：正向那条（用到的键必须登记）要**严格**，否则会误伤 `v-model="settings.draft.x"`；
+   *  反向这一条只要判"全仓没有一处引用"，宁可放过也不能冤枉 —— 过窄的抽取器会把好文案报成死键，
+   *  我第一版就是这样（`list.purgeConfirm` / `a11y.skipToSearch` 明明在用，只是不落在 `t()` 或 `字段: '…'` 那两种位置里）。 */
+  function scanFrontend(text: string, keys: Set<string>, prefixes: Set<string>): void {
+    for (const m of text.matchAll(/['"`]([a-zA-Z_][\w]*\.[A-Za-z0-9_.]+)['"`]/g)) keys.add(m[1]);
+    for (const m of text.matchAll(/`([a-zA-Z_][\w.]*)\$\{/g)) prefixes.add(m[1]);
+    for (const m of text.matchAll(/['"]([a-zA-Z_][\w.]*)['"]\s*\+\s*/g)) prefixes.add(m[1]);
+  }
+
+  function rustFiles(dir: string, acc: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const f = join(dir, e.name);
+      if (e.isDirectory()) rustFiles(f, acc);
+      else if (e.name.endsWith('.rs')) acc.push(f);
+    }
+    return acc;
+  }
+
+  const frontendUsed = new Set<string>();
+  const dynamicPrefixes = new Set<string>();
+  for (const rel of listFiles(['.ts', '.vue'])) {
+    if (rel.endsWith('.spec.ts') || rel === 'i18n.ts') continue;
+    scanFrontend(strip(read(rel)), frontendUsed, dynamicPrefixes);
+  }
+
+  const hostUsed = new Set<string>();
+  for (const f of rustFiles(join(ROOT, 'crates'))) {
+    for (const m of strip(readFileSync(f, 'utf8')).matchAll(/"([a-zA-Z_]+\.[A-Za-z0-9_]+)"/g)) {
+      if (NAMESPACE_SET.has(m[1].split('.')[0] ?? '')) hostUsed.add(m[1]);
+    }
+  }
+
+  const dead = [...registered].filter((k) =>
+    !frontendUsed.has(k) && !hostUsed.has(k) && ![...dynamicPrefixes].some((pre) => k.startsWith(pre)));
+
+  it('仪器自检：四本账都读到了东西（任何一本空了，"零死键"就是没扫）', () => {
+    expect(registered.size).toBeGreaterThanOrEqual(200);
+    expect(frontendUsed.size).toBeGreaterThanOrEqual(120);
+    expect(hostUsed.size).toBeGreaterThanOrEqual(20);
+    expect(dynamicPrefixes.size).toBeGreaterThanOrEqual(3);
+  });
+
+  it('牙齿：抽取器认得它声称认得的四种位置（少一种，这一族就会静默失明）', () => {
+    const probe = [
+      "const a = t('zz.probeT');",
+      "const b = { labelKey: 'zz.probeField' };",
+      'const c = `zz.probeDyn${x}`;',
+      "const d = 'zz.probePre' + x;",
+      'const e = `zz.deep.inner${x}`;',
+    ].join('\n');
+    const keys = new Set<string>();
+    const prefixes = new Set<string>();
+    scanFrontend(probe, keys, prefixes);
+    expect([...keys].sort()).toEqual(['zz.probeField', 'zz.probePre', 'zz.probeT']);
+    // 动态那两枚**不该**进 keys（它们没有闭合的字面量键），但必须进 prefixes：
+    expect(keys.has('zz.probeDyn')).toBe(false);
+    expect(keys.has('zz.deep.inner')).toBe(false);
+    // 前缀必须**容得下带点的段**：`sync.cap.` 与 `zz.deep.inner` 都是这种形状（漏了它们就会报假死键）
+    expect([...prefixes].sort()).toEqual(['zz.deep.inner', 'zz.probeDyn', 'zz.probePre']);
+  });
+
+  it('每一句登记的文案都有人引用（死键必须点名）', () => {
+    expect(dead, JSON.stringify(dead)).toEqual([]);
+  });
+});
