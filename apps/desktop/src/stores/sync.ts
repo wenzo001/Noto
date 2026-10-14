@@ -62,11 +62,12 @@ export function foldSyncEvent(state: FoldedSyncState, signal: SyncSignal, at: nu
     case 'synced':
       return { badge: 'synced', progress: null, messageKey: null, retryable: false, finishedAt: at, rounds: state.rounds + 1 };
     case 'offline':
-      // 「离线」这一格**必须把原因带上**。核心在缺凭据 / 协议不匹配 / root 不匹配那几处
-      // 发的都是 `badge: Offline` + 一个具名 `message_key`（`crates/notera-host/src/lib.rs`
-      // 的 `Phase::NeedsCredentials` 那一段），而旧写法把 `messageKey` 一律清成 `null`
-      // ⇒ PROXY.md §7 那句"徽标停在『需要凭据』"在界面上根本不存在，用户只看见"离线"，
-      // 既不知道是口令没了，也不知道去哪儿修。（这条是补"原因要看得见"那格时被自己的门禁抓出来的）
+      // 「离线」这一格**必须把原因带上**：核心在缺凭据那处发的就是 `badge: Offline` + 一个具名
+      // `message_key`（`crates/notera-host/src/lib.rs` 的 `Phase::NeedsCredentials` 那一段），
+      // 而旧写法把 `messageKey` 一律清成 `null` ⇒ PROXY.md §7 那句"徽标停在『需要凭据』"在界面上根本不存在，
+      // 用户只看见"离线"，既不知道是口令没了，也不知道去哪儿修。（这条是补"原因要看得见"那格时被自己的门禁抓出来的）
+      // ⚠ 别拿这句去猜**别的**键走哪一支：`sync.root_mismatch` 发的**不是** `Offline`，是 `Failed`
+      //（`lib.rs:2394-2398` 与 `:2403-2407`）。造夹具之前先读那两处 —— 2026-10-14 就差点照着这句灌错。
       return { ...state, badge: 'offline', progress: null, messageKey: signal.messageKey ?? signal.errorCode ?? null, retryable: false };
     case 'idle':
       // 核心当前只有 4 个 `Badge`（没有 Idle），所以这条路暂时只能由本地上来。
