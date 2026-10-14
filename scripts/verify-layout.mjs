@@ -80,6 +80,55 @@ const { chromium } = await (await import(PW)).default;
 const BRIDGE = process.env.BRIDGE || 'http://127.0.0.1:17323';
 
 /**
+ * 现场预检（2026-10-14 加）。这台机器上整跑的真实死法不是"红"，是**跑到一半操作系统不再给提交额度**：
+ * `lane-88` 崩在 653 条（`ERR_INSUFFICIENT_RESOURCES`，当时提交额度余 0.84 GB）、
+ * `lane-90` 崩在 470 条（`Error: spawn UNKNOWN`，当时 0.51 GB），更早还有一遍崩在第 15 条 ——
+ * **三遍都是 0 条真 FAIL**，而桥与 vite 崩前崩后都健康。每一遍要 13~15 分钟，白烧的是时间与
+ * "这一批到底验没验过"的判断（台账里那条"同批新加的判据不算自己那批的证人"就是这么来的）。
+ *
+ * 这一道只做一件事：**在起浏览器之前、写夹具之前**量一下余量，不够就拒绝开跑（退出码 3）。
+ * 三条边界写死在这儿，别让工装自己长成新的假门：
+ *  · 量不到（powershell 不在、解析失败）⇒ **照跑**，只打一行警告。预检坏了不许顺带把整跑拦掉，
+ *    也不许把"这一遍没被保护"写成"这一遍被保护过"（"扫到 0 项 ≠ 检查过"同一族坑）；
+ *  · 阈值只用来**挡崩点**，不是预测：两个实测崩点是 0.84 / 0.51 GB，而唯一那遍绿的没留下这条读数，
+ *    所以闸门取 2 GB（崩点上界再留一档），要改走 `LANE_MIN_COMMIT_GB`，不改代码；
+ *  · `LANE_FORCE=1` 由调用方说了算，越过闸门照跑，并打一行"是调用方决定要烧这一遍"。
+ * `LANE_PREFLIGHT_ONLY=1` 只出数就退 —— 两个分支都能在不碰现场的情况下验；安静机那一遍走的是同一段代码，
+ * 预检在 `check()` 之前，所以它**不可能改变任何一条读数**。
+ */
+const MIN_COMMIT_GB = Number(process.env.LANE_MIN_COMMIT_GB || 2);
+{
+  const { execFileSync } = await import('node:child_process');
+  let physGb = Number.NaN;
+  let commitGb = Number.NaN;
+  try {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command',
+      "Get-CimInstance Win32_OperatingSystem | Select-Object @{n='PHYS';e={[math]::Round($_.FreePhysicalMemory/1MB,2)}},@{n='COMMIT';e={[math]::Round($_.FreeSpace/1MB,2)}} | Format-List",
+    ], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
+    physGb = Number((/PHYS\s*:\s*([\d.]+)/.exec(out) || [])[1]);
+    commitGb = Number((/COMMIT\s*:\s*([\d.]+)/.exec(out) || [])[1]);
+  } catch {
+    // 量不到：不拦。下面那条 `!Number.isFinite` 分支会把"这一遍没有预检保护"打在日志里。
+  }
+  console.log(`现场预检：物理 ${Number.isFinite(physGb) ? physGb : '?'} GB · 提交额度余 ${Number.isFinite(commitGb) ? commitGb : '?'} GB · 闸门 ${MIN_COMMIT_GB} GB`);
+  if (!Number.isFinite(commitGb)) {
+    console.log('  ⚠ 预检量不到（powershell 不可用或输出解析失败）⇒ 照旧开跑，但这一遍**没有**预检保护。');
+  } else if (commitGb < MIN_COMMIT_GB) {
+    if (process.env.LANE_FORCE === '1') {
+      console.log(`  ⚠ 低于闸门 ${MIN_COMMIT_GB} GB，但 LANE_FORCE=1 —— 是调用方决定要在这台机器上烧这一遍。`);
+    } else {
+      console.log('  拒绝开跑：整跑的峰值是"边跑边起浏览器"，今天这样断掉过三遍（653 / 470 / 第 15 条，全部 0 条真 FAIL）。');
+      console.log('  等提交额度回到闸门以上再跑；确实要越过这一道就写 LANE_FORCE=1 再调用（台账会打"调用方决定的"那行）。');
+      process.exit(3);
+    }
+  }
+  if (process.env.LANE_PREFLIGHT_ONLY === '1') {
+    console.log('预检模式：只出这一行数，没起桥、没起浏览器、没碰夹具。');
+    process.exit(0);
+  }
+}
+
+/**
  * 过桥调用。**只重试传输层**，且只重试三次。
  *
  * 为什么要有这一层：2026-10-13 一天之内两遍整跑没跑完（一遍崩在第 15 条、一遍崩在 582 条），
