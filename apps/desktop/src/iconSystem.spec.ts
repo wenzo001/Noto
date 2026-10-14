@@ -1,3 +1,10 @@
+// @vitest-environment node
+// ↑ 这一份只读源码文本与图标表，不碰 DOM；改成 node 环境是为了新增那族"孤儿图标"判据能用 `node:fs` 直接读盘
+//   （jsdom 里 `import.meta.url` 是 http scheme，`fileURLToPath` 会当场报错 —— 见 `tokens.spec.ts` 同一处注释）。
+//   上面那族 `?raw` glob 留给原有用例：它只在进程启动时读一次，做变异刀时会读到旧字节，所以**新那族不走它**。
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CARRIERS, ICONS } from './components/ui/icons';
 
@@ -144,5 +151,72 @@ describe('§2.2 载体：同族共享同一条基形，异族不许共用基形'
     const unused = CROSS_FAMILY_REGISTERED.filter((q) => !collisions.some((p) => same(p, q)));
     expect(extra, `这两族共用了基形又没登记：${JSON.stringify(extra)}`).toEqual([]);
     expect(unused, `共用基形的台账里这几对已经不成立了（撤掉它）：${JSON.stringify(unused)}`).toEqual([]);
+  });
+});
+
+/**
+ * §2.4 那张"全量图标清单"的另一半：画进 `ICONS` 这个唯一来源的每一枚，都得真有人在用。
+ *
+ * 这一族是被一次误测逼出来的：我用一把粗糙的尺子数"哪枚图标没人用"，把 `icons.ts` **整份排除**掉，
+ * 于是 `SYNC_ICONS` / `SAVE_ICONS` 这两张就定义在同一份文件里的查表没被算进消费者，
+ * 一下报出 6 枚"孤儿" —— 全是假的（`grep 没命中 ≠ 功能不存在` 这一族，这次坏在仪器自己身上）。
+ * 修正之后的口径：**表里出现的名字算消费者，表外的定义段（`ICONS`、那个 `IconName` 联合类型）不算**，
+ * 否则类型那一行会把每一枚都"用"一遍，判据立刻恒绿。
+ *
+ * 真量出来的孤儿只有一个：`win-restore`。它的来历不是"多余的一枚"，而是一格缺陷 ——
+ * `TitleBar.vue:51-52` 那颗按钮**恒**画 `win-max`、**恒**标 `t('win.maximize')`，
+ * 而它 `@click` 走的是 `windowAction('maximize')` → `win.toggleMaximize()`（真的会还原）。
+ * ⇒ 窗口最大化之后，图标与标签都在说"最大化"，按下去做的却是还原；§2.4 清单里那枚"还原"画好了没人接。
+ * 修法（接 `isMaximized` 的状态、图标与 `aria-label` 一起换）是产品改动 ⇒ 记成任务 #89 等整跑，
+ * 这里先用**可证伪台账**钉住：它被接上之后这条台账不撤就红。
+ */
+describe('§2.4 清单：进了唯一来源的每一枚都必须真有人用（孤儿走可证伪台账）', () => {
+  const ROOT = fileURLToPath(new URL('.', import.meta.url));
+  const texts: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) walk(abs);
+      else if (/\.(vue|ts)$/.test(entry.name) && !entry.name.endsWith('.spec.ts')) texts.push(readFileSync(abs, 'utf8'));
+    }
+  };
+  walk(ROOT);
+
+  const iconsSrc = texts.find((t) => t.includes('export const ICONS')) ?? '';
+  const tables = [...iconsSrc.matchAll(/export const \w*_ICONS[^=]*=\s*\{([\s\S]*?)\n\};/g)]
+    .map((m) => m[1] ?? '').join('\n');
+  const others = texts.filter((t) => t !== iconsSrc);
+
+  const consumersOf = (name: string): number =>
+    others.filter((t) => t.includes(`name="${name}"`) || t.includes(`'${name}'`) || t.includes(`"${name}"`)).length
+    + (tables.includes(`'${name}'`) ? 1 : 0);
+
+  const keys = Object.keys(ICONS);
+  const orphans = keys.filter((k) => consumersOf(k) === 0);
+
+  const REGISTERED: Array<{ name: string; why: string }> = [
+    {
+      name: 'win-restore',
+      why: '缺陷不是多余：TitleBar.vue:51-52 恒画 win-max、恒标 win.maximize，而 click 走 toggleMaximize ⇒ 最大化之后图标与标签都在说谎。接上 isMaximized 之后来撤这条账（任务 #89）。',
+    },
+  ];
+
+  it('仪器自检：键、文件、两张查表都真读到了（这把尺子坏过一次，必须自证）', () => {
+    expect(keys.length, 'ICONS 读空了').toBeGreaterThanOrEqual(40);
+    expect(texts.length, '一个 .vue/.ts 都没扫到').toBeGreaterThan(20);
+    expect(tables.length, '读不到 *_ICONS 那几张查表 ⇒ 会把表驱动的图标全误报成孤儿').toBeGreaterThan(40);
+    // 表驱动的那一枚必须算"有人用"（这就是上次误报 6 枚的那一格）
+    expect(consumersOf('sync-synced'), 'SYNC_ICONS 里的名字没被算成消费者 ⇒ 这把尺子又坏了').toBeGreaterThan(0);
+    // 模板里直接写名字的那一枚也要算
+    expect(consumersOf('menu'), '模板里的 name="menu" 没被扫到').toBeGreaterThan(0);
+    // 反向：不存在于任何地方的名字必须是 0（不然这一判是恒真的）
+    expect(consumersOf('zz-no-such-icon'), '一个不存在的名字居然算有消费者 ⇒ 判据恒真').toBe(0);
+  });
+
+  it('没有消费者的图标只能正是台账里那几枚；被接上了不撤账也红', () => {
+    const extra = orphans.filter((k) => !REGISTERED.some((r) => r.name === k));
+    const unused = REGISTERED.filter((r) => !orphans.includes(r.name));
+    expect(extra, `这些图标画进了唯一来源却没人用（§2.4）：${JSON.stringify(extra)}`).toEqual([]);
+    expect(unused, `台账里这几枚已经不成立了（接上消费者了就撤账）：${JSON.stringify(unused.map((u) => u.name))}`).toEqual([]);
   });
 });

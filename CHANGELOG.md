@@ -4824,6 +4824,35 @@ G116 保持打开，带着 `drag-handle` 这一个**具体**的问题下去。
 教训一条：**清盘之前先查谁指着它**（`restore-pending.json`、`*.pre-restore.*` 都是引用方），
 这条与 G97"残骸要有上界"不冲突 —— 上界要收，但按引用收。
 
+### 新增（2026-10-14 第六十六批）：§2.4 的另一半——进了唯一来源却没消费者的图标，量出来一枚**真缺陷**（vitest-only，产品一字未动 ⇒ 不升版本）
+
+`iconSystem.spec.ts` 以前只守 §2（不许用字形）与 §2.2（载体两族），**§2.4 那张清单只查了"缺哪枚"，没查"多哪枚"** ——
+画进 `ICONS` 却没人用=死码，而它同时会让"清单齐全"这句话变成假话。
+
+先记一次仪器自己坏了：我第一版拿一把粗尺子数孤儿，把 `icons.ts` **整份排除**，
+于是 `SYNC_ICONS` / `SAVE_ICONS` 这两张**就定义在同一份文件里**的查表没算进消费者，一口气误报 6 枚
+（`sync-synced`/`sync-syncing`/`sync-idle`/`save-saving`/`save-dirty`/`save-failed`）。
+`grep 没命中 ≠ 功能不存在` 这一族这次坏在仪器身上。修正后的口径写进判据：**表里出现的名字算消费者，表外的定义段与那个
+`IconName` 联合类型不算** —— 否则类型那一行把每一枚都"用"了一遍，判据立刻恒绿。
+
+修正之后真正的孤儿只有一枚，而它不是"多余"，是一格缺陷（记 **#89**）：
+`icons.ts:104` 的 `win-restore` 按 §2.4 画好了（两错位的方框），**全仓没有一处用它**；
+`TitleBar.vue:51-52` 那颗按钮恒画 `win-max`、恒标 `t('win.maximize')`，而 `@click` 走的是
+`windowAction('maximize')` → `win.toggleMaximize()`（`:29`）—— 动作本身是 toggle。
+⇒ **窗口最大化之后，图标与可读名字都在说"最大化"，点下去做的却是还原**：同时踩 §2.4（清单里那枚没接）与
+§5（可访问名说的不是这颗此刻干的事）。修法（读 `isMaximized` + 订阅 Resized，图标与文案键一起换，`win.restore` 那个键大概率还要补）
+是产品改动 ⇒ 待整跑。
+
+判据形状与今天其余几批同一条：`REGISTERED` 台账登记这一枚，**双向** —— 新长出一枚孤儿红在 `extra`，
+把它接上了不撤账红在 `unused`。两刀为证（`.logs/icon-orphan-knives.sh` + 单跑）：
+KIA 把 `win-min` 的名字改错 ⇒ 主判据红且点名 `["win-min"]`；
+KIB 拆掉 `*_ICONS` 的解析 ⇒ 自检与主判据双红，报的就是"会把表驱动的图标全误报成孤儿"那一句。
+
+一处环境改动按实记：`iconSystem.spec.ts` 顶部加了 `// @vitest-environment node`（`import.meta.url` 在 jsdom 里不是 file scheme，
+`fileURLToPath` 直接抛），原有那族 `?raw` glob 用例照旧跑（两文件合计 **25/25** 绿）；typecheck 0、eslint 0、arch-check 40/40。
+⚠ 新那族**故意不走 glob**：`motion.spec.ts` 那条老教训是"`?raw` glob 对刚改写的文件会读旧/读空"，
+而这一族的存在意义就是要能被"改一个类名"这种刀验出它有牙。
+
 ### 新增（2026-10-14 第六十五批）：规范 → 执行者对账表（`docs/design/SPEC-EXECUTOR-MAP-2026-10-14.md`）
 
  objective 那句"按照规范各端重构界面"要能被逐行审计，就得有一份"每一行由谁守着"的地图 —— 以前的材料是**缺口取向**的
