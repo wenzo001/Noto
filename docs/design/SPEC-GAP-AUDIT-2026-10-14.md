@@ -42,13 +42,17 @@
    它所在的整块 `.badge` / `.badge__glyph`（`base.css:499-542`）**没有任何模板消费者**（活的徽标是 `.syncbar*` 与 `.dock__*`），
    而 `tokens.spec.ts:156` 那条"§5 命中下限走 `--touch`"读的正是这块死 CSS ⇒ **一条恒绿、永远抓不到东西的腿**。
    现在它登记进 `motion.spec.ts` 的 `REGISTERED` 台账（**不命中也红**），安静机上删干净时机器会提醒撤账。
-5. **§6「已声明但零消费者的能力位：生物识别 · 系统分享 · 文件选择器 · 紧凑工具条 · 安全区 · 拖放 —— 在真接上之前不许画对应控件」——整条没人证。**
-   `negativePromises.spec.ts:70-90`（§2.5）只查"`:disabled` 不许带能力位、有些 `v-if` 带"——
-   一个 `v-if="caps.compactToolbar"` 的控件会**同时满足它并违反 §6**。
-   `arch-check` 的 `edge:caps-wire-vocabulary` / `layer:platform-surface-declared` 管的是键名、取值词表与壳声明，不管消费者。
-   现状：文件选择器与拖放**已经真接上了**（`api/bridge.ts` G75、`RichEditor.vue` + 腿 ㊴），安全区走 CSS `env()`
-   （`base.css:641,746`），而 `shareSheet`/`biometric`/`compactToolbar` 除了 `caps.ts` 自己没有读者 ——
-   而且 `caps.ts:84-85` 在浏览器档里把 `safeArea`/`compactToolbar` 按 UA 默认成 `mobile`，正是 `commands.rs:925` 警告的"假开关"形状。
+5. **§6「已声明但零消费者的能力位：生物识别 · 系统分享 · 文件选择器 · 紧凑工具条 · 安全区 · 拖放 —— 在真接上之前不许画对应控件」—— 静态那一半已在 2026-10-14 第五十七批落进门禁（`negativePromises.spec.ts` 一族三条腿 + 四刀记分），清单本身按实测更正记在 A5。**
+   以前整条没人证：`negativePromises.spec.ts:70-90`（§2.5）只查"`:disabled` 不许带能力位、有些 `v-if` 带"——
+   一个 `v-if="caps.compactToolbar"` 的控件会**同时满足它并违反 §6**（两句承诺：别骗人 / 别发明）。
+   现在的判法：名单从 `PlatformCaps` 接口反查、三种读法（`caps.k` / `caps['k']` / 解构）各有牙齿、
+   未登记的位界面侧零读者、台账那条必须真命中。
+   `arch-check` 的 `edge:caps-wire-vocabulary` / `layer:platform-surface-declared` 管的是键名、取值词表与壳声明，不管消费者 —— 那一格仍归它们。
+   实测更正（A5 那张表）：`dragAndDrop` 有**两个**真读者（`RichEditor.vue:612,633`）⇒ 规范那一行过期；
+   `filePicker` / `safeArea` 是"位零读者而能力真通"（`api/bridge.ts:229,237` 直接 invoke 对话框插件；`base.css:619,641,746` 走 `env()`）
+   —— 照那一行去删对话框就是**发明缺陷**；`biometric` / `shareSheet` / `compactToolbar` 三位真零消费者。
+   还欠：`caps.ts:84-85` 在浏览器档把 `safeArea`/`compactToolbar` 按 UA 默认成 `mobile`，正是 `commands.rs:925` 警告的"假开关"形状 ——
+   这一处要改产品（且 §6 的清单里没有 `transparency`/`tray` 这些别的位，别顺手扩面）。
    ⇒ 这一条名单本身也过期了（六个里有三个已接），要先按事实重列再写判据（别拿旧名单当规范）。
 6. **§6-7 + §7「端到端加密」——已裁定"不开放"，但没有任何东西保证它继续"没有入口"。**
    `set_vault` 在 `apps/desktop/src` 与 `notera-host/src/commands.rs` 里**零引用**（今天实测），

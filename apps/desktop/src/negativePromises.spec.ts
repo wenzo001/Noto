@@ -90,6 +90,73 @@ describe('§2.5 能力不存在的控件必须不渲染（不许画一颗灰的�
   });
 });
 
+/**
+ * §6 那张"已声明但零消费者的能力位"清单（规范原话：**生物识别 · 系统分享 · 文件选择器 · 紧凑工具条 ·
+ * 安全区 · 拖放** —— "在这些被真正接上之前不许画对应控件"）。
+ *
+ * 上面那条 §2.5 拦的是"画一颗灰的骗人"，**拦不住这一格**：一颗 `v-if="caps.compactToolbar"` 的控件
+ * 完全满足 §2.5（不渲染就不骗人），但它违反的是 §6 —— 因为那个能力**根本还没接**。
+ * 这是两句不同的承诺：§2.5 说"别骗人"，§6 说"别发明"。
+ *
+ * 判法：每个键在**界面侧**（`.vue` 与 `stores` / `api` / `editor` 那些 `.ts`，排除 `platform/caps.ts`
+ * 自己与所有 `.spec.ts`）的读者必须为零；唯一例外走台账，并且**台账每一条都要真命中**
+ * （登记了又不存在 ⇒ 红，撤了又冒出来 ⇒ 也红 —— 同 `iconSystem.spec.ts` 那一族）。
+ *
+ * 今天的实测：`dragAndDrop` 已真接上（`RichEditor.vue:612,633` 那个 drop 处理器），其余五个键全仓零读者。
+ * ⚠ 所以 §6 那一行把 `拖放` 也列进"零消费者"是**规范清单过期**，不是这里多放行了一格 —— 更正记在
+ * `SPEC-AMENDMENTS.md` 的 A5，别照着那一行去删处理器。
+ */
+describe('§6 零消费者的能力位：真接上之前不许在界面里露头', () => {
+  const SIX = ['biometric', 'shareSheet', 'filePicker', 'compactToolbar', 'safeArea', 'dragAndDrop'];
+  const WIRED: Array<{ key: string; why: string }> = [
+    { key: 'dragAndDrop', why: 'RichEditor.vue 的 drop 处理器（真读者、真行为 —— 任务 #36 与腿 ㊴）' },
+  ];
+
+  /** 三种读法：`caps.k` / `caps['k']` / 解构 `{ k } = …caps`。少认一种就是给违规留一扇门。 */
+  const readerRe = (key: string): RegExp =>
+    new RegExp(`caps\\s*\\.\\s*${key}\\b|caps\\[\\s*['"]${key}['"]\\s*\\]|\\{[^{}]*\\b${key}\\b[^{}]*\\}\\s*=\\s*[^;\\n]*caps`);
+
+  const viewFiles = listFiles(['.vue', '.ts']).filter(
+    (rel) => !rel.endsWith('platform/caps.ts') && !rel.endsWith('.spec.ts'),
+  );
+  const hitsOf = (key: string): string[] => {
+    const re = readerRe(key);
+    const out: string[] = [];
+    for (const rel of viewFiles) {
+      if (re.test(stripComments(read(rel)))) out.push(rel);
+    }
+    return out;
+  };
+
+  it('仪器自检：六个键名都真的在 PlatformCaps 接口里，界面侧也真扫到了文件（名单不是手抄的 fiction）', () => {
+    const iface = /interface PlatformCaps\s*\{([\s\S]*?)\n\}/.exec(stripComments(read('platform/caps.ts')))?.[1] ?? '';
+    expect(iface.length, '读不到 PlatformCaps 那个接口块').toBeGreaterThan(40);
+    for (const key of SIX) {
+      expect(new RegExp(`(^|\\n)\\s*${key}:`).test(iface), `规范 §6 列的 ${key} 在 caps.ts 里根本没有这一位`).toBe(true);
+    }
+    expect(viewFiles.length, '界面侧一个文件都没扫到').toBeGreaterThan(15);
+  });
+
+  it('牙齿：三种读法的合成串都要被抓到，而别的键不许被误伤（不碰源文件）', () => {
+    for (const sample of [
+      '<button v-if="caps.shareSheet">',
+      "<button v-if=\"caps['shareSheet']\">",
+      'const { shareSheet } = store.caps;',
+    ]) {
+      expect(readerRe('shareSheet').test(sample), `这种写法抓不到：${sample}`).toBe(true);
+    }
+    expect(readerRe('shareSheet').test('<button v-if="caps.tray">'), '误伤了别的能力位').toBe(false);
+  });
+
+  it('没登记成"真接上"的那几个键，界面侧一处都不许读它；登记的那条必须真命中', () => {
+    const unregistered = SIX.filter((k) => !WIRED.some((w) => w.key === k));
+    const exposed = unregistered.flatMap((k) => hitsOf(k).map((rel) => `${k}@${rel}`));
+    expect(exposed, `这些能力位还没实现就被界面读了（§6：不许画对应控件）：${JSON.stringify(exposed)}`).toEqual([]);
+    const stale = WIRED.filter((w) => hitsOf(w.key).length === 0);
+    expect(stale, `台账里这几条已经不成立了（处理器被撤掉了就删账）：${JSON.stringify(stale.map((s) => s.key))}`).toEqual([]);
+  });
+});
+
 describe('§4.5 冲突面板的动作恰好是"逐条"那三颗（批量动作是刻意不做的）', () => {
   const text = read('views/ConflictsView.vue');
   const buttons = [...text.matchAll(/<button[^>]*data-testid="(conflict-[a-z-]+)"[^>]*>/g)].map((m) => m[1]);
