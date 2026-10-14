@@ -495,52 +495,6 @@ button:active:not(:disabled),
   flex: 1;
 }
 
-/* -------------------------------------------------------------- 徽标 */
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  min-height: var(--touch);
-  padding: 0 var(--sp-3);
-  border-radius: var(--r-chip);
-  border: 1px solid var(--line);
-  background: var(--canvas);
-  color: var(--body);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.badge__glyph {
-  font-size: var(--text-md);
-  line-height: 1;
-}
-
-.badge[data-badge='synced'] .badge__glyph {
-  color: var(--ok);
-}
-
-.badge[data-badge='failed'] .badge__glyph,
-.badge[data-badge='failed'] {
-  color: var(--danger);
-}
-
-.badge[data-badge='offline'] .badge__glyph {
-  color: var(--mute);
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.badge[data-badge='syncing'] .badge__glyph {
-  animation: spin 1.6s linear infinite;
-  transform-origin: 50% 50%;
-}
-
 /* ------------------------------------------------------------- 标题栏 */
 
 .titlebar {

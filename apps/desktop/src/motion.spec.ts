@@ -179,7 +179,7 @@ describe('§1.6 / §4.9 动效那四个数与归零的执行者', () => {
   }
 
   /**
-   * 规范 §4.9 只给了**一种**循环动画（同步转圈 1.4s linear infinite）。源码里另外两处各有来历，
+   * 规范 §4.9 只给了**一种**循环动画（同步转圈 1.4s linear infinite）。源码里其余每一处各有来历，
    * 走**可证伪台账**（同 `iconSystem.spec.ts` 那两条）：台账必须真的命中，多命中与不命中都红 ——
    * 所以"再加一处野动画"必须当场登记，而登记了又不存在的那条会红着提醒撤账。
    */
@@ -190,16 +190,15 @@ describe('§1.6 / §4.9 动效那四个数与归零的执行者', () => {
       decl: 'pulse 1.4s ease-in-out infinite',
       why: '加载骨架（`.skeleton__row`）。§4.9 那张场景表里**没有"加载态"这一行**，所以 1.4s 是沿用、ease-in-out 也不在规范曲线上 —— 这是规范欠的一行，不是这里的违规；要改先补规范。',
     },
-    {
-      file: './styles/base.css',
-      decl: 'spin 1.6s linear infinite',
-      why: '挂在 `.badge[data-badge=\'syncing\'] .badge__glyph` 上，而 `.badge` / `.badge__glyph` 这一族**没有任何模板消费者**（活的徽标是 `.syncbar*` 与 `.dock__*`）。死代码 ⇒ 1.6s 这个不合规的数此刻画面上看不见，但它并存着就是第二把尺子。安静机上把 `base.css` 那一段与 `tokens.spec.ts` 里读 `.badge` 的那条白名单一起删，删了就撤这条台账。',
-    },
+    // 2026-10-14：这里原本还有第二条 —— `.badge[data-badge='syncing'] .badge__glyph` 上那句 `spin 1.6s`
+    // （不合规范的 1.4s，挂在一族没有模板消费者的死 CSS 上）。那块死 CSS 被删掉之后这条台账**必须一起撤**，
+    // 否则这一族会红在"登记了又不成立"那一臂 —— 这正是它设计出来的样子（欠账还得掉，不是记一次就永远挂着）。
   ];
 
   it('仪器自检：token 与 animation 都真的扫到了（扫空表这几条会集体空转）', () => {
     expect(tokensCss.length).toBeGreaterThan(1000);
-    expect(ANIM_SITES.length).toBeGreaterThanOrEqual(5);
+    // 死 CSS 那处被删掉之后，源码里的 animation 从 5 处变成 4 处（三处同步转圈 + 一处骨架 pulse）
+    expect(ANIM_SITES.length).toBeGreaterThanOrEqual(4);
     // 已知那四处必须都在：底栏那颗、状态条那颗、编辑器里那颗、骨架
     const spinners = ANIM_SITES.filter((s) => s.decl === SPEC_SPIN).length;
     expect(spinners, `同步转圈那三处应当都在，实测 ${spinners}`).toBe(3);
@@ -259,7 +258,7 @@ describe('§1.6 / §4.9 动效那四个数与归零的执行者', () => {
     expect(tokenTransitions, '用 token 的过渡掉出 7 处（AppCheckbox 2 + base.css 3 + editor.css 2）—— 删掉过渡=§4.9 那一档没人执行了').toBeGreaterThanOrEqual(7);
   });
 
-  it('每一处 animation: 只能等于规范那句同步转圈；例外只准台账里那两条，且必须真的命中', () => {
+  it('每一处 animation: 只能等于规范那句同步转圈；例外只准台账里那几条，且必须真的命中', () => {
     const same = (a: { file: string; decl: string }, b: { file: string; decl: string }) =>
       a.file === b.file && a.decl === b.decl;
     const rest = ANIM_SITES.filter((s) => s.decl !== SPEC_SPIN);
