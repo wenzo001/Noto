@@ -4824,6 +4824,40 @@ G116 保持打开，带着 `drag-handle` 这一个**具体**的问题下去。
 教训一条：**清盘之前先查谁指着它**（`restore-pending.json`、`*.pre-restore.*` 都是引用方），
 这条与 G97"残骸要有上界"不冲突 —— 上界要收，但按引用收。
 
+### 门禁 + 更正（2026-10-14 第六十九批）：核心错误词表那一跳补上执行者（五刀记分，含一把等价刀的自证）；同时**撤回我自己昨天写下的那条假缺口**
+
+`apps/desktop/src/errorWordTable.spec.ts`（4 条腿，不改产品）问的是以前没人问过的一句：
+**核心 `error.rs::message_key()` 那张表里每个键，在屏幕上说得出人话吗？**
+看着像有人管 —— `arch-check hygiene:rust-message-keys-registered` 就是拿 Rust 字面键查 `i18n.ts` 登记。
+但它比的是**它自己那份 `normalizeKey` 算式**，界面真走的是 `i18n.ts::messageFor` 里那份 `TOAST_PREFIXES`：
+**同一条约定写了两遍**，两份漂了后果不是报错，是那类错误全体退化成"操作没有成功，可以稍后再试"
+（`i18n.spec.ts:4-7` 开头就警告过这件事，只是那里只手抄了 `cmd.*` 名单，覆盖不到这张表）。
+四条腿：① 名单从 `message_key()` 函数体**派生**（不手抄）＋"锚点找不到就红"的自检；② 每个键经**真的那个** `messageFor` 拿到具体话；
+③ "确实有条目靠剥前缀接上"（`sync.auth_required`→`error.auth_required` 那一族六条）；④ 不同键不许说成同一句话。
+五刀逐条见血：K1 核心键名漂 ⇒ ②③｜K2 解析锚点没了 ⇒ **四条全红**（解析故意放进每条腿里面跑，让"仪器坏了"报成腿红而不是"文件加载失败"）｜
+K3 剥前缀表被改坏 ⇒ ②③④，**而同一刀下 `arch-check` 退出 0、40 条全 PASS** —— 这条差分就是本条腿独有的射程｜
+K4 两句撞成一句 ⇒ ④｜K5 六条全改精确登记 ⇒ ③。
+⚠ **K5 第一版是一把等价刀，没抓到东西**：我按"前缀表里有什么"去猜登记名，写了 `'error.unreachable'`，
+而 `proxy.unreachable` 走的根本不是剥前缀（`TOAST_PREFIXES` 里没有 `proxy.`），是点号→下划线 ⇒ 真登记名 `error.proxy_unreachable`。
+**归一化有两处实现，刀必须下在界面那一处实际走的那条上** —— 拿自己那份算式猜期望值，下出来的就是假绿证人。
+读数：本文件 4/4、`pnpm --dir apps/desktop test` **680 通过 / 0 失败（75 文件）**、`vue-tsc` 0 错、`lint` 0。
+⚠ 途中一条真红：`import { dirname } from 'node:path'` 在本仓 TS 配置下报 TS2305（没有这个具名导出），
+按既有写法改成 `fileURLToPath(new URL('.', import.meta.url))` —— **typecheck 是跑出来的，不是想当然**。
+
+**第二条是更正，比第一条重要**：昨天那份 `docs/design/SPEC-GAP-AUDIT-2026-10-14.md` 的第 3 条
+（"§4.3 被预算截断的长轮次零证人"）**是假缺口，本批公开撤回**。证人早就在，还带牙：
+`crates/notera-host/tests/late_device.rs:159-196` 先断"第一轮必须真被预算截断"（`RoundOutcome::Partial`，
+消息写着"夹具要改：…才测得到东西"= 那条腿的牙），再断截断后 `sync_status().badge` 仍是 `"syncing"`
+（错时报的正是"界面读到的仍是「已同步」"），追平后才断回到 `"synced"`。
+我为什么漏：尺子是 `grep -rl capped`，而这条测试通篇没写 `capped` 这个字 —— 写的是 `Partial` 与 `badge`。
+**"按实现里那个变量名去搜测试"又一次没搜到已有测试**（同族错误：grep 没命中≠功能不存在，这次是≠证人不存在）。
+顺带把第 2 条也改窄：`sync.root_mismatch` 并不缺"通路"证人（`fifthCellAndTransport.spec.ts:70-97` 那族就是灌 `{badge, messageKey}` 断文案，
+还带两条优先级腿），缺的只是**这一个键从来没被那样灌过一次**＋那个现场只有命令路径测试。⇒ 任务 #84 从"一整族界面证人缺失"缩成"一条 store 级腿"。
+另把 §8 那条保留意见按它自己的话扫了一遍：最像的一处 `VersionHistory.vue:154` 是**假警报** ——
+`rev` 只是占位符的名字（`'第 {rev} 版'`，`i18n.ts:105`），落到屏幕上是数字，没有协议词外泄。
+本批**没改任何产品文件** ⇒ 不升版本。变异台 `.logs/ewt-knives.sh`（两份被变异的产品文件跑完即还原，脚本末尾自查 `git status`）。
+
+
 ### 盘点（2026-10-14 第六十八批）：反向审计第二轮换到 token 层——102 颗自定义属性里 6 颗没有 `var()` 读者，其中一颗是**与设计文件不同名**（不改任何东西）
 
 `.logs` 里那把一次性尺子换成 CSS 自定义属性再跑一遍（`tokens.css` 声明的 `--x` ↔ 全 `src` 里的 `var(--x)`）：
