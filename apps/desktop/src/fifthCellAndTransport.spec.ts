@@ -15,7 +15,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { stubLocalService } from './testing/http';
 import { useSettingsStore } from './stores/settings';
 import { useSyncStore } from './stores/sync';
-import { t } from './i18n';
+import { messageFor, t } from './i18n';
 
 /** 读源码用 `import.meta.glob` 而不是 `node:fs`：本项目没装 `@types/node`（同一形状见 uiFeedback.spec.ts）。 */
 const FILES = import.meta.glob<string>('./**/*.{vue,ts}', {
@@ -162,5 +162,62 @@ describe('传输安全两档各有各的话（§4.7 / G88）', () => {
     expect(tag?.[0]).toMatch(/class="banner banner--danger"/);
     expect(tag?.[0]).toMatch(/role="alert"/);
     expect(tag?.[0], '一句 field-hint 不是"显著告警"').not.toMatch(/field-hint/);
+  });
+});
+
+/**
+ * §4.3「两套库指向同一个远端目录 → 停下告警，绝不合并」——把核心那一发真信号从界面这一侧灌一次。
+ *
+ * 为什么这一格单独有腿（2026-10-14 更正过口径）：**通路本身早就有证人**（上面第五格那族就是灌
+ * `{badge, messageKey}` 断文案），所以缺的不是"messageKey 会不会变成一句话"，而是
+ * **这一个键从来没被那样灌过一次** —— 键名漂了、或者"停下"这一格被折进别的说法里，今天都不会红。
+ * 核心那一侧发得出（`notera-host/src/lib.rs:2401-2408` → `Badge::Failed` + `sync.root_mismatch`），
+ * 触发它的现场只有命令路径测试（`crates/notera-host/tests/crash_recovery.rs:231`）。
+ * 期望值**不写 `t('sync.root_mismatch')`**：那会把"键还在不在"这种漂移自我掩盖掉，
+ * 所以主张按规范那一句的**内容**逐条钉（另一个库 / 已停止 / 下一步去哪儿）。
+ */
+describe('§4.3 两库撞同一远端目录：停下告警那一发（root_mismatch）', () => {
+  const COPY = '这个服务器上已经是另一个 Noto 库了';
+
+  async function failedWith(messageKey: string, account: Record<string, unknown> = { hasCredential: true, credentialLive: true }) {
+    const sync = await withAccount(accountFixture(account));
+    sync.applySignal({ badge: 'failed', messageKey });
+    return sync;
+  }
+
+  it('核心发的那一句会真的成为屏幕上那句原因：不是通用兜底，也不是那句「同步失败」', async () => {
+    const sync = await failedWith('sync.root_mismatch');
+    expect(sync.detail, '那一格的原因句没出来（键漂了或被折掉了）').toContain(COPY);
+    // 三条主张逐条钉：这是"停下"、是"两个库不许合"、且给了下一步。
+    expect(sync.detail).toContain('已停止同步');
+    expect(sync.detail).toContain('混在一起');
+    expect(sync.detail).toContain('路径');
+    // 反向腿：不许是那句通用兜底，也不许是"还没有配置服务器"（§4.3 里这是两件事）。
+    expect(sync.detail).not.toBe(messageFor('__definitely_not_a_key__'));
+    expect(sync.detail).not.toContain('还没有配置同步服务器');
+  });
+
+  it('那一格是"失败"，不是忙 —— 停下之后不许还在转圈', async () => {
+    const sync = await failedWith('sync.root_mismatch');
+    expect(sync.shownBadge).toBe('failed');
+    expect(sync.label).not.toBe(t('sync.syncing'));
+  });
+
+  it('徽标那句和原因那句不许是同一句话（同一句不许说两遍）', async () => {
+    const sync = await failedWith('sync.root_mismatch');
+    expect(sync.label).not.toBe(sync.detail);
+    expect(sync.label?.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * §4.3 的优先级：这一格最像"被顺手折进第五格"（口令只剩引用 + 一个失败）。
+   * 折的条件是 `badge === 'offline'`，`failed` 不在其列 —— 这一条就是把那条边界钉住：
+   * 两库相撞是**已经停下并要人改配置**，不是"重填一次口令就能继续"。
+   */
+  it('就算这台设备的口令也只剩引用，那一格也不许被折成"需要重新填写口令"', async () => {
+    const sync = await failedWith('sync.root_mismatch', { hasCredential: true, credentialLive: false });
+    expect(useSettingsStore().credentialSavedButGone, '夹具要先把"只剩引用"造出来才测得到这一条').toBe(true);
+    expect(sync.shownBadge).toBe('failed');
+    expect(sync.detail).toContain(COPY);
   });
 });
