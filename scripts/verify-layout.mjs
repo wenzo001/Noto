@@ -123,7 +123,52 @@ const MIN_COMMIT_GB = Number(process.env.LANE_MIN_COMMIT_GB || 2);
     }
   }
   if (process.env.LANE_PREFLIGHT_ONLY === '1') {
-    console.log('预检模式：只出这一行数，没起桥、没起浏览器、没碰夹具。');
+    console.log('归因预检（第二部分）在下面这一行之后才做，两种分支都能不碰现场验。');
+  }
+  /**
+   * **归因预检**（2026-10-14）：整跑那 13 分钟的读数，只有挂在**某一个 commit** 上才叫证人。
+   *
+   * 为什么要有这一道：这一台机器是**共享工作树**，产品路径上随时可能挂着并行那一路未提交的改动。
+   * 那种状态下跑完的一遍，读数既不能算 HEAD 的（树上多了别人的产品代码），也不能算别人的（那些改动还没进树），
+   * 于是 13 分钟买回来一张**归不了因的纸** —— 今天就这样差点烧掉两遍。
+   * 判据只问一件事：`git status` 在产品路径上有没有未提交的东西；有就**拒绝开跑**，除非调用方明写 `LANE_ALLOW_DIRTY=1`
+   * （那时日志打的是"调用方决定：这一遍的读数不归因到任何 commit"，台账里就不许再把它当证人）。
+   * 范围走 `LANE_DIRTY_PATHS`（默认 `apps crates scripts package.json pnpm-lock.yaml`）——
+   * **故意不含文档**：只改 CHANGELOG 不该挡住一整遍。git 读不到时**不拦**，但会把"这一遍的归因没人守"打出来。
+   */
+  const DIRTY_PATHS = (process.env.LANE_DIRTY_PATHS || 'apps crates scripts package.json pnpm-lock.yaml')
+    .split(/\s+/)
+    .filter((p) => p.length > 0);
+  let dirtyLines = null;
+  let headShort = '?';
+  try {
+    headShort = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8', windowsHide: true, timeout: 10000 }).trim();
+    const out = execFileSync('git', ['status', '--porcelain', '--untracked-files=no', '--', ...DIRTY_PATHS], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 20000,
+    });
+    dirtyLines = out.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  } catch {
+    dirtyLines = null;
+  }
+  if (dirtyLines === null) {
+    console.log(`归因预检：读不到 git 状态（路径集 ${DIRTY_PATHS.length} 项）⇒ 照旧开跑，但这一遍的归因**没有人守**。`);
+  } else if (dirtyLines.length === 0) {
+    console.log(`归因预检：产品路径干净 ⇒ 这一遍的读数算 HEAD ${headShort} 的证人（路径集：${DIRTY_PATHS.join(' ')}）`);
+  } else if (process.env.LANE_ALLOW_DIRTY === '1') {
+    console.log(`归因预检：⚠ 产品路径上有 ${dirtyLines.length} 个未提交文件，但 LANE_ALLOW_DIRTY=1`);
+    console.log('  ⇒ 是调用方决定烧这一遍；**这份读数不许归因到任何 commit，也不许当"回到绿"的证据引用**（HEAD 当时是 ' + headShort + '）。');
+  } else {
+    console.log(`归因预检：产品路径上有 ${dirtyLines.length} 个未提交文件（HEAD ${headShort}）：`);
+    for (const l of dirtyLines.slice(0, 12)) console.log(`    ${l}`);
+    console.log('  拒绝开跑：这份读数既不算 HEAD 也不算那个未提交批次，13 分钟买回来一张归不了因的纸。');
+    console.log('  先让那一批落地（或把范围收到只含文档）再跑；确实要在脏树上跑就写 LANE_ALLOW_DIRTY=1，');
+    console.log('  日志会把"这一遍不归因到任何 commit"打在读数上面。');
+    process.exit(4);
+  }
+  if (process.env.LANE_PREFLIGHT_ONLY === '1') {
+    console.log('预检模式：只出这几行数，没起桥、没起浏览器、没碰夹具。');
     process.exit(0);
   }
 }
