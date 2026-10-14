@@ -3272,15 +3272,24 @@ function contrastRatio(fg, bg) {
     if (!el) return { missing: true };
     // 这条在设置那一栏的下方：先把它滚进可视范围，再量"看得见"。
     // 在自身会滚的栏里量"整块在视口内"量的其实是滚动位置，不是这条告警画没画（仪器自己会红错方向）。
-    el.scrollIntoView({ block: 'center' });
+    el.scrollIntoView({ block: 'center', behavior: 'instant' });
     const r = el.getBoundingClientRect();
     const cs = getComputedStyle(el);
     const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    /**
+     * "被谁盖住"必须打进读数里（缺口 #78 同一条教训：一条说不出对象的红要查一小时）。
+     * 这一条今天红过两遍，两遍都只知道 `hitSelf:false`，只能靠另写探针去猜是面板还是别的层 ——
+     * 猜是猜不出结论的，所以这里把盖住它那一层的身份、定位方式与 z 一起打出来。
+     */
+    const hs = hit ? getComputedStyle(hit) : null;
     return {
       text: (el.textContent ?? '').replace(/\s+/g, ' ').trim(),
       h: Math.round(r.height),
       inViewport: r.top >= 0 && r.bottom <= window.innerHeight,
       hitSelf: Boolean(hit && el.contains(hit)),
+      盖住中心的是: hit
+        ? `${hit.tagName.toLowerCase()}.${String(hit.className).split(/\s+/)[0]} pos=${hs.position} z=${hs.zIndex} 是不是那条面板=${hit.closest('[data-testid="app-select-panel"]') !== null}`
+        : 'null',
       role: el.getAttribute('role'),
       color: cs.color,
       bg: cs.backgroundColor,
@@ -4014,6 +4023,10 @@ function contrastRatio(fg, bg) {
     // 全仓只有两颗 `.btn--primary`，都在设置页与弹窗里 ⇒ 样本要在设置那一屏取（`where`）：
     // 在笔记那一屏量它得到的只是 `missing` —— 那是探针站错了地方，不是产品坏。
     { key: '主按钮', cls: 'btn--primary', sel: '.btn--primary', want: 40, hit: 'band', where: 'settings' },
+    // D11 结案为 **B「不适用」**（2026-10-14 用户拍）：下拉住在"堆叠 + 滚动口"的表单里，
+    // 带子是画在按钮外的悬挑，滚动口两轴都裁 ⇒ 不滚时 self/self、滚到边上就 other（两次实测可复现）。
+    // 所以它按 §5 画 44，与 A3.3 结案那两类同形。这一行钉的就是那个 44 —— 谁再把它收成 36，这里红。
+    { key: '自绘下拉', cls: 'app-select', sel: '.app-select', want: 44, hit: 'band', where: 'editor' },
   ];
   const HIT_EDGE = 21;
   const INTERACTIVE = 'button,input,select,textarea,a[href],[role="checkbox"],[role="switch"],[role="button"],[role="menuitem"],[role="tab"]';
