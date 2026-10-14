@@ -190,7 +190,10 @@ describe('配好了同步，手动入口必须真的还能用', () => {
 });
 
 /**
- * §11.4「让路不是失败，但必须看得见」—— 这一块的来历要照实写：**我先把它当成缺口，其实是假发现**。
+ * （标签订正 2026-10-14：这里原来写的是 §11.4，而盘上那份规范快照只到 §9，§10/§11 没有原文 ——
+ *   那个编号在仓内任何文本里都查不到出处（代码里其他 "11.4" 全是描边比例 1:11.4）。
+ *   这一块真正对的是 §4.3 那行「失败：同步失败 + 一行屏幕可见的原因（不能只挂在 title 或 aria-live 上）」，故改成 §4.3；判据行为一字未动。）
+ * §4.3「让路不是失败，但必须看得见」—— 这一块的来历要照实写：**我先把它当成缺口，其实是假发现**。
  * 那句话早就有可见出口（`SyncBadge.vue:87` 的 `<p v-if="sync.detail" data-testid="sync-detail">`，
  * 而 `detail` 就是 `state.messageKey ? messageFor(...)`），而且已经有两处证人：上面那条
  * `sync.needsCredentials` 与本仓库的浏览器腿 ㊵。我第一版读模板只读到第 80 行，漏看了 87 行，
@@ -205,7 +208,7 @@ describe('配好了同步，手动入口必须真的还能用', () => {
  * `lastSuccessAt / divergenceHeld / pendingOps / openConflicts`，从不回徽标
  * （我第一版把它当徽标入口，四条全红在 `expected 'idle' to be 'offline'`）。
  */
-describe('§11.4 具名原因那句可见的话不许说两遍（说两遍会顶掉 520 档的「设置」）', () => {
+describe('§4.3 具名原因那句可见的话不许说两遍（说两遍会顶掉 520 档的「设置」）', () => {
   const mountDeferred = async () => {
     makeService(ACCOUNT_CONFIGURED);
     const wrapper = mount(App, { attachTo: document.body });
