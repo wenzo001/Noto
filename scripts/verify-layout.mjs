@@ -903,7 +903,35 @@ for (const width of WIDTHS) {
    */
   await page.setViewportSize({ width, height: 720 });
   await page.waitForTimeout(300);
-  await page.click('[data-testid="account-tls"]');
+  /**
+   * 现场必须**自己推到底**，不能交给 `page.click` 的自动滚动：它会把元素滚到视野中间，
+   * 于是触发键底边停在 501（视口 720）⇒ 下面还剩 219，比面板自身（约 186）还高，
+   * 那条"现场自检"就红 —— 红的是**夹具没造出来**，不是产品坏（2026-10-14 实测：
+   * 一格一格推到"这只按钮能到的最低点"时最大底边是 617，余量 103 < 面板高，现场是造得出的）。
+   * 所以这里先扫一遍滚动位置、停在"底边最大且整颗可见"那一格，再用 `evaluate` 点它
+   * （不再用 `page.click`，否则它替我滚回中间，前面那段白做）。
+   */
+  const pushed = await page.evaluate(() => {
+    const el = document.querySelector('[data-testid="account-tls"]');
+    if (!el) return { missing: true };
+    const scroller = el.closest('.settings__body') ?? document.scrollingElement;
+    let best = -1e9;
+    let bestTop = 0;
+    for (let i = 0; i < 400; i += 1) {
+      scroller.scrollTop += 24;
+      const q = el.getBoundingClientRect();
+      const fullyVisible = q.top >= 0 && q.bottom <= window.innerHeight;
+      if (fullyVisible && q.bottom > best) {
+        best = q.bottom;
+        bestTop = scroller.scrollTop;
+      }
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1) break;
+    }
+    scroller.scrollTop = bestTop;
+    return { 最大底边: Math.round(best), 视口: window.innerHeight };
+  });
+  notes.push(`     TLS 最坏深度现场：触发键能推到的最低底边 ${pushed.最大底边}（视口 ${pushed.视口}，余量 ${pushed.视口 - pushed.最大底边}）`);
+  await page.evaluate(() => /** @type {HTMLElement} */ (document.querySelector('[data-testid="account-tls"]'))?.click());
   await page.waitForTimeout(400);
   const deepPanel = await page.evaluate(() => {
     const el = document.querySelector('[data-testid="app-select-panel"]');
