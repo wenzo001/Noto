@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -72,5 +73,69 @@ describe('§1.4 控件高度的六档：值逐字对上那张表，且不许长�
     const names = [...fake.keys()];
     expect(names.filter((n) => !WANT.some(([w]) => w === n))).toEqual(['--h-iconx']);
     expect(WANT.map(([w]) => w).filter((n) => !names.includes(n))).toEqual(['--h-icon']);
+  });
+});
+
+/**
+ * §2.5 那张尺寸表的**容器**那一行，原话：`28 / 44 / 52 —— 触摸目标容器尺寸（不是图标本身放大）`。
+ * 上面那个 describe 给 §1.4 的六档做了逐档归属 + 双向闸，而这一行以前**没有同形的裁定**
+ * （`SPEC-GAP-AUDIT-2026-10-14.md` 第 7 条）：44 有人、52 只在整跑里被间接量过、**28 连主人都不明**。
+ *
+ * 今天实测（裁定记在 `SPEC-AMENDMENTS.md` A6，D13 等用户追认）：
+ * · **44** 的主人 = `--touch`（`tokens.css:111`）—— 值是上面那张表第 7 行钉的那一颗，这一格补的是"它就是 §2.5 那一行的 44"；
+ * · **52** 的主人 = 移动端底部胶囊里那颗 tab 的容器高（`base.css:684` 的 `.dock__tab { height: 52px }`，
+ *   与 §3.5"每个 tab 56×52"同一个数）；`tokens.css:138` 也有一颗 52px，那是 `--nb-handle-gutter`（§2.4 拖拽把手的留位），
+ *   **不是**触摸容器 —— 所以这一格点名到 `.dock__tab`，不写"全仓只有一颗 52"那种假话；
+ * · **28 没有任何容器主人**。全源里 `28px` 只出现在两处，都不属于"竖着的容器"这一族：
+ *   `EditorToolbar.vue:371` 的 `width: 28px` 是 §3.4 右缘那道渐隐的**宽**，`editor.css:190` 那句是 §1.5 的**行高**（1.4 = 28px）。
+ *   ⇒ 按 A3.3 / A3.5 同一个形状结案：**比 44 小的档不做容器**，因为 §5 那句"≥44×44"永远赢。
+ *
+ * ⚠ 这一把量的是 `height` / `min-height` 那两位，**故意不认** `width` 与 `line-height`（不然会把 §3.4 与 §1.5 误伤成违规）；
+ * 也量不到 JS 里算出来的高度 —— 那一格归整跑的矩形（腿 ㊲/65），两边不互相冒充。
+ */
+describe('§2.5 触摸目标容器：三个数各有主人，28 这一档按 A6 结案', () => {
+  const strip = (t: string): string =>
+    t
+      .replace(/^[ \t]*\/\*[\s\S]*?\*\//gm, '')
+      .replace(/^[ \t]*\/\/.*$/gm, '')
+      .replace(/^[ \t]*<!--[\s\S]*?-->$/gm, '');
+
+  const files: string[] = [];
+  (function walk(dir: string, prefix: string): void {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const rel = prefix ? `${prefix}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(join(dir, e.name), rel);
+      else if (/\.(vue|css)$/.test(e.name)) files.push(rel);
+    }
+  })(SRC, '');
+  const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
+
+  /** 容器那一族 = 竖着的那两位。宽与行高不归这里管。 */
+  const containerHeights = (text: string): string[] =>
+    [...strip(text).matchAll(/(?:^|\n)\s*(?:height|min-height)\s*:\s*(\d+(?:\.\d+)?px)\s*(?:;|$)/g)].map((m) => m[1] ?? '');
+
+  const hits28 = files.flatMap((rel) => containerHeights(read(rel)).filter((v) => v === '28px').map(() => rel));
+  const baseCss = strip(read('styles/base.css'));
+  const dockTabBlock = /(^|\n)\.dock__tab\s*\{([^}]*)\}/.exec(baseCss)?.[2] ?? '';
+
+  it('仪器自检：文件真扫到了、`.dock__tab` 那一块真读得出来（扫空表这几条会集体空转）', () => {
+    expect(files.length, '一个 .vue/.css 都没扫到').toBeGreaterThan(20);
+    expect(dockTabBlock.length, '读不到 .dock__tab 那个规则块').toBeGreaterThan(20);
+  });
+
+  it('52 的主人是 .dock__tab，那两个数都不许漂（44 那一档已有主人 = `--touch`，归上面那个 describe，这里不重复钉）', () => {
+    expect(/(^|\n)\s*height:\s*52px\s*;/.test(dockTabBlock), '.dock__tab 的容器高不是规范那个 52（§3.5「每个 tab 56×52」）').toBe(true);
+    expect(/(^|\n)\s*width:\s*56px\s*;/.test(dockTabBlock), '.dock__tab 的容器宽不是规范那个 56').toBe(true);
+  });
+
+  it('28 这一档没有任何容器主人（双向闸：冒出一颗 height/min-height:28px 就红着要归属）', () => {
+    expect(hits28, `这些声明把 28 当成了容器高，可 §2.5 那一行还没给它主人（见 A6 / D13）：${JSON.stringify(hits28)}`).toEqual([]);
+  });
+
+  it('牙齿：竖着那两位要被抓，宽与行高不许误伤（合成串，不碰源文件）', () => {
+    expect(containerHeights('.x {\n  height: 28px;\n}')).toEqual(['28px']);
+    expect(containerHeights('.x {\n  min-height: 28px;\n}')).toEqual(['28px']);
+    expect(containerHeights('.x {\n  width: 28px;\n}'), '§3.4 那道渐隐的宽被当成容器了').toEqual([]);
+    expect(containerHeights('.x {\n  line-height: 28px;\n}'), '§1.5 的行高被当成容器了').toEqual([]);
   });
 });
