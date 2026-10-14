@@ -157,6 +157,89 @@ describe('§6 零消费者的能力位：真接上之前不许在界面里露头
   });
 });
 
+/**
+ * §4.9 那句「禁用态不写"为什么不能点" —— 那是把责任推给用户。**要么给出原因文案，
+ * 要么在条件不满足时根本不渲染这颗控件**」（规范原话，两臂择一）。
+ *
+ * 以前这一句**只有后半个分支有人**：`negativePromises.spec.ts` 的 §2.5 那族守的是"能力不存在就不渲染"，
+ * 而"用户可控的条件把那颗按钮禁死了、屏幕上却一个字没说"这一臂**零证人**（审计第 8 条）。
+ *
+ * 数过之后这一格的面积其实**很小**（按上面那把同一分类尺子数的，25 处匹配，不是 grep 的行数）：
+ * · **8 处**是共享组件的透传（`props.disabled` / `isDisabled` / `readOnly` / `props.confirmDisabled`）—— 条件不在这里，
+ *   主语在调用点，这里量了也不算数；
+ * · **13 处**是瞬态的"正在忙"（`settings.dataBusy` ×9、`attBusy !== null` ×2、`sync.busy`、`settings.accountSaving`）——
+ *   这一族是不是"不需要原因文案"是一个**口径**，不是我量出来的事实，登记成 D14 等拍；
+ * · **3 处**是 `!canEdit`（`WorkspaceView.vue`）—— 那三颗对应 §4.2 的只读四行，"说清为什么"那一半
+ *   已由 §4.2 的执行者守着（见 `SPEC-GAP-AUDIT-2026-10-14.md` 末尾那份"不该再报"清单），不在这一格里重复钉；
+ * · **1 处是用户可控条件把动作禁死了**：`SidebarPanel.vue` 那颗新建/重命名弹窗的
+ *   `:confirm-disabled="newName.trim().length === 0"`，而那个 `<AppDialog>` 里**没有任何一句原因**。
+ *
+ * 所以这一族只钉那 1 处的形状："同一份 template 里必须有一句可见文案共用同一个条件"，
+ * 并且把今天这处缺陷走**可证伪台账**（缺陷被修掉 ⇒ 台账不命中 ⇒ 红，逼着撤账；
+ * 新长出一处没修的 ⇒ 不在台账 ⇒ 红）。这样这条腿既不是"已经做到了"的假话，也不会变成没人守的空话。
+ */
+describe('§4.9 禁用态的两臂：把动作禁死了就得说一句为什么（不许两臂都不选）', () => {
+  const viewFiles = listFiles(['.vue']);
+
+  type Site = { rel: string; expr: string; hasReason: boolean };
+  /** `:confirm-disabled="…"` 的调用点 + 同一份模板里是否有另一处 `v-if` 引用同一个变量并渲染文字。 */
+  const sites = (): Site[] => {
+    const out: Site[] = [];
+    for (const rel of viewFiles) {
+      const text = stripComments(read(rel));
+      for (const m of text.matchAll(/:confirm-disabled="([^"]*)"/g)) {
+        const expr = m[1] ?? '';
+        // 条件里出现的标识符（newName.trim() ⇒ newName）
+        const ids = [...expr.matchAll(/\b([A-Za-z][A-Za-z0-9_]*)\b/g)].map((x) => x[1] ?? '');
+        const shared = new Set(['trim', 'length', 'value', 'toString', 'includes', 'size', 'not', 'null', 'undefined', 'true', 'false']);
+        const vars = ids.filter((i) => !shared.has(i));
+        const hasReason = [...text.matchAll(/v-if="([^"]*)"/g)].some((v) => {
+          const cond = v[1] ?? '';
+          return vars.some((x) => new RegExp(`\\b${x}\\b`).test(cond));
+        });
+        out.push({ rel, expr, hasReason });
+      }
+    }
+    return out;
+  };
+
+  /**
+   * 已知缺陷台账（**不是豁免**：它记的是"这一处还没修"）。
+   * 修法是给那个 `<AppDialog>` 里加一句 `v-if="newName.trim().length === 0"` 的可见文案
+   * （或按 §4.9 后半个分支：条件不满足时干脆不给这颗按钮）—— 那是产品改动，要整跑证人。
+   */
+  const REGISTERED: Array<{ rel: string; expr: string }> = [
+    { rel: 'components/SidebarPanel.vue', expr: 'newName.trim().length === 0' },
+  ];
+
+  it('仪器自检：这一族真扫到了调用点（扫到 0 处与"承诺成立"长得一模一样）', () => {
+    expect(viewFiles.length, '一个 .vue 都没扫到').toBeGreaterThan(10);
+    expect(sites().length, '一处 `:confirm-disabled` 都没扫到 ⇒ 下面两条都是空转').toBeGreaterThanOrEqual(1);
+  });
+
+  it('牙齿：同一份模板里有一句共用条件的文案，就必须放行（合成串，不碰源文件）', () => {
+    const pair = '<AppDialog :confirm-disabled="x.length === 0" /><p v-if="x.length === 0">名字还空着。</p>';
+    const alone = '<AppDialog :confirm-disabled="x.length === 0" /><p>随便一句不相干的话</p>';
+    const guarded = (t: string): boolean => {
+      const expr = /:confirm-disabled="([^"]*)"/.exec(t)?.[1] ?? '';
+      const vars = [...expr.matchAll(/\b([A-Za-z][A-Za-z0-9_]*)\b/g)].map((m) => m[1] ?? '')
+        .filter((i) => !['length', 'trim', 'value', 'null'].includes(i));
+      return [...t.matchAll(/v-if="([^"]*)"/g)].some((v) => vars.some((x) => new RegExp(`\\b${x}\\b`).test(v[1] ?? '')));
+    };
+    expect(guarded(pair), '有共用条件的文案却被判成缺原因').toBe(true);
+    expect(guarded(alone), '没有文案却放行 ⇒ 这条腿没有牙').toBe(false);
+  });
+
+  it('把动作禁死又没有原因的那一处，必须正是台账里那一条（多一处红、被修掉了也红）', () => {
+    const bad = sites().filter((s) => !s.hasReason).map((s) => ({ rel: s.rel, expr: s.expr }));
+    const same = (a: { rel: string; expr: string }, b: { rel: string; expr: string }) => a.rel === b.rel && a.expr === b.expr;
+    const extra = bad.filter((b) => !REGISTERED.some((r) => same(r, b)));
+    const unused = REGISTERED.filter((r) => !bad.some((b) => same(b, r)));
+    expect(extra, `新长出一处"禁死了却不说为什么"（§4.9 两臂都不选）：${JSON.stringify(extra)}`).toEqual([]);
+    expect(unused, `台账里这几处已经不成立了（原因文案补上了就撤账）：${JSON.stringify(unused.map((u) => u.rel))}`).toEqual([]);
+  });
+});
+
 describe('§4.5 冲突面板的动作恰好是"逐条"那三颗（批量动作是刻意不做的）', () => {
   const text = read('views/ConflictsView.vue');
   const buttons = [...text.matchAll(/<button[^>]*data-testid="(conflict-[a-z-]+)"[^>]*>/g)].map((m) => m[1]);
