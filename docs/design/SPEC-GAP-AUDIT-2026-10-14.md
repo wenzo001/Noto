@@ -159,3 +159,13 @@
 （只有 WebDAV 那一族 `PROPFOUND`/`If-Match`/`propstat`…），而第六十九批新加的 `errorWordTable.spec.ts`
 守的是**文案值**那一侧（不许兜底/不许占位符残留/两句不许撞），两侧加起来仍没有一条"整屏通扫协议词"的腿 ——
 要补就补那条，别照本条去改 `VersionHistory`。
+
+**本批把那把尺子先量了一次，结论是"这条不该做成门禁"**：把 438 条可见文案的值整屏扫一遍
+（`\b(rev|revs|op|ops|tombstone|seq|lamport|vector|manifest|propstat|etag|WebDAV|DAV)\b`），命中 **3 条**，三条都是 benign：
+`editor.versionRow`（`i18n.ts:105`）与 `editor.versionRestoreArmed`（`:114`）里的 `{rev}` 是**占位符名**，落到屏幕上是数字；
+`settings.tlsCaPemHint`（`:252`）里的 "WebDAV" 是**用户自己在配的那个东西的名字**（这一页的主语就是服务器地址与证书），
+不是把协议内部词汇印给用户看。
+⇒ 这条判据要落地必须先带一份手抄白名单，而它抓到的东西今天一条都没有 —— 按本仓的规矩（判据要能逐条变异、
+名单要从事实派生、不许把仪器的失败转嫁成产品的缺口），**这是一台误报机而不是执行者**。
+所以本条**结案为"不补"**：将来若真出现"某个格子印出 `seq`/`tombstone`"，那是新事实，届时按那条事实各写一条判据，
+而不是先建一把通扫的尺子等人来撞。
