@@ -197,7 +197,7 @@ describe('§2.4 清单：进了唯一来源的每一枚都必须真有人用（�
   const REGISTERED: Array<{ name: string; why: string }> = [
     {
       name: 'win-restore',
-      why: '缺陷不是多余：TitleBar.vue:51-52 恒画 win-max、恒标 win.maximize，而 click 走 toggleMaximize ⇒ 最大化之后图标与标签都在说谎。接上 isMaximized 之后来撤这条账（任务 #89）。',
+      why: '§2.4 窗口控制那一行有"还原"这一枚，画好了（icons.ts:104）却全仓零消费者：TitleBar.vue:51-52 那颗恒画 win-max，而 click 走 win.toggleMaximize() ⇒ 最大化之后图标不跟着换。⚠ 标签没说谎：i18n 的 win.maximize 值就是「最大化或还原」（我一开始把它写成"图标与标签都在说谎"，量过 i18n.ts:404 之后更正）。接上 isMaximized 之后来撤这条账（任务 #89）。',
     },
   ];
 
