@@ -4824,6 +4824,44 @@ G116 保持打开，带着 `drag-handle` 这一个**具体**的问题下去。
 教训一条：**清盘之前先查谁指着它**（`restore-pending.json`、`*.pre-restore.*` 都是引用方），
 这条与 G97"残骸要有上界"不冲突 —— 上界要收，但按引用收。
 
+### 新增（2026-10-14 第五十六批）：§1.6 / §4.9 动效那四个数第一次有执行者（vitest-only，产品一字未动 ⇒ 不升版本）
+
+任务 #85。规范那两张表里的四个数 —— §1.6 的 `--motion-fast: 120ms` / `--motion-base: 220ms`，
+§4.9 动画参数表的 `cubic-bezier(0.2, 0, 0, 1)` 与 `同步转圈 1.4s linear infinite` —— **一个都没被读过**：
+`tokens.spec.ts:164-166` 只断 reduced-motion 下 `--motion-fast: 0ms`（连 `--motion-base` 都没读），
+`motion.spec.ts` 那个 describe 只禁 property 从不读值，整跑那几腿读的是 `animationName` 与 `getAnimations().length`。
+也就是说"谁把 120 抄成 150、谁把圈改成 1.2s"这件事当时**没有执行者**。
+
+`motion.spec.ts` 新增一个 describe（五条腿，期望值全部从规范原文抄）：① token 与 animation 都真扫到了（下界 +
+"同步转圈那三处都在"）；② 120ms / 220ms / cubic-bezier(0.2, 0, 0, 1) 原样写在 tokens 里；③ 过渡里不许写字面时长；
+④ §4.9 那两档必须**各有真消费者**（`.btn` 的悬停走 fast、侧栏抽屉进出走 base）+ token 过渡总数下界；
+⑤ reduced-motion 那一块要把两个 token 都归零，**并且**要有那条通配 `*` 的 `!important` —— 三处转圈写的都是字面 `1.4s`，
+只归零 token 拦不住它们；`animation-iteration-count: 1 !important` 也一起钉住（时长归零而循环还是 infinite 不叫"静止指示"）。
+
+**顺带量出一条死代码，而且它正挡着一条判据**：`.badge` / `.badge__glyph` 这一族在 `base.css` 499–542，
+**没有任何模板消费者**（活的徽标是 `.syncbar*` 与 `.dock__*`；`data-badge` 只挂在这两个上）。
+而 `tokens.spec.ts:156` 那条"§5 命中下限走 `--touch`"读的正是这块死 CSS ——
+一条永远不会红、也永远不会抓到东西的腿。那条 `animation: spin 1.6s linear infinite`（不合规范的 1.4s）就长在块里，
+所以"死"不是无害的：它是第二把尺子。**本批没删它**（删产品代码要整跑证人，这台机器今天给不出），
+改走可证伪台账：`REGISTERED` 里登记两处（骨架 `pulse`、死掉的 `spin`），台账**不命中也红** ——
+K5 那一刀（只删块里那行 animation）实测同时打红"仪器自检"与"台账已不成立"两条，
+所以安静机上删干净时它会红着提醒撤账，不会让这块死 CSS 无声地留在判据里。
+
+**九刀记分**（`.logs/motion-knives.sh` / `motion-knives2.sh`，每刀只动一个原因，跑单文件 vitest，跑完字节级还原）：
+K1 120→150 ⇒ ②红；K2 换曲线 ⇒ ②红；K3 `.btn` 过渡写字面 120ms ⇒ ③红；
+K4 `sync-spin` 漂到 1.2s ⇒ ①④红；K5 删掉死代码那行 ⇒ ①与台账那条红；K6 拿走通配归零整块 ⇒ ⑤红；
+K7 删掉 `.btn` 那行过渡 ⇒ ④红；K8 抽屉档位从 base 挪到 fast ⇒ ④红；
+**K9 第一跑没红** —— 我把下界照 grep 的行数写成 6，而扫描真数是 7（`AppCheckbox.vue` 里有一条跨行的声明，grep 数成 1、`matchAll` 数成 2），
+少一处过渡于是 6 ≥ 6 照样绿。**这是仪器坏了不是产品好**：下界改成 7 并在注释里写清 7 = AppCheckbox 2 + base.css 3 + editor.css 2，
+重跑 K9 ⇒ ④红。同一族坑（"扫到 0 项 ≠ 检查过"、期望值不许从另一个工具的读数抄）第三次撞上，按实记在这儿。
+
+读数：`vitest run src/motion.spec.ts` **10/10**、`vue-tsc` 0 错、`eslint .` 0 输出、`arch-check` **40/40**、
+`check-versions` 一致。本批**只动一个测试文件**（`git diff --numstat` = `+153/-0`），产品字节没变 ⇒
+不升版本、不动整跑；全量 vitest 的证人是 CI（`.github/workflows/ci.yml` 跑 test/typecheck/lint/check-versions/arch-check ——
+**注意：CI 不跑整跑**，`grep verify-layout` 在 workflows 目录零命中，所以几何读数仍只能来自安静机上本机那一遍）。
+**还没做的两格**（都要整跑，记在 #85 与 #82 旁边）：渲染后读 computed `animation-duration` / `transition-duration`，
+以及删掉 `base.css` 那块死 CSS（连同 `tokens.spec.ts:156` 与台账那一处）。
+
 ### 修掉（2026-10-14 第五十五批）：TLS「最坏深度」那条腿的现场要自己推到底，不能交给 `page.click` 的自动滚动（门禁 only ⇒ 不升版本）
 
 这条腿是 #77 那批立的：视口压到 720，让触发键下面的余量**小于面板自身高度**，这样"不会翻上去"的实现在四个宽度上必然红；

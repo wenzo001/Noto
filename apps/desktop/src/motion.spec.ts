@@ -131,3 +131,156 @@ describe('§1.6 动效纪律（与 §4.9 的冲突已钉成表）', () => {
     expect(hits, JSON.stringify(hits)).toEqual([]);
   });
 });
+
+/**
+ * §1.6 的 token 表 + §4.9 的「动画参数」表 —— 这四个数以前**一次都没被读过**：
+ * `tokens.spec.ts` 那一条只断 reduced-motion 下 `--motion-fast: 0ms`（连 `--motion-base` 都没读），
+ * 上面那个 describe 只禁 property、从不读值，整跑那几腿读的是 `animationName` 与 `getAnimations().length`。
+ * 也就是说"谁把 120ms 抄成 150ms、谁把圈改成 1.2s"这件事当时**没有执行者**。
+ *
+ * 期望值一律从规范原文抄（下面那几行就是原文），不许由被测的 CSS 反推：
+ *   §1.6 Token 表：`--motion-fast 120ms` / `--motion-base 220ms`
+ *   §4.9 动画参数表：`悬停 / 按下 120ms，cubic-bezier(0.2, 0, 0, 1)`、`浮层进出 220ms，同曲线`、
+ *                    `同步转圈 1.4s linear infinite`
+ *   §4.9 收尾那句：`prefers-reduced-motion 下全部时长归零，同步动画降级为静止指示`
+ */
+describe('§1.6 / §4.9 动效那四个数与归零的执行者', () => {
+  const tokensCss = stripComments(FILES['./styles/tokens.css'] ?? '');
+
+  /** 一处 `animation:` 简写声明（不碰 `animation-duration` 那类长写法 —— 归零用的就是长写法）。 */
+  function animationsIn(text: string): string[] {
+    const stripped = stripComments(text);
+    const out: string[] = [];
+    for (const m of stripped.matchAll(/(?:^|[;{\s])animation\s*:\s*([^;{}]+)[;}]/g)) {
+      const decl = (m[1] ?? '').trim().replace(/\s+/g, ' ');
+      if (decl) out.push(decl);
+    }
+    return out;
+  }
+
+  /** `@media … <feature> … {` 那一整块的正文（花括号计数；贪婪正则会吃掉后面整个文件）。 */
+  function mediaBlock(text: string, feature: string): string {
+    const stripped = stripComments(text);
+    const re = new RegExp(`@media[^{]*${feature}[^{]*\\{`, 'gm');
+    const m = re.exec(stripped);
+    if (!m) return '';
+    let depth = 1;
+    let i = re.lastIndex;
+    for (; i < stripped.length && depth > 0; i += 1) {
+      if (stripped[i] === '{') depth += 1;
+      else if (stripped[i] === '}') depth -= 1;
+    }
+    return stripped.slice(re.lastIndex, Math.max(re.lastIndex, i - 1));
+  }
+
+  const ANIM_SITES: Array<{ file: string; decl: string }> = [];
+  for (const [file, text] of Object.entries(FILES)) {
+    for (const decl of animationsIn(text)) ANIM_SITES.push({ file, decl });
+  }
+
+  /**
+   * 规范 §4.9 只给了**一种**循环动画（同步转圈 1.4s linear infinite）。源码里另外两处各有来历，
+   * 走**可证伪台账**（同 `iconSystem.spec.ts` 那两条）：台账必须真的命中，多命中与不命中都红 ——
+   * 所以"再加一处野动画"必须当场登记，而登记了又不存在的那条会红着提醒撤账。
+   */
+  const SPEC_SPIN = 'sync-spin 1.4s linear infinite';
+  const REGISTERED: Array<{ file: string; decl: string; why: string }> = [
+    {
+      file: './styles/base.css',
+      decl: 'pulse 1.4s ease-in-out infinite',
+      why: '加载骨架（`.skeleton__row`）。§4.9 那张场景表里**没有"加载态"这一行**，所以 1.4s 是沿用、ease-in-out 也不在规范曲线上 —— 这是规范欠的一行，不是这里的违规；要改先补规范。',
+    },
+    {
+      file: './styles/base.css',
+      decl: 'spin 1.6s linear infinite',
+      why: '挂在 `.badge[data-badge=\'syncing\'] .badge__glyph` 上，而 `.badge` / `.badge__glyph` 这一族**没有任何模板消费者**（活的徽标是 `.syncbar*` 与 `.dock__*`）。死代码 ⇒ 1.6s 这个不合规的数此刻画面上看不见，但它并存着就是第二把尺子。安静机上把 `base.css` 那一段与 `tokens.spec.ts` 里读 `.badge` 的那条白名单一起删，删了就撤这条台账。',
+    },
+  ];
+
+  it('仪器自检：token 与 animation 都真的扫到了（扫空表这几条会集体空转）', () => {
+    expect(tokensCss.length).toBeGreaterThan(1000);
+    expect(ANIM_SITES.length).toBeGreaterThanOrEqual(5);
+    // 已知那四处必须都在：底栏那颗、状态条那颗、编辑器里那颗、骨架
+    const spinners = ANIM_SITES.filter((s) => s.decl === SPEC_SPIN).length;
+    expect(spinners, `同步转圈那三处应当都在，实测 ${spinners}`).toBe(3);
+  });
+
+  it('§1.6 那两个时长与 §4.9 那条曲线，原样写在 tokens 里', () => {
+    const decl = (property: string) => new RegExp(`(^|\\n)\\s*${property}:\\s*([^;\\n]+);`).exec(tokensCss)?.[2]?.trim();
+    expect(decl('--motion-fast'), '--motion-fast 不是规范 §1.6 的 120ms').toBe('120ms');
+    expect(decl('--motion-base'), '--motion-base 不是规范 §1.6 的 220ms').toBe('220ms');
+    // 规范那行写的是 cubic-bezier(0.2, 0, 0, 1)：空格与数字一个都不许改，它是悬停/按下/浮层共用的那一条
+    expect(decl('--ease'), '--ease 不是规范 §4.9 的 cubic-bezier(0.2, 0, 0, 1)').toBe('cubic-bezier(0.2, 0, 0, 1)');
+  });
+
+  it('过渡时长必须走这两个 token（写了字面数值的过渡不归 §1.6 那"归零"管）', () => {
+    const literals: Array<{ file: string; decl: string }> = [];
+    for (const [file, text] of Object.entries(FILES)) {
+      const stripped = stripComments(text);
+      for (const m of stripped.matchAll(/transition(?:-property)?\s*:\s*([^;{}]+)[;}]/g)) {
+        const decl = (m[1] ?? '').trim();
+        for (const part of decl.split(',')) {
+          if (/\d+(?:\.\d+)?m?s/.test(part) && !part.includes('var(--motion')) {
+            literals.push({ file, decl: part.trim() });
+          }
+        }
+      }
+    }
+    expect(literals, JSON.stringify(literals)).toEqual([]);
+  });
+
+  /**
+   * 上面那条拦住了"字面数值"，可它自己有一条**空转的画法**：谁把过渡整行删掉，
+   * 那条照样绿（扫到 0 项 ≠ 检查过），而 §4.9 要的"悬停 120ms 淡入"从此没有执行者 ——
+   * 和用户点了没反应的按钮是同一族缺陷，只是这次坏的是"没有过渡"而不是"过渡太长"。
+   * 所以这一条**点名两档各自的消费者**，再补一条总量下界（今日实测 6 处，分布在 4 个文件）。
+   */
+  it('§4.9 那两档必须各有真消费者：按钮的悬停走 fast、抽屉浮层进出走 base', () => {
+    const base = stripComments(FILES['./styles/base.css'] ?? '');
+    const block = (selector: string) => {
+      const m = new RegExp(`^${selector}\\s*\\{([^}]*)\\}`, 'm').exec(base);
+      expect(m, `base.css 里找不到 ${selector} 这一个规则块`).not.toBeNull();
+      return m?.[1] ?? '';
+    };
+    const has = (text: string, token: string) =>
+      new RegExp(`transition:[^;]*${token}[^;]*var\\(--ease\\)`).test(text);
+
+    expect(has(block('\\.btn'), '--motion-fast'), '.btn 不再用 --motion-fast 过渡（§4.9 悬停/按下那一档 120ms）').toBe(true);
+    expect(has(block("\\.app-shell\\[data-layout='one'\\] \\.pane--sidebar"), '--motion-base'),
+      '侧栏抽屉不再用 --motion-base 进出（§4.9 浮层进出那一档 220ms）').toBe(true);
+
+    let tokenTransitions = 0;
+    for (const text of Object.values(FILES)) {
+      tokenTransitions += [...stripComments(text).matchAll(/transition(?:-property)?\s*:[^;{}]*var\(--motion/g)].length;
+    }
+    // ⚠ 这个下界是**这条扫描自己数出来的 7**，不是 grep 的行数 —— 第一次写成 6（照 grep 抄），
+    // 于是 K9 那一刀（拿掉一处 token 过渡）没能让它红：AppCheckbox.vue 里有一条跨行的声明，grep 数成 1、这里数成 2。
+    // 7 = AppCheckbox 2 + base.css 3（.btn / 抽屉 / dock）+ editor.css 2。少一处就得写下为什么。
+    expect(tokenTransitions, '用 token 的过渡掉出 7 处（AppCheckbox 2 + base.css 3 + editor.css 2）—— 删掉过渡=§4.9 那一档没人执行了').toBeGreaterThanOrEqual(7);
+  });
+
+  it('每一处 animation: 只能等于规范那句同步转圈；例外只准台账里那两条，且必须真的命中', () => {
+    const same = (a: { file: string; decl: string }, b: { file: string; decl: string }) =>
+      a.file === b.file && a.decl === b.decl;
+    const rest = ANIM_SITES.filter((s) => s.decl !== SPEC_SPIN);
+    const extra = rest.filter((s) => !REGISTERED.some((r) => same(r, s)));
+    const unused = REGISTERED.filter((r) => !rest.some((s) => same(s, r)));
+    expect(extra, `这些 animation: 既不是规范那一句也没登记：${JSON.stringify(extra)}`).toEqual([]);
+    expect(unused, `台账里这两条已经不成立了（死代码删掉了就撤账）：${JSON.stringify(unused.map((u) => u.decl))}`).toEqual([]);
+  });
+
+  it('reduced-motion 的执行者必须拦得住硬编码的 1.4s —— 只把 token 归零不算归零', () => {
+    const block = mediaBlock(FILES['./styles/tokens.css'] ?? '', 'prefers-reduced-motion');
+    expect(block.length, '找不到 prefers-reduced-motion 那一块').toBeGreaterThan(0);
+    // 两个时长都得归零（规范原话是"全部时长归零"）
+    expect(/--motion-fast:\s*0ms/.test(block), 'reduced-motion 下 --motion-fast 没归零').toBe(true);
+    expect(/--motion-base:\s*0ms/.test(block), 'reduced-motion 下 --motion-base 没归零').toBe(true);
+    // ⚠ 关键在这一条：三处同步转圈写的都是**字面** 1.4s，不认 token ——
+    // 只有那条通配 `*` 的 !important 才真把它们按住。以前这一句谁都没读，删掉它整套门禁仍然全绿。
+    expect(/\*\s*,/.test(block), 'reduced-motion 里没有通配 * 的那一条（字面时长就没人管了）').toBe(true);
+    expect(/animation-duration:[^;\n]*!important/.test(block), '通配那条没把 animation-duration 压成 !important').toBe(true);
+    expect(/transition-duration:[^;\n]*!important/.test(block), '通配那条没把 transition-duration 压成 !important').toBe(true);
+    // 无限循环必须收成 1 次：时长归零但 iteration 还是 infinite 的话，圈会一直重跑（掉 CPU、也不叫"静止指示"）
+    expect(/animation-iteration-count:\s*1\s*!important/.test(block), '循环没收成 1 次 —— "降级为静止指示"没落实').toBe(true);
+  });
+});
