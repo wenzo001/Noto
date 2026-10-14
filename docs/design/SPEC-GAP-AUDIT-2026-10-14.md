@@ -32,14 +32,16 @@
    守卫是真的且在承重（`notera-sync/src/lib.rs:499-508,630-648`，注释自己写着"账上（脏）是干净的，界还会说'已同步'"）。
    `grep -rl capped` 只命中那一个源文件。最近的界面读数钉的是别的事（㊹ 的排队数、`syncLastSuccess.spec.ts` 的"上一次"）。
    ⇒ 注入方式可以照 ㉛/㊹ 那一族抄（把"截断"这一位打进去，看徽标说什么）。
-4. **§4.9 动画参数 + §1.6 三个 token：四个数没有一个被钉住。**
-   `tokens.css:113-115` 声明了 `--motion-fast:120ms`/`--motion-base:220ms`/曲线，`base.css:717`、
-   `SyncBadge.vue:135`、`RichEditor.vue:1059` 写的是 `sync-spin 1.4s`；但唯一与动效有关的断言是
-   `tokens.spec.ts:165-166`（reduced-motion 下 `--motion-fast: 0ms` —— **没有 `--motion-base`**，
-   而 §1.6/§4.9 说的是"全部时长归零"）与 `motion.spec.ts`（只禁 property，从不读值）。
-   各腿读的是 `animationName` / `getAnimations().length`，**时长与缓动一次都没读过**。
-   顺带捞到一条漂移：`base.css:533-541` 还挂着第二条不合规的 `animation: spin 1.6s linear infinite`
-   在 `.badge[data-badge='syncing']` 上（这个选择器没有模板在用），与 1.4s 的 `sync-spin` 并存，没人发现。
+4. **§4.9 动画参数 + §1.6 三个 token —— 静态那一半已在 2026-10-14 第五十六批落进门禁（`motion.spec.ts` 新增 describe，十刀记分），渲染那一半仍没有执行者。**
+   已钉住：`120ms` / `220ms` / `cubic-bezier(0.2, 0, 0, 1)` 三个值、过渡里不许写字面时长、§4.9 那两档各有**真消费者**
+   （`.btn` 走 fast、侧栏抽屉走 base）再加 token 过渡总数下界、以及 reduced-motion 必须**同时**归零两个 token
+   **并**保留那条通配 `*` 的 `!important` —— 三处转圈写的都是字面 `1.4s`，只把 token 归零根本拦不住它们；
+   `animation-iteration-count: 1 !important` 也一起钉（时长归零而循环还是 infinite 不叫"静止指示"）。
+   还欠：**渲染后** computed `animation-duration` / `transition-duration` 与 timing-function 的读数（这一半要整跑，见 #82/#85 那格环境）。
+   顺带把那条"漂移"升级成更重的事实：`base.css:533-541` 那个 `spin 1.6s` 不是孤立漂移 ——
+   它所在的整块 `.badge` / `.badge__glyph`（`base.css:499-542`）**没有任何模板消费者**（活的徽标是 `.syncbar*` 与 `.dock__*`），
+   而 `tokens.spec.ts:156` 那条"§5 命中下限走 `--touch`"读的正是这块死 CSS ⇒ **一条恒绿、永远抓不到东西的腿**。
+   现在它登记进 `motion.spec.ts` 的 `REGISTERED` 台账（**不命中也红**），安静机上删干净时机器会提醒撤账。
 5. **§6「已声明但零消费者的能力位：生物识别 · 系统分享 · 文件选择器 · 紧凑工具条 · 安全区 · 拖放 —— 在真接上之前不许画对应控件」——整条没人证。**
    `negativePromises.spec.ts:70-90`（§2.5）只查"`:disabled` 不许带能力位、有些 `v-if` 带"——
    一个 `v-if="caps.compactToolbar"` 的控件会**同时满足它并违反 §6**。
