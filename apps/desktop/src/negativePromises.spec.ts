@@ -115,6 +115,49 @@ describe('§4.7 界面不许说"本地数据已加密"（本地库加密未实�
   });
 });
 
+/**
+ * §6-7 + §7「端到端加密」—— 2026-10-14 用户拍**不开放**（裁定写进 `docs/design/SPEC-AMENDMENTS.md` A4）：
+ * 原语层全部做完（AES-256-GCM-SIV、24 个恢复词、密钥轮换、无密钥设备检测）而**零界面入口**，
+ * 规范 §8 第三问禁的正是"画出不存在的功能"。
+ *
+ * ⚠ 这一格在拍板之前**没有守卫**：§4.7 那条 CLAIM 抓的是"本地已加密"那种谎，
+ * 有人把"开启 → 派生 → 展示恢复词 → 解锁"那套接上，现有门禁全部照绿。
+ * 一个"不做什么"的决定如果没有判据钉住，它就只是那次会话里说过的话 —— 所以先补判据，再改台账。
+ * 三面都扫：用户可见文案、控件身份（`data-testid`）、界面侧对那套命令的调用点。
+ */
+describe('§6-7 端到端加密不开放 ⇒ 界面上不许出现它的任何入口', () => {
+  const CLAIM = /端到端加密|端到端密钥|恢复词|开启加密|重新加密|密钥轮换|\bvault\b|e2ee/i;
+  const pairs = i18nPairs();
+  const ids = allTestIds();
+  /** 调用点只扫 `.vue` 与**非测试**的 `.ts`：spec 里出现 `vault` 是"有人在写测试"，不是"界面上有入口"。 */
+  const callSites = listFiles(['.vue', '.ts'])
+    .filter((rel) => !rel.endsWith('.spec.ts'))
+    .flatMap((rel) => {
+      const text = stripComments(read(rel));
+      const hits: string[] = [];
+      for (const m of text.matchAll(/\b(vault|Vault|recoveryWords|derive_key|rotate_key)\b/g)) hits.push(`${rel}:${m[1]}`);
+      return hits;
+    });
+  it('仪器自检：两面都真的读到了东西（文案键 ≥100、testid ≥50 —— 否则"没扫到"与"承诺成立"长得一模一样）', () => {
+    expect(pairs.length).toBeGreaterThanOrEqual(100);
+    expect(ids.length).toBeGreaterThanOrEqual(50);
+  });
+  it('牙齿：同一把尺子打得中「加密已开启 / 输入恢复词解锁」这类接线（合成串，不碰源文件）', () => {
+    const fake = ['端到端加密已开启', '输入 24 个恢复词解锁这台设备', 'settings.vault.enable', 'vault-status'];
+    const caught = fake.filter((s) => CLAIM.test(s));
+    expect(caught.length, JSON.stringify({ 打中: caught.length, 样本: fake })).toBe(fake.length);
+  });
+  it('用户可见文案里没有一句提到这套流程', () => {
+    const hits = pairs.filter((p) => CLAIM.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(hits, JSON.stringify(hits)).toEqual([]);
+  });
+  it('没有一颗控件带着它的身份（testid 与界面侧调用点两面）', () => {
+    const idHits = ids.filter((id) => CLAIM.test(id));
+    expect(idHits, `testid：${JSON.stringify(idHits)}`).toEqual([]);
+    expect(callSites, `界面侧调用点：${JSON.stringify(callSites.slice(0, 8))}`).toEqual([]);
+  });
+});
+
 describe('§4.8 导出只有一种格式（不许出现第二种）', () => {
   const pairs = i18nPairs();
   const FORMAT = /markdown|html|pdf|纯文本|\.txt|docx|word/i;
