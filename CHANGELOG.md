@@ -4824,6 +4824,34 @@ G116 保持打开，带着 `drag-handle` 这一个**具体**的问题下去。
 教训一条：**清盘之前先查谁指着它**（`restore-pending.json`、`*.pre-restore.*` 都是引用方），
 这条与 G97"残骸要有上界"不冲突 —— 上界要收，但按引用收。
 
+### 修掉（2026-10-14 第六十四批）：那条被死 CSS 喂着的 44pt 判据改读活的徽标，并加了一条"类必须有消费者"的通判（vitest-only，产品一字未动 ⇒ 不升版本）
+
+第五十六批量出：`.badge` / `.badge__glyph`（`base.css:499-542`）整族**没有模板消费者**，
+而 `tokens.spec.ts:156` 那条"§5 命中下限走 `--touch`"读的正是它 —— 一条永远绿、永远抓不到东西的腿。
+死 CSS 本身删它要整跑证人（今天给不出），但**这条腿不用等**：把主语换成活的就能立刻修好。
+
+改成读活的 `SyncBadge.vue` 里那两块：`.syncbar__title`（徽标那一行）与 `.syncbar__action`（「重试 / 去设置」那颗）。
+后一颗是**这批改读时顺带捡回来的**：它自己的注释写着"这一颗以前是 28 高，只是平时不渲染，
+所以那条 44pt 的全应用扫描一直没扫到它"—— 一处被"平时不渲染"挡住的漏网之鱼，恰好只有静态这一层守得住。
+
+再加一条**通判**（这才是这一格真正的修法）：这一族点名的每个类（`btn` / `textarea` / `input` / `input-hit` /
+`syncbar__title` / `syncbar__action`）都必须作为**完整 token** 出现在某个 `.vue` 的 `class="…"` 或 `:class` 字面量里 ——
+按空白切分再比，不许子串蒙（`.btn` 被 `.btn--primary` 蒙过去就是当初那种绿法）。扫描走 `node:fs` 读盘，
+理由与 `motion.spec.ts` 那条老教训同一个：`?raw` glob 会读旧/读空，而这一条判据必须能被"改个类名"验出它有牙。
+
+**四刀各红一次**（`.logs/token-leg-knives.sh`，跑完按字节还原并断言 `SyncBadge.vue` 干净）：
+KT1 徽标那行掉 `min-height` ⇒ 红在命中那一臂（顺带证明 `.vue?raw` 读到的是当场那份，不是旧模块）；
+KT1b 动作按钮掉 `min-height` ⇒ 同一腿另一臂红（两颗各有各的刀，不靠"这条腿红过一次"交差）；
+KT2 把模板里的 `class="syncbar__title"` 改名 ⇒ 红在消费者那条（**这就是"死 CSS 不许再喂判据"那一刀**）；
+KT3 名单里塞一个没有消费者的类 ⇒ 红在消费者那条（证明这条不是恒真）。
+
+一处环境改动按实记：`tokens.spec.ts` 顶部加了 `// @vitest-environment node` ——
+它从头到尾只解析 CSS 文本与做对比度算术，不碰 DOM，而 `import.meta.url` 在 jsdom 里是 http scheme，
+`fileURLToPath` 当场报 `The URL must be of scheme file`（第一次跑就是这样红的，红的是我的仪器不是产品）。
+改完之后那 18 条在 node 环境下照旧全绿。
+读数：`vitest run src/styles/tokens.spec.ts` **18/18**、typecheck 0、eslint 0、arch-check **40/40**。
+`.badge` 那块死 CSS 仍在盘上（连同 `motion.spec.ts` 台账里那一条），等安静机删；**但它已经不再喂任何一条判据**。
+
 ### 工装（2026-10-14 第六十三批）：整跑加了"现场预检"——不再用 15 分钟去验证这台机器跑不动（`scripts/verify-layout.mjs`）
 
 今天的真实损失不是红判据，是**三遍整跑都在 0 条真 FAIL 的情况下断掉**：

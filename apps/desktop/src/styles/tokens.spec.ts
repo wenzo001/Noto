@@ -1,8 +1,37 @@
+// @vitest-environment node
+// ↑ 这一份从头到尾只解析 CSS 文本与做对比度算术，不碰 DOM；改成 node 环境是为了能像
+//   `motion.spec.ts` / `negativePromises.spec.ts` 一样用 `node:fs` 直接读盘（`import.meta.url`
+//   在 jsdom 里是 http scheme，`fileURLToPath` 当场就报 "The URL must be of scheme file"）。
 import { describe, expect, it } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import tokensCss from './tokens.css?raw';
 import baseCss from './base.css?raw';
 import editorCss from './editor.css?raw';
+import syncBadgeSfc from '../components/SyncBadge.vue?raw';
 import { stripComments } from '../testing/corpus';
+
+/**
+ * 活的同步徽标那一行 `.syncbar__title` 的规则块。
+ * 它长在 `SyncBadge.vue` 的 scoped 样式里，不在 base.css —— 所以这一块的读取要跟着走那份 SFC 的源文本。
+ * 正则要求 `{` 紧跟类名，`.syncbar__title:hover` 与 `[data-badge=…]` 那些变体不会被误当成这一块。
+ */
+const syncBlock = (() => {
+  const m = /\.syncbar__title\s*\{([^}]*)\}/.exec(stripComments(syncBadgeSfc));
+  return m?.[1] ?? '';
+})();
+
+/**
+ * 同一份 SFC 里那颗**动作按钮** `.syncbar__action`。它值得单独钉：
+ * 文件里那段注释自己写着"这一颗以前是 28 高（「重试」也是同一族，只是它平时不渲染，
+ * 所以那条 44pt 的全应用扫描一直没扫到它）"—— 一处被"平时不渲染"挡住的漏网之鱼，
+ * 正该由静态这一层守着（整跑那条通扫只在它出现时才看得见它）。
+ */
+const syncActionBlock = (() => {
+  const m = /\.syncbar__action\s*\{([^}]*)\}/.exec(stripComments(syncBadgeSfc));
+  return m?.[1] ?? '';
+})();
 
 /**
  * design token 契约测试：
@@ -153,12 +182,55 @@ describe('token 结构约束', () => {
       new RegExp(`(^|\\n)\\s*${property}:\\s*var\\(${token}\\)\\s*;`).test(text);
 
     expect(declares(body('\\.btn'), 'min-height', '--touch'), '.btn 的命中没有走 --touch').toBe(true);
-    expect(declares(body('\\.badge'), 'min-height', '--touch'), '.badge 的命中没有走 --touch').toBe(true);
+    // ⚠ 这一格以前读的是 `.badge`（`base.css:500`），而 `.badge` / `.badge__glyph` 整族**没有任何模板消费者**
+    // —— 活的徽标是 `SyncBadge.vue` 的 `.syncbar*`（`data-badge` 挂在那儿）。也就是说这条腿今天红不起来也绿得毫无意义：
+    // 谁把那 44 改掉，屏幕上没人用它，判据照旧绿。2026-10-14 把它换成**活的那一颗**，
+    // 并加了下面那条"每条腿点的选择器都得真有消费者"的通判 —— 同一族坑不许换个位置再犯。
+    expect(declares(syncBlock, 'min-height', '--touch'), '.syncbar__title（活的同步徽标那一行）的命中没有走 --touch').toBe(true);
+    expect(declares(syncActionBlock, 'min-height', '--touch'), '.syncbar__action（「重试 / 去设置」那颗）没有走 --touch —— 它平时不渲染，整跑的通扫看不见它，只能由静态这一层守').toBe(true);
     expect(declares(body('\\.input-hit'), 'min-height', '--touch'), '.input-hit 那层没有把命中补回 --touch').toBe(true);
     expect(declares(body('\\.input'), 'height', '--h-input'), '.input 的涂装没有钉死在 --h-input（只写 min-height 会被自然高度顶过去）').toBe(true);
     expect(declares(body('\\.input'), 'min-height', '--h-input'), '.input 的 min-height 没跟着走 --h-input，共用那条 44 就会赢').toBe(true);
     // 共用那一档留给 `.textarea`：多行框要是被顺手削成 36，编辑区就塌了
     expect(declares(body('\\.textarea'), 'min-height', '--touch'), '共用的那一条不再给 textarea 撑 44').toBe(true);
+  });
+
+  /**
+   * 上面那条腿被死 CSS 喂着，这件事本身得有执行者 —— 否则下一次再有一格长成那样（把类改名、
+   * 把组件换成别的画法、把整族搬进 `SyncBadge.vue`），判据还是会**安静地**失去主语。
+   *
+   * 判法：这条规格里点名的每一个类，都必须在某个 `.vue` 的 `class="…"` 里作为**完整的一个 token** 出现
+   * （不是子串：`.btn` 不许被 `.btn--primary` 之外没有的样子蒙过去 —— 两边都按空白切分再比）。
+   * ⚠ 扫描走 `node:fs` 直接读盘，不走 `?raw` glob：`motion.spec.ts` 那条老教训是"刚改过的文件 glob 会读旧/读空"，
+   * 而这一条判据的存在意义恰恰是要能被"改个类名"这种变异验出它有牙。
+   */
+  it('这一族点名的每个类都必须真有模板消费者（不许被死 CSS 喂着）', () => {
+    const vues: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const abs = join(dir, entry.name);
+        if (entry.isDirectory()) walk(abs);
+        else if (entry.name.endsWith('.vue')) vues.push(readFileSync(abs, 'utf8'));
+      }
+    };
+    walk(fileURLToPath(new URL('..', import.meta.url)));
+    expect(vues.length, '一个 .vue 都没扫到 ⇒ 这条是空判据').toBeGreaterThan(10);
+    expect(syncBlock.length, '读不到 .syncbar__title 那个规则块（上面那条"活的徽标"就成空判据了）').toBeGreaterThan(10);
+    expect(syncActionBlock.length, '读不到 .syncbar__action 那个规则块（上面那颗动作按钮就成空判据了）').toBeGreaterThan(10);
+
+    const used = new Set<string>();
+    for (const text of vues) {
+      for (const m of text.matchAll(/class="([^"]*)"/g)) {
+        for (const token of (m[1] ?? '').split(/\s+/)) if (token) used.add(token);
+      }
+      // `:class="['a', cond ? 'b' : 'c']"` 这种绑定里的字面量也算消费者
+      for (const m of text.matchAll(/:class="([^"]*)"/g)) {
+        for (const lit of (m[1] ?? '').matchAll(/'([\w-]+)'/g)) used.add(lit[1] ?? '');
+      }
+    }
+    const NAMED = ['btn', 'textarea', 'input', 'input-hit', 'syncbar__title', 'syncbar__action'];
+    const orphans = NAMED.filter((c) => !used.has(c));
+    expect(orphans, `这些类被判据点名，却没有任何模板真用它（死 CSS 会把判据喂成恒绿）：${JSON.stringify(orphans)}`).toEqual([]);
   });
 
   it('尊重系统"减少动效"', () => {
