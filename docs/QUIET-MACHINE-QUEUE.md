@@ -27,7 +27,8 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 
 ## 这一份**不**包含的（别在这里顺手做）
 
-- **#90 剩下的 `.force-show`** 与 **D13 / D14 / D15 / D16 / #93** —— 等纸面拍板，拍完的当天才动判据/CSS。
+- ~~**#90 剩下的 `.force-show`** 与 **D13 / D14 / D15 / D16 / #93** —— 等纸面拍板~~ ⇒ **这一族 2026-10-16 已全部拍齐**（A8–A10 + D15 已落 `e3cdbf5`），
+  队列里现在剩下的是**执行**：#90 那一半已做完，#99/D17 那一半（删 `base.css:194`）还缺一遍整跑证人。
 - **#83 / #89 / #88** —— 它们的修法落在 `crates/notera-host/src/lib.rs`、`apps/desktop/src-tauri/src/lib.rs`、`apps/desktop/src/platform/caps.ts` 这一族文件上；开工前先确认并行那一批已经落地，否则树不干净、上面第 0 步就过不去。
 - 任何"再跑一遍看看"的重复整跑：一遍改前一遍改后就是全部证据，多跑的是成本不是信心。
 
@@ -45,7 +46,8 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 **前提更新（原第 30/31 行已被这次拍板改掉一半）**：
 - D15 / D16① / #93 于 2026-10-16 拍完（见 `docs/design/SPEC-AMENDMENTS.md` A8、A9 与 `NEEDS-OTHER-MACHINE-TESTING.md` 那三行）⇒
   **`.force-show` 不再"等拍板"**，它现在就是队列里的一步（#90 剩下那一半）。
-  D13、D14 与 D16 的 ②③ **仍未拍**，别当已裁定。
+  D13、D14 与 D16 的 ②③ 也在**同一天第二批**拍完（D13=A、D14=A、D16②=把手道算版心外、D16③=搜索框外框底→第一行行顶 ±1）
+  ⇒ 台账见 `SPEC-AMENDMENTS.md` **A10** 与 `NEEDS-OTHER-MACHINE-TESTING.md` 的"第二批拍板"一节；这一列现在**没有待拍的格子**了。
 - 并行那一路滞留三天的 7 份未提交文件已按用户拍板**撤回主干**，快照存在 `.logs/parallel-caps-batch-20261013.patch`
   （`git apply --reverse --check` 验过可原样落回）⇒ **#83 / #89 的"缺文件所有权"这条阻塞解除**，现在只缺实现与整跑证人。
 
@@ -98,3 +100,28 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 - **接手第一步**：等提交额度回到 2 GB 以上，先 `LANE_PREFLIGHT_ONLY=1` 出数，再跑
   `pnpm --dir apps/desktop test` + `node scripts/arch-check.mjs` 复绿，然后才接 `.logs/leg74-motion-rendered-pending.patch`
   （6284 字节，04:09 sweep 之后仍在、`apply --check` 干净，另存了一份在 `/tmp/leg74-motion-rendered-pending.patch.bak`）。
+
+## 04:18 补：腿 74 第一遍证人跑被**我自己的并发**挤挂了 —— 签名留在这儿当对照
+
+补丁已接上（`git apply` 干净、`node --check` 过），04:04 起的那一遍在 **336 PASS / 5 FAIL** 处**崩在半路**：
+`lane-exit=1`（又是只读日志正文才看到的，后台通知照旧报 0 —— 见上面第二条"别再做错的事"）。
+崩点是 `scripts/verify-layout.mjs:1603` 的 `waitForSelector('[data-testid^="note-row-"]')` 超时 15 s，**腿 74 根本没轮到**。
+
+五条红的形状全是资源侧，不是产品侧：
+```
+FAIL 宽 1440：确认删除之后那一行真的从界面上没了 —— {"row":true,"rows":7,"before":7,"核心还认它":false}
+FAIL 宽 1440：console error 为零 —— Failed to load resource: net::ERR_NO_BUFFER_SPACE
+FAIL ⑫ / ⑬ / 宽 390·⑭：console error 为零 —— net::ERR_INSUFFICIENT_RESOURCES（⑬⑭ 各三次）
+```
+"核心还认它 = false 而界面还有 7 行"看着像产品的，但它排在三条 `ERR_INSUFFICIENT_RESOURCES` 之后 ——
+请求挂掉时列表失效那条边本来就走不完，这一条**不许单独当缺陷引用**。
+
+**根因是我自己**：`apps/desktop/node_modules/.vite/vitest/…/results.json` 落款 **12:11:27**，正在这遍的窗口（≈12:04→12:18:30）里
+—— 04:09 那四次 V8 OOM 的单测尝试还没散干净，我就把 lane 挂上了后台。这正是本仓记过两次的那条
+（[[lane-hygiene-fresh-binary-and-step-interference]] / 上面第 15 行"跑 lane 期间不要有任何本地负载"）。
+⇒ **这一遍的数作废**，不进任何对读；04:21 在额度回到 **7.96 GB**、机器上只剩 dev(5173=200) 与桥之后重挂了一遍（`.logs/lane-91-leg74.log`）。
+
+**同时补一条便宜的旁证（不替代整跑）**：`.logs/motion-rendered-probe.mjs` 在 04:19 用真 chromium 读了**渲染后**的 computed style，
+腿 74 抄的那四个数逐条对上 —— `.btn` `0.12s × 3` + `cubic-bezier(0.2, 0, 0, 1)`、抽屉 `.pane--sidebar` `0.22s`、
+`.dock__glyph[data-spin]` `sync-spin 1.4s linear infinite`；`reducedMotion:'reduce'` ⇒ 三处全 `1e-06s` 且循环变 `1`；
+撤掉媒体条件反向对照 ⇒ 回到 `0.12s`。**这条只证"产品那四个数是真的"，不证"腿 74 在门禁里会红"**（牙还没下）。
