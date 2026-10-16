@@ -161,3 +161,20 @@ git diff --stat HEAD -- apps/desktop/src/styles/base.css   # 必须为空
 node .logs/leg74-predicate-check.mjs             # 必须回到 btn_曲线_每一档=true
 ```
 ⚠ 同族教训见 [[mutation-harness-kill-leaves-product-mutated]]：后台任务被杀不等于变异被撤销。
+
+## 06:04 补：#96 我没做完（HEAD 保持绿），但把它量窄到"只差一块"
+
+写了证人 ⇒ **前置断言当场把它自己否掉了**，这正是要的效果：`Injection::status("GET *", 500)` 之后
+`sync_status()` 是 `{phase:"provisioning", badge:"offline", message_key:None, retryable:false}` ——
+**500 不点亮「重试」**，所以"先发可重试的一发、再发确定性的一发"这个形状用网络故障造不出来。
+摘掉那四处 `v.retryable = false` 的判据我上次交过一条**空转的**（夹具开局就是 false），这次没重犯：前置写成了断言。
+
+这一位**只有三个来源**（读码 + 现成证人）：`st.rejections > 0`（`lib.rs:3358-3361`）、让路 `SyncEvent::Deferred`（`:3429-3432`，
+证人现成在 `tests/sync_once.rs:767`，夹具整段在 `:700-770`：A 持租 ⇒ B 让路 ⇒ B 的 view 是 `leaseHeld` + `retryable=true`）、
+以及 `SyncEvent::Failed{retryable}`（`:3462-3473`，由引擎错误类别决定）。
+⇒ **只差一块**：让"撞确定性闸"发生在"让路之后"、同一台设备上。候选 (A) 让路后覆盖写远端 protocol doc 的 `root_id`
+⇒ 命中 `:2380`（`manifest_sha(&srv)` 这类直接读服务器现场的助手已有，`:191`/`:919` 的 `Injection{…}` 写法可参照）；
+候选 (B) 让路后用 `AccountDraftCmd`（`tests/sync_once.rs:13` 已 import）换目录 —— **动手前先量**它会不会顺带把 SyncView 那一位清掉，
+不清才是证人，清了就和 ADR-0018 否证我上次那句"换账户造 stale"是同一个坑。
+两种结局都算 #96 完成：**造出现场当证人**，或**证明没有任何可达状态能在撞闸前留 true** ⇒ 那四行连注释一起删成冗余。
+本批一个字未提交（`git restore` 回 `a514fc3`，`sync_once` 复跑 16/0、1 ignored）。
