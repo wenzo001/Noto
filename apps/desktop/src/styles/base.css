@@ -195,10 +195,6 @@ button {
   display: none;
 }
 
-.app-shell[data-layout='one'][data-pane='list'] .pane--editor.force-show {
-  display: flex;
-}
-
 .app-shell[data-layout='three'][data-sidebar='collapsed'] .pane--sidebar {
   display: none;
 }
