@@ -179,6 +179,24 @@ node .logs/leg74-predicate-check.mjs             # 必须回到 btn_曲线_每�
 两种结局都算 #96 完成：**造出现场当证人**，或**证明没有任何可达状态能在撞闸前留 true** ⇒ 那四行连注释一起删成冗余。
 本批一个字未提交（`git restore` 回 `a514fc3`，`sync_once` 复跑 16/0、1 ignored）。
 
+## 07:20 补：`cargo test --workspace` 在本机跑不动 —— 是**额度**，不是代码；今天的核心改动另有读数
+
+07:18-07:20 想给今天那些 `lib.rs` 改动补一遍 **workspace 级 Rust 全量**，两条命令都红，但报错形状是链接器层的：
+`only metadata stub found for rlib dependency core` / `found invalid metadata files for crate serde` /
+`linking with x86_64-w64-mingw32-gcc failed: exit code 1`，同一时刻 `FreeVirtualMemory` = **1.98 GB**
+⇒ 与今天那四次 V8 `Zone Allocation failed` 同族（薄额度），**不是 `import_files` 那批改坏了**。我第一版把它写成"混了两套 toolchain"也是**猜错**，`--lib` 那条一跑就把它否证了。
+
+**今天的核心改动实际有的读数**（HEAD `fe501ed`）：
+`cargo +stable-x86_64-pc-windows-gnu test -p notera-host --lib` ⇒ **56 passed / 0 failed / 0 ignored**
+（跑到 `lib.rs` 内联 `mod tests`，含 `:4669`、`:4824-4828`、`:5151` 那几条 retryable 语义与 `every_store_error_keeps_its_own_code`）；
+外加 `--test sync_once` **19/0**、`--test limits_and_overwrite` **4/0**、前端 **75 files/75 passed**、`arch-check 40/40`、整跑 **782/0**、`fmt --check` 0。
+
+**仍缺**：其它 crate（`notera-net` / `notera-sync` / `notera-store` / `notera-webdav`）的单测与集成测试全量。
+补法：额度 **≥3 GB** 时跑 `cargo +stable-x86_64-pc-windows-gnu test --workspace -- --test-threads=1`（今天稳定那两遍是 3.09 / 7.96 GB）。
+⚠ **别为它 `cargo clean`** —— 这台机器的 target 重建代价今天已经把额度打到 0.51 GB 一次（见下面 06:39 那一节与 [[park-half-fixes-as-patch-and-record-blocked]]）。
+CI 也覆盖这一格，但 CI 现在卡 #98 的 `zip` 审计 ⇒ **"CI 绿"这句依旧不许引用**。
+
+
 ## 06:39 补：我想为 0.0.135 补那遍整跑，结果**把开发桥弄没了**——接手第一件事是把桥起回来
 
 > ⚠ **本节结论已被 07:13 的那一遍推翻，先看下面这条更正再决定要不要照这一节做**（这一节留在台上是为了记我错在哪）：
