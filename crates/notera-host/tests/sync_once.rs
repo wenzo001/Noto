@@ -1410,6 +1410,67 @@ async fn deterministic_failure_clears_a_retry_bit_left_bright_by_yielding() {
     );
 }
 
+/// #96 的第二处证人：`foreign_root`（`lib.rs:2399-2403`）同样不许继承让路那一轮点亮的「重试」。
+///
+/// 上一批给 `auth_failed` 立证人时量出来：这一位**只有**让路 / 本地拒收 / 引擎标了可重试的那一发会点亮，
+/// 而注入 500 走的是"根本不碰 view"那一支（`:2314`）—— 所以剩下三处（`root_mismatch` ×2、`foreign_root`）
+/// 需要的是"**先让路、再撞确定性闸**"这个顺序，而 `foreign_root` 的现场不必改远端 `root_id`：
+/// **把协商那一纸抹掉、清单留着**，就是"这个目录已被别人用过但没有 protocol.json"那句原话。
+/// 用的是 `Backend::Fs` 盘上真目录 + `restart()`（Fs 那侧按盘重放 —— 见 [[test-webdav-injection-blindspots]]）。
+#[tokio::test]
+async fn foreign_root_clears_a_retry_bit_left_bright_by_yielding() {
+    let dav = Tmp::new("dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    pretend_no_strong_etag(&srv).await;
+
+    let a = Device::boot("froot-a", &url);
+    a.app
+        .create_note(&a.app.default_folder_id().unwrap(), doc("A 的先手"))
+        .unwrap();
+    let st_a = a.app.sync_once().await.expect("A 的一轮");
+    assert!(st_a.pushed >= 1, "A 要先推上去：{st_a:?}");
+
+    // ① X 空库入伙（协商同一根）、后写内容、再走一轮 ⇒ 撞 A 的新鲜租约 ⇒ 让路，这一位亮起来。
+    let x = Device::boot("froot-x", &url);
+    x.app.sync_once().await.expect("X 先入伙");
+    x.app
+        .create_note(&x.app.default_folder_id().unwrap(), doc("X 的后手"))
+        .unwrap();
+    let _ = x.app.sync_once().await;
+    let after_yield = x.app.sync_status().unwrap();
+    assert_eq!(
+        after_yield.message_key.as_deref(),
+        Some("sync.leaseHeld"),
+        "前置不成立：X 这一轮没让路，第 ② 步就退化成空转 —— {after_yield:?}"
+    );
+    assert!(
+        after_yield.retryable,
+        "前置不成立：让路是可重试状态，这一位没亮 —— {after_yield:?}"
+    );
+
+    // ② 协商那一纸没了、清单还在 ⇒ 远端"已被用过"，绝不允许就地初始化（§2）。
+    let proto = dav.path().join(".notes").join("protocol.json");
+    assert!(
+        proto.is_file(),
+        "前置不成立：盘上找不到协商那一纸 {proto:?}"
+    );
+    std::fs::remove_file(&proto).unwrap();
+    srv.restart().await;
+
+    let _ = x.app.sync_once().await;
+    let status = x.app.sync_status().unwrap();
+    assert_eq!(
+        status.message_key.as_deref(),
+        Some("sync.foreign_root"),
+        "第 ② 步要落在 foreign_root 那一发上；换键说明现场没造成 —— {status:?}"
+    );
+    assert!(
+        !status.retryable,
+        "确定性失败不许继承让路那一轮的「重试」—— {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn deterministic_sync_failure_does_not_offer_retry() {
     let srv = TestServer::start(Backend::Mem).await;

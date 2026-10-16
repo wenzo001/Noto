@@ -4926,6 +4926,21 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 判据（2026-10-16 第九十四批）：#96 第二处会红的证人 —— `foreign_root` 也接上了（`Fs` 后端 + 盘上抹掉那一纸，不升版本）
+
+第九十三批只给 `auth_failed` 立了证人，另三处仍空。这一批补 `foreign_root`（`lib.rs:2399-2403`），
+**不需要给工装加任何新能力**：那句缺陷的原话就是"这个目录已被别人用过但没有 `protocol.json`"，
+所以用 `Backend::Fs`（盘上真目录）+ `std::fs::remove_file` 抹掉那一纸 + 现成的 `srv.restart()`（Fs 那侧按盘重放，见 [[test-webdav-injection-blindspots]]）就把现场造出来了。
+
+证人 `foreign_root_clears_a_retry_bit_left_bright_by_yielding`：弱 ETag 开租约 ⇒ A 先入伙推上去并贴住租约 ⇒ X 空库入伙、后写内容、再一轮 ⇒ 让路
+（**前置两条**：`message_key==sync.leaseHeld` 且 `retryable==true`，外加"盘上那一纸确实在"）⇒ 抹掉那一纸并重启服务器 ⇒ X 再一轮 ⇒ 断 `sync.foreign_root` 且 `!retryable`。
+**刀**：只摘 `:2403` 那一行 ⇒ 该判据红，红行打印出
+`SyncStatusDto { phase:"error", badge:"failed", message_key:Some("sync.foreign_root"), retryable:true, pending_ops:1 }`
+⇒ 这一行同样是承重的（还原后 `sync_once` 全绿、`fmt --check`=0、`arch-check 40/40`，`lib.rs` 与 HEAD 逐字节一致）。不升版本：改的是判据。
+
+**还剩两处**：`root_mismatch` 的 `:2376` 与 `:2386`。同一把尺子已经够用，只差"远端那一纸里的 `root_id` 变成另一个值"这一步 ——
+`Fs` 后端下就是 `std::fs::write` 改那一纸再 `restart()`，不必新增注入位（`Injection` 没有伪造响应体那一类字段，`inject.rs:52-78`）。
+
 ### 判据（2026-10-16 第九十三批）：#96 那颗「重试」的权威第一次有了**会红的**证人（`auth_failed` 那一处；不升版本）
 
 第八十六批那四处 `v.retryable = false` 一直没证人 —— 我先前交的那条判据把四行全摘掉**照样绿**
