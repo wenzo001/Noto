@@ -4913,6 +4913,48 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 所以以后每次清点，每条待办至少配一条能证伪它前提的 grep / 一次 `--check`，写进那条的台账里（这也是 `.logs/*-superseded.patch` 那两份的由来）。
 本批只动台账与任务描述 ⇒ 不升版本。
 
+### 界面（2026-10-16 第八十六批）：那颗「重试」的权威交回核心 —— 前端不再从"失败了"推出"可以重试"（0.0.134，#92 / G129）
+
+**缺陷的形状**：`stores/sync.ts` 的 `case 'failed': default:` 一直写死 `retryable: true`，
+而**核心早就有这一位**（`SyncView.retryable`，`crates/notera-host/src/lib.rs:274`，`sync_status` DTO 在 `:3297` 原样发出去，
+`:4809` 那族 Rust 断言还专门守着"retryable 只许给重试可能成功的那一类"）。
+于是 §4.3 那一发 `sync.root_mismatch`（两库撞同一个远端目录，屏幕上是"这个服务器上已经是另一个 Noto 库了 / 请改路径"）
+**同一屏画着一颗点得着的「重试」**，而它重试一百次是同一个结果 —— 这是把决定权假装交给用户的那种谎。
+
+**改了两处**：
+- 折叠不再自己猜：`retryable: signal.retryable === true` —— **不带这一位一律按"不许点亮"**；
+- `applySignal` 在 `failed` 之后**立刻补问一次 `sync_status`**，让权威决定这颗按钮画不画
+  （`BusEvent::Sync` 只带 badge / progress / errorCode，不带这一位 ⇒ 事件那一发必然是 undefined）。
+  问不到就维持"不画"：**少一颗按钮是可恢复的，一颗点不动的按钮是对用户的谎**（§4.9），这条取舍写在代码注释里。
+
+**测试跟着口径改了**（`stores/sync.spec.ts` 那条"失败带 messageKey"以前断的是 `retryable === true` —— 它当时在给这个缺陷背书）：
+现在同一格里两条臂各钉一个方向：**不带这一位 ⇒ false**、**核心明确给 true ⇒ true**。
+
+**一条要按实记下的空证人**（我没有拿它当"这一半已验"）：另加的 Rust 判据
+`crates/notera-host/tests/sync_once.rs::deterministic_sync_failure_does_not_offer_retry`
+在**真 DTO** 上断 `badge=failed` + `message_key=sync.root_mismatch` + `!retryable`，跑是绿了；
+但我给它下刀复验牙齿时 —— **把我新加的四处 `v.retryable = false;` 全摘掉，它照样绿**。
+原因：这条夹具里那一位从 `initial()` 起就没被任何一步置成 `true`，所以"它为 false"不是我那四行的功劳。
+⇒ 那四处（`sync.auth_failed` / `sync.root_mismatch` ×2 / `sync.foreign_root`）是**防御性**的：
+`retryable` 是常驻字段，只有 `needsCredentials` 那一支自己清过 ⇒ "上一轮是可重试、这一轮撞根"那个序列**理论上会留下真**，
+但我**没造出那个现场**。这条按可证伪台账记在任务 #92 上（要的是"能复现出 stale 载荷的那台设备序列"，不是再补一句断言）。
+上面那条 Rust 测试本身仍然保留 —— 它守的是"撞根这一发不许报可重试"这个结果，只是**它不给我那四处当证人**。
+
+**读数**：**775 PASS / 0 FAIL / exit 0**，但**这一遍比基线少一条 PASS，原因要按实写在这儿**——
+腿 54 的"console error 为零"那一条**红了**，被门禁自己的环境噪声名单放行：
+`cmd/stats ← net::ERR_NO_BUFFER_SPACE`（同一遍的 `requestfailed` 也记到这一发）。
+账是对的：775 PASS + 1 条放行 = 基线的 776。基线那三遍（`82a1f5e` / 第八十二批 / 第八十四批）**都没有这一条放行**，这是第一遍有。
+**与本批的关系**：本批让"每一次 failed 折叠"多发一发 `sync_status` 补问 ⇒ 失败路径上的 IPC 密度变高，
+**可能**是它把这台机器（loopback 吞吐有限）推到 socket 缓冲不足；但我**没有复现出因果**（同一条腿在基线三遍里都过）。
+处置：**不当缺陷、也不拿名单当遮羞布** —— 记成观察点：**下一次整跑若再现，且仍只出现在"有失败折叠"的那一腿**，
+就把那发补问改成去抖（合并同一 tick 内的多次 failed），而不是把名单再放宽一格。
+其余便宜的判据：`pnpm --dir apps/desktop test` **685 / 0**、`typecheck` 0 错、`arch-check` **40 / 40**
+（中途红过一次 `hygiene:scratch-budget-guarded`，是本会话的 lane 日志与探针把 `.logs` 顶过预算，
+`clean-scratch` 收完复绿 —— 那条守卫量的是真盘体积，没有"只是抖动"的解释余地）、
+`cargo test -p notera-host --lib` **56 / 0**、新加那条集成测试单独跑绿。
+**桥按 PID 停旧起新并重建过二进制**（`notera-cli` 0.0.134，10:51）—— 不留旧进程测旧代码。
+**版本**：改了产品 ⇒ `0.0.133 → 0.0.134`。
+
 ### 清理（2026-10-16 第八十五批）：`.force-show` 那条逃生门删掉了（D15 用户拍 A）—— 顺带把我自己先前那句"它上面那条是活的"收窄
 
 `base.css:198-200` 的 `.app-shell[data-layout='one'][data-pane='list'] .pane--editor.force-show { display: flex }`

@@ -2296,6 +2296,7 @@ impl App {
                     v.phase = Phase::Error;
                     v.badge = Badge::Failed;
                     v.message_key = Some("sync.auth_failed".into());
+                    v.retryable = false; // 确定性失败：重试一百次也是同一个结果（§4.9 那颗「重试」的权威在这一位）
                 });
                 "sync.auth_failed"
             }
@@ -2361,6 +2362,7 @@ impl App {
                             v.phase = Phase::Error;
                             v.badge = Badge::Failed;
                             v.message_key = Some("sync.root_mismatch".into());
+                            v.retryable = false; // 确定性失败：重试一百次也是同一个结果（§4.9 那颗「重试」的权威在这一位）
                         });
                         return Err("sync.root_mismatch");
                     }
@@ -2370,6 +2372,7 @@ impl App {
                             v.phase = Phase::Error;
                             v.badge = Badge::Failed;
                             v.message_key = Some("sync.root_mismatch".into());
+                            v.retryable = false; // 确定性失败：重试一百次也是同一个结果（§4.9 那颗「重试」的权威在这一位）
                         });
                         return Err("sync.root_mismatch");
                     }
@@ -2386,6 +2389,7 @@ impl App {
                         v.phase = Phase::Error;
                         v.badge = Badge::Failed;
                         v.message_key = Some("sync.foreign_root".into());
+                        v.retryable = false; // 确定性失败：重试一百次也是同一个结果（§4.9 那颗「重试」的权威在这一位）
                     });
                     return Err("sync.foreign_root");
                 }

@@ -30,6 +30,12 @@ export interface SyncSignal {
   progress?: Partial<SyncProgress> | null;
   errorCode?: string;
   messageKey?: string;
+  /**
+   * 「可重试」这一位**权威在核心**（`SyncView.retryable`，`sync_status` DTO 一直在发）。
+   * 事件那一发不带这一位（`BusEvent::Sync` 只有 badge / progress / errorCode），所以这里是
+   * `boolean | undefined`：**undefined 不许被当成"可以重试"** —— 见 `foldSyncEvent` 的 `failed` 分支。
+   */
+  retryable?: boolean;
 }
 
 const KNOWN_BADGES: readonly SyncBadgeKind[] = ['synced', 'syncing', 'offline', 'failed', 'idle'];
@@ -81,7 +87,10 @@ export function foldSyncEvent(state: FoldedSyncState, signal: SyncSignal, at: nu
         badge: 'failed',
         progress: null,
         messageKey: signal.messageKey ?? signal.errorCode ?? null,
-        retryable: true,
+        // 「重试」这一位不许在这里凭"失败了"就点亮：确定性失败（改路径 / 改配置 / 换凭据）重试一百次
+        // 是同一个结果，画一颗点得着的按钮就是对用户说谎（§4.9）。**undefined 一律按不可重试**，
+        // 真值只能来自核心的 `sync_status` DTO（`refreshStatus` 在 failed 之后立刻补问一次）。
+        retryable: signal.retryable === true,
       };
   }
 }
@@ -251,6 +260,30 @@ export const useSyncStore = defineStore('sync', () => {
 
   function applySignal(signal: SyncSignal): void {
     state.value = foldSyncEvent(state.value, signal, Date.now());
+    /**
+     * 事件那一发（`BusEvent::Sync`）只带 badge / progress / errorCode，**不带「可重试」这一位**，
+     * 而折叠里 undefined 一律按"不许点亮"。所以失败之后立刻补问一次 `sync_status`：
+     * 这一颗按钮画不画，权威在核心那一位上，不在界面上猜。
+     * 问不到就维持"不画"——少一颗按钮是可恢复的，一颗点不动的按钮是对用户的谎（§4.9）。
+     */
+    if (signal.badge === 'failed') {
+      void callCommand<{ badge?: string; messageKey?: string; retryable?: boolean }>(Commands.syncStatus, {})
+        .then((s) => {
+          if (s?.badge !== 'failed') return;
+          state.value = foldSyncEvent(
+            state.value,
+            {
+              badge: 'failed',
+              ...(s.messageKey ? { messageKey: s.messageKey } : {}),
+              retryable: s.retryable === true,
+            },
+            Date.now(),
+          );
+        })
+        .catch(() => {
+          // 核心问不到：维持不点亮，等下一次真事件或下一次轮询。
+        });
+    }
   }
 
   function setLink(next: LinkState): void {

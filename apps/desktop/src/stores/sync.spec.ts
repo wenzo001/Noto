@@ -28,7 +28,10 @@ describe('同步四态折叠', () => {
   it('失败带 messageKey：文案查表，绝不出现原始码', () => {
     const failed = foldSyncEvent(START, { badge: 'failed', errorCode: 'CertUntrusted' }, 5);
     expect(failed.badge).toBe('failed');
-    expect(failed.retryable).toBe(true);
+    // 「可重试」不许从"失败了"推出来 —— 那正是 G129 那颗假按钮的来源（确定性失败点它必然再失败）。
+    // 这一格两条臂各钉一个方向：**不带这一位 ⇒ 不许点亮**；核心明确给 true ⇒ 必须点亮。
+    expect(failed.retryable).toBe(false);
+    expect(foldSyncEvent(START, { badge: 'failed', errorCode: 'CertUntrusted', retryable: true }, 5).retryable).toBe(true);
     const text = messageFor(failed.messageKey ?? 'error.fallback');
     expect(text).toBe(messageFor('CertUntrusted'));
     expect(text).not.toMatch(/HTTP|412|500|status/i);

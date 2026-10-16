@@ -1348,3 +1348,41 @@ async fn accepting_the_peers_purge_after_a_restore_actually_purges_locally() {
     assert!(problems.is_empty(), "{}", problems.join(" ｜ "));
     srv.stop().await;
 }
+
+/// §4.9 那颗「重试」的权威是核心的 `retryable` 位 —— 界面无条件点亮它，就是在对确定性失败说谎。
+/// 这一条打在**真 `sync_status` DTO** 上（不是打在帮助函数的自洽上）。
+/// 反向对照在本文件里已经有：`lease_held...` 那一族断的是 `assert!(status.retryable, "让路是可重试状态")`
+/// ⇒ 同一个字段在可重试那一类上必须为真，所以"不许为真"这一条不是恒真。
+#[tokio::test]
+async fn deterministic_sync_failure_does_not_offer_retry() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+
+    // 对面先入伙协商根并写入内容 ⇒ 远端那个根属于**另一个**有内容的库
+    let peer = Device::boot("rootmismatch-peer", &url);
+    peer.app.sync_once().await.expect("对端入伙");
+    let pf = peer.app.default_folder_id().unwrap();
+    peer.app.create_note(&pf, doc("对面先写的那一篇")).unwrap();
+    peer.app.sync_once().await.expect("对端上去一轮");
+
+    // 本机：顺序反了 —— 先有内容、后入伙 ⇒ §2 的"两库并一库"闸门必须停手（`sync.root_mismatch`）
+    let mine = Device::boot("rootmismatch-mine", &url);
+    let mf = mine.app.default_folder_id().unwrap();
+    mine.app.create_note(&mf, doc("本机先写的那一篇")).unwrap();
+    let _ = mine.app.sync_once().await;
+
+    let status = mine.app.sync_status().unwrap();
+    assert_eq!(
+        status.badge, "failed",
+        "前置不成立：这一发根本没落到失败那一格，下面两条就是空转 —— {status:?}"
+    );
+    assert_eq!(
+        status.message_key.as_deref(),
+        Some("sync.root_mismatch"),
+        "要验的是确定性失败那一发，换键就说明夹具走岔了 —— {status:?}"
+    );
+    assert!(
+        !status.retryable,
+        "确定性失败不许点亮「重试」：改路径或改配置才有出路，重试一百次是同一个结果 —— {status:?}"
+    );
+}
