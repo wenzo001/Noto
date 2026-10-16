@@ -1471,6 +1471,71 @@ async fn foreign_root_clears_a_retry_bit_left_bright_by_yielding() {
     );
 }
 
+/// #96 的第三处证人：`root_mismatch` 的"**两个库指到同一个目录**"那一支（`lib.rs:2380-2386`）。
+///
+/// 与上一条同一把尺子（`Backend::Fs` + 盘上改写 + `srv.restart()`），差别只在现场造的是
+/// "远端那一纸还在、但里面的 `root_id` 换成了另一个库的根" —— 这正是 §2 拒绝并库的那一格。
+/// 顺序仍要先点亮可重试的那一位（让路），否则又是一条空转（第九十三批那条前置断言学到的）：
+/// ① 弱服务器开租约 ⇒ A 先入伙推上去；X 空库入伙（认下 A 的根，`state.root_id = Some(R1)`）；
+/// ② X 写下一篇再走一轮 ⇒ 撞 A 的新鲜租约 ⇒ 让路，`retryable` 亮（前置两条断言）；
+/// ③ 盘上把那一纸的 `root_id` 改成别的值并重启服务器 ⇒ X 再一轮 ⇒ `sync.root_mismatch` 且 `!retryable`。
+#[tokio::test]
+async fn remote_library_switch_clears_a_retry_bit_left_bright_by_yielding() {
+    let dav = Tmp::new("dav");
+    let srv = TestServer::start(Backend::Fs(dav.path().to_path_buf())).await;
+    let url = srv.base_url();
+    pretend_no_strong_etag(&srv).await;
+
+    let a = Device::boot("rwroot-a", &url);
+    a.app
+        .create_note(&a.app.default_folder_id().unwrap(), doc("A 的先手"))
+        .unwrap();
+    let st_a = a.app.sync_once().await.expect("A 的一轮");
+    assert!(st_a.pushed >= 1, "A 要先推上去：{st_a:?}");
+
+    let x = Device::boot("rwroot-x", &url);
+    x.app.sync_once().await.expect("X 先入伙（认下 A 的根）");
+    x.app
+        .create_note(&x.app.default_folder_id().unwrap(), doc("X 的后手"))
+        .unwrap();
+    let _ = x.app.sync_once().await;
+    let after_yield = x.app.sync_status().unwrap();
+    assert_eq!(
+        after_yield.message_key.as_deref(),
+        Some("sync.leaseHeld"),
+        "前置不成立：X 这一轮没让路 —— {after_yield:?}"
+    );
+    assert!(
+        after_yield.retryable,
+        "前置不成立：让路是可重试状态，这一位没亮 —— {after_yield:?}"
+    );
+
+    // ③ 把远端那一纸的根换成**另一个库**的根（同一目录、不同库 = §2 拒绝并库的那一格）。
+    let proto = dav.path().join(".notes").join("protocol.json");
+    assert!(
+        proto.is_file(),
+        "前置不成立：盘上找不到协商那一纸 {proto:?}"
+    );
+    let text = std::fs::read_to_string(&proto).unwrap();
+    let mut docv: serde_json::Value = serde_json::from_str(&text).expect("那一纸应是 JSON");
+    let old_root = docv["root_id"].as_str().unwrap_or_default().to_string();
+    docv["root_id"] = serde_json::json!("01111111111111111111111111111ffe");
+    std::fs::write(&proto, docv.to_string()).unwrap();
+    srv.restart().await;
+
+    let _ = x.app.sync_once().await;
+    let status = x.app.sync_status().unwrap();
+    assert_eq!(
+        status.message_key.as_deref(),
+        Some("sync.root_mismatch"),
+        "第 ③ 步要落在 root_mismatch 那一发上（原根 {old_root} 已被换成另一个库）—— {status:?}"
+    );
+    assert!(
+        !status.retryable,
+        "确定性失败不许继承让路那一轮的「重试」—— {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn deterministic_sync_failure_does_not_offer_retry() {
     let srv = TestServer::start(Backend::Mem).await;

@@ -4926,6 +4926,21 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 判据（2026-10-16 第九十五批）：#96 第三处证人 —— 远端换了库（`root_mismatch` 的"两库并一库"那一支）（不升版本）
+
+同一把尺子（`Backend::Fs` + 盘上改写 + `srv.restart()`，不新增任何注入能力）把 §2 那句"绝不并库"的现场造出来：
+X 空库入伙先认下 A 的根 ⇒ 写下一篇、再一轮撞 A 的新鲜租约 ⇒ **让路**（前置两条断言：`sync.leaseHeld` 且 `retryable==true`）
+⇒ 盘上把那一纸的 `root_id` 改成另一个库的值并重启 ⇒ X 再一轮 ⇒ 断 `sync.root_mismatch` 且 `!retryable`。
+
+**刀**：只摘 `lib.rs:2386` 那一行 ⇒ `cargo test -p notera-host --test sync_once` 是 **18 passed / 1 failed** ——
+红的**只有**这一条，红行是 `SyncStatusDto { phase:"error", badge:"failed", message_key:Some("sync.root_mismatch"), retryable:true, pending_ops:1 }`
+⇒ 这一行承重，而这一刀的"别的都照旧绿"顺带证明确性失败这一支被影响到的只有它自己。还原后 `fmt --check`=0、`arch-check 40/40`、`lib.rs` 与 HEAD 逐字节一致。
+
+**#96 剩下的只有 `:2376` 那一处**（"本机已有内容、却要接受别库的根"）。这一处我**不再假装量过**：
+它的进入条件是 `state.root_id == None` 且本机库非空，而 `None` 恰恰意味着这台设备**从来没有一轮走通到能点亮这一位的地方**
+（点亮的三处来源：让路 `:3429-3432` / 本地拒收 `:3358-3361` / 引擎给的 `Failed{retryable}` `:3462-3473`，都在协商走通之后才可能触发）。
+⇒ 下一遍要么造出一个把这三处之一点亮**而 `root_id` 仍是 `None`** 的现场（我这批没能造出来），要么按上面这段推导把那行连同注释删成冗余并留下这条推导作为依据 —— **两者都要有可复跑的读数或可指的行号**，别再交一条前置没断言的判据（[[assert-the-precondition-not-just-the-conclusion]]）。
+
 ### 判据（2026-10-16 第九十四批）：#96 第二处会红的证人 —— `foreign_root` 也接上了（`Fs` 后端 + 盘上抹掉那一纸，不升版本）
 
 第九十三批只给 `auth_failed` 立了证人，另三处仍空。这一批补 `foreign_root`（`lib.rs:2399-2403`），
