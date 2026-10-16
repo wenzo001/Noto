@@ -101,18 +101,32 @@ const MIN_COMMIT_GB = Number(process.env.LANE_MIN_COMMIT_GB || 2);
   const { execFileSync } = await import('node:child_process');
   let physGb = Number.NaN;
   let commitGb = Number.NaN;
+  let legacyGb = Number.NaN;
   try {
     const out = execFileSync('powershell', ['-NoProfile', '-Command',
-      "Get-CimInstance Win32_OperatingSystem | Select-Object @{n='PHYS';e={[math]::Round($_.FreePhysicalMemory/1MB,2)}},@{n='COMMIT';e={[math]::Round($_.FreeSpace/1MB,2)}} | Format-List",
+      // COMMIT 走 FreeVirtualMemory（= 系统提交额度余量），**不是** FreeSpace：
+      // 实测本机 `Win32_OperatingSystem.FreeSpace` 恒为 0（历史字段），拿它当提交余量会让这道闸永远拒绝开跑。
+      "Get-CimInstance Win32_OperatingSystem | Select-Object @{n='PHYS';e={[math]::Round($_.FreePhysicalMemory/1MB,2)}},@{n='COMMIT';e={[math]::Round($_.FreeVirtualMemory/1MB,2)}},@{n='LEGACY';e={[math]::Round($_.FreeSpace/1MB,2)}} | Format-List",
     ], { encoding: 'utf8', windowsHide: true, timeout: 20000 });
     physGb = Number((/PHYS\s*:\s*([\d.]+)/.exec(out) || [])[1]);
     commitGb = Number((/COMMIT\s*:\s*([\d.]+)/.exec(out) || [])[1]);
+    legacyGb = Number((/LEGACY\s*:\s*([\d.]+)/.exec(out) || [])[1]);
   } catch {
     // 量不到：不拦。下面那条 `!Number.isFinite` 分支会把"这一遍没有预检保护"打在日志里。
   }
+  /**
+   * 形状自检（2026-10-16 加）：物理内存明明宽裕、COMMIT 却读出 0 ⇒ 这是**读到了结构性为 0 的字段**，
+   * 不是机器真的没额度。那种读数只能判"量不到"（放行 + 报"这一遍没有预检保护"），
+   * 绝不能判"额度不够"—— 否则这道闸会在健康的机器上永远拒绝开工，而每次拒绝看起来都像有理由。
+   */
+  const looksBrokenRead = Number.isFinite(commitGb) && commitGb <= 0 && Number.isFinite(physGb) && physGb > 4;
+  if (looksBrokenRead) {
+    console.log(`  ⚠ 预检读数形状不对（物理 ${physGb} GB 却报提交额度 ${commitGb} GB；本机 FreeSpace=${legacyGb} GB）⇒ 判为"量不到"，不拿它拦人。`);
+    commitGb = Number.NaN;
+  }
   console.log(`现场预检：物理 ${Number.isFinite(physGb) ? physGb : '?'} GB · 提交额度余 ${Number.isFinite(commitGb) ? commitGb : '?'} GB · 闸门 ${MIN_COMMIT_GB} GB`);
   if (!Number.isFinite(commitGb)) {
-    console.log('  ⚠ 预检量不到（powershell 不可用或输出解析失败）⇒ 照旧开跑，但这一遍**没有**预检保护。');
+    console.log('  ⚠ 预检量不到（powershell 不可用、输出解析失败或读数形状不对）⇒ 照旧开跑，但这一遍**没有**预检保护。');
   } else if (commitGb < MIN_COMMIT_GB) {
     if (process.env.LANE_FORCE === '1') {
       console.log(`  ⚠ 低于闸门 ${MIN_COMMIT_GB} GB，但 LANE_FORCE=1 —— 是调用方决定要在这台机器上烧这一遍。`);
