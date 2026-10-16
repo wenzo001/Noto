@@ -81,3 +81,20 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 ② 判断"这一遍跑没跑"要读**日志正文里 `lane-exit=` 那一行**，不要信后台通知的 exit code ——
 `… | tee -a log` 会把管道尾巴的 0 报成结果（今天就这样把一次 `exit 3` 读成了"跑完了"）。
 
+
+## 04:10 补：这台机器现在连单测都跑不动 —— 今天晚些时候的"绿"要重打，别照抄
+
+`pnpm --dir apps/desktop test` 在 04:09 起**连撞四次 V8 OOM**
+（`MarkCompactCollector: young object promotion failed` / `Zone Allocation failed - process out of memory`），
+把堆上限压到 768 MB、`--maxForks=1` 也一样；同一时刻提交额度 0.55 → 1.34 GB。
+⇒ **这是环境，不是产品**：本仓记过同一条口径 —— worker 被挤挂时"0 条断言红"也不是读数（[[lane-hygiene-fresh-binary-and-step-interference]]）。
+
+**因此今天这些绿的有效范围要写清**（别让下一位照抄成"HEAD 已验"）：
+- **有效**：03:36 那次 **685 / 0** 与 arch-check 40/40 —— 它们跑在第八十六批**产品代码**（`stores/sync.ts` + `lib.rs` 四处）之上，
+  而那之后进主干的只有文档与 `Cargo.lock`（rustls 0.23.46，只动 Rust 侧依赖版本，不碰前端一行）。
+- **未重打**：`90cde92`（纯文档）之后的 HEAD 上，前端全量与 `cargo test --workspace` **没在这台机器上再跑过一遍**；
+  Rust 侧那半边由 CI 覆盖（`PR 门禁` 在同一条 commit 上排队中），**但 CI 的审计步骤因 `zip` 被 yank 仍红**（见 #98），
+  所以"CI 绿"这句话现在依然不许引用。
+- **接手第一步**：等提交额度回到 2 GB 以上，先 `LANE_PREFLIGHT_ONLY=1` 出数，再跑
+  `pnpm --dir apps/desktop test` + `node scripts/arch-check.mjs` 复绿，然后才接 `.logs/leg74-motion-rendered-pending.patch`
+  （6284 字节，04:09 sweep 之后仍在、`apply --check` 干净，另存了一份在 `/tmp/leg74-motion-rendered-pending.patch.bak`）。
