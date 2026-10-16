@@ -4926,6 +4926,24 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 判据（2026-10-16 第九十六批）：#96 收尾 —— 第四处证人 `:2376` 与其专属刀（`3861d77`，不升版本）
+
+第九十三～九十五批立了三处证人，第四处 `lib.rs:2369-2376`（"本机已有内容、却要接受别库的根"）一直构造不出来。
+07:26-07:27 先量清**为什么前两次白跑**：`lib.rs:1815` 在已有账户时直接 `Err(multi_account_unsupported)`（换账户这条路被产品设计封死），
+而 `state.root_id` 是**单调**的（全仓只有 `:1461` 新建时是 `None`，写入处 `:2368`/`:2423` 都是 `Some(..)`）⇒ 同一账户内不存在"先点亮、再回到 `None`"。
+**唯一可行的现场**是 `remove_account`（`:3134-3138` 只动 config、**不碰 view**）之后再配到第二个服务器。
+
+证人 `retry_bit_survives_account_removal_into_the_none_root_gate`：X 在 srv1 上**让路**（两条前置断言 `leaseHeld` + `retryable==true`）
+⇒ 撤账户 ⇒ 配到 srv2（对面 2 已在自己的根上建好库）⇒ 新 `sync_state.root_id == None` + 本机库非空 ⇒ 落 `:2369` 那一支
+⇒ 中间再断一次"换完账户、同步之前这一位仍是 `true`"（**这条绿了** ⇒ 那一位确实活着进了那一格）⇒ 最后断 `sync.root_mismatch` 且 `!retryable`。
+
+**刀**：摘掉 `:2376` 那一行 ⇒ `sync_once` **19 passed / 1 failed**，红的只有这一条，红行是
+`SyncStatusDto { phase:"error", badge:"failed", message_key:Some("sync.root_mismatch"), retryable:true }`
+⇒ 那行**承重**（它就是把"请改路径"与那颗必然没用的「重试」分开的闸）。`git restore` 单路径还原后 **20/0（1 ignored）**、`arch-check 40/40`（中途 39/40 是本会话在 `.logs` 堆的整跑日志撞到项数账，`clean-scratch` 删 3 项后回 40/40，同 #100）。
+
+⇒ **#96 至此四处全结：四处都有证人、四处都各自下过刀。** 本批只动测试，产品代码一字未改 ⇒ 不升版本；
+0.0.135 那遍整跑的 782/0 已记在第九十一批的追记（`b0d8690`）。仍欠的一格只有 #102 那条 workspace 级 Rust 全量（要提交额度 ≥3 GB）。
+
 ### 判据（2026-10-16 第九十五批）：#96 第三处证人 —— 远端换了库（`root_mismatch` 的"两库并一库"那一支）（不升版本）
 
 同一把尺子（`Backend::Fs` + 盘上改写 + `srv.restart()`，不新增任何注入能力）把 §2 那句"绝不并库"的现场造出来：
