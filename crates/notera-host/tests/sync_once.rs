@@ -1536,6 +1536,85 @@ async fn remote_library_switch_clears_a_retry_bit_left_bright_by_yielding() {
     );
 }
 
+/// #96 的第四处（也是最后一处）证人：`:2369-2376` 那一支（`root_id == None` 且本机库非空）。
+///
+/// 07:26-07:27 量清了构造方法（前两次失败的原因也记在任务 #96）：
+/// 换账户本身被 `:1815` 拒（`multi_account_unsupported`），而 `root_id` 是单调的（全仓没有一处把它清回 `None`）
+/// ⇒ 唯一可行的路是 **`remove_account` 之后再配**：`:3134-3138` 只动 config、**不碰 view**，
+/// 于是"让路点亮的那一位"能活到"新账户的新 `sync_state`（`root_id = None`）+ 本机库非空"这一格上。
+/// 中间那步前置断言是本条的重点：**它红就说明那一位活不过 `remove_account` ⇒ `:2376` 是结构性冗余**（那行该连注释删）；
+/// 它绿才轮到最后的证人。两种结局都算 #96 结，"没量过"不算（[[assert-the-precondition-not-just-the-conclusion]]）。
+#[tokio::test]
+async fn retry_bit_survives_account_removal_into_the_none_root_gate() {
+    let srv1 = TestServer::start(Backend::Mem).await;
+    let url1 = srv1.base_url();
+    pretend_no_strong_etag(&srv1).await;
+
+    let a = Device::boot("gone-a", &url1);
+    a.app
+        .create_note(&a.app.default_folder_id().unwrap(), doc("A 的先手"))
+        .unwrap();
+    a.app.sync_once().await.expect("A 的一轮");
+
+    let x = Device::boot("gone-x", &url1);
+    x.app.sync_once().await.expect("X 先入伙");
+    x.app
+        .create_note(&x.app.default_folder_id().unwrap(), doc("X 的后手"))
+        .unwrap();
+    let _ = x.app.sync_once().await;
+    let after_yield = x.app.sync_status().unwrap();
+    assert_eq!(
+        after_yield.message_key.as_deref(),
+        Some("sync.leaseHeld"),
+        "前置不成立：X 没让路 —— {after_yield:?}"
+    );
+    assert!(
+        after_yield.retryable,
+        "前置不成立：让路没点亮这一位 —— {after_yield:?}"
+    );
+
+    // 第二个服务器：对面已在它的根上建好库并写了内容 ⇒ 那是**另一个库**的 root_id。
+    let srv2 = TestServer::start(Backend::Mem).await;
+    let peer2 = Device::boot("gone-peer2", &srv2.base_url());
+    peer2.app.sync_once().await.expect("对面 2 入伙");
+    peer2
+        .app
+        .create_note(
+            &peer2.app.default_folder_id().unwrap(),
+            doc("对面 2 的内容"),
+        )
+        .unwrap();
+    peer2.app.sync_once().await.expect("对面 2 上去一轮");
+
+    // ★ 先撤账户（这一步不碰 view），再配到 srv2 ⇒ 新 sync_state 的 root_id 是 None，而本机库非空。
+    x.app.remove_account(&x.account_id()).expect("撤掉当前账户");
+    let draft: AccountDraftCmd = serde_json::from_value(json!({
+        "label": "撤后重配的盘",
+        "baseUrl": srv2.base_url(),
+        "username": "notera-test",
+    }))
+    .expect("最小账户草案");
+    x.app.configure_account(draft).expect("配到第二个盘");
+
+    let mid = x.app.sync_status().unwrap();
+    assert!(
+        mid.retryable,
+        "这一位活不过 remove_account ⇒ `:2376` 到不了 `retryable == true` 的现场，那行是结构性冗余（该连注释删）—— {mid:?}"
+    );
+
+    let _ = x.app.sync_once().await;
+    let status = x.app.sync_status().unwrap();
+    assert_eq!(
+        status.message_key.as_deref(),
+        Some("sync.root_mismatch"),
+        "要落在 :2369 那一支；换键说明现场不对 —— {status:?}"
+    );
+    assert!(
+        !status.retryable,
+        "确定性失败不许留着上一轮点亮的「重试」—— {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn deterministic_sync_failure_does_not_offer_retry() {
     let srv = TestServer::start(Backend::Mem).await;
