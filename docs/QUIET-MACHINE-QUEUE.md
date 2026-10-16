@@ -61,8 +61,23 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 （`crates/notera-host/src/lib.rs:274`，`:3297` 进 DTO），而前端 `stores/sync.ts:77-85` 把它整个忽略、硬编 `retryable: true`；
 且三处**确定性失败**站点（`sync.auth_failed` :2297、`sync.root_mismatch` :2362/:2371、`sync.foreign_root` :2387）
 只设 badge + message_key、**没把这个常驻字段置回 false** ⇒ 继承上一轮的值。
-可复用的现场：`crates/notera-host/tests/crash_recovery.rs:231` 那段就是能真跑出 `root_mismatch` 的夹具形状
-⇒ 核心那一腿打在**真 DTO** 上（`retryable == false`），而不是打在帮助函数的自洽上；前端那一腿要配**反向对照臂**
-（瞬态 IO 失败那颗「重试」必须出现），否则"root_mismatch 不许有重试"是一条恒真断言。
-改到 Rust ⇒ `cargo +stable-x86_64-pc-windows-gnu test -p notera-host` + **重建桥**（残留进程测旧代码）+ 整跑对读。
+⇒ **已落 `e5ce64b`（0.0.134，第八十六批）**：折叠改成 `signal.retryable === true`（不带这一位一律不点亮）+
+`applySignal` 在 failed 之后补问一次 `sync_status` 让权威决定；四处站点显式置 false。
+**残留挂在 #96**：那四处**没有证人** —— 新加的 Rust 判据把四处全摘掉照样绿（夹具里那一位从没被置成 true），
+要么造出 stale 现场当证人，要么承认它们是冗余并删掉；两种结局都算 #96 完成，只有"没量过"不算。
+
+## 队列现状（2026-10-16 上午收盘，第八十二～八十八批之后）
+
+**已落并推上 `origin/main`**：`50154eb`(82 图标) → `f6b5f4c`(83 尺子) → `87230f5`(拍板文档) → `5ea12d1`(证据) →
+`689fcfd`(84 §4.9 文案) → `96366b5`(证据) → `e3cdbf5`(85 `.force-show`) → `e5ce64b`(86 重试权威) →
+`976e0ed`(87 §1.2 ③ 测量边) → `cb96e33`(88 rustls 0.23.46) → `ff4916f`(证据)。
+**整跑基线仍是 776 PASS / 0 FAIL @ `82a1f5e`**；82/84 两遍与基线**同数且腿名逐条对齐**，86/87 两遍 775（各有一条 console 判据被环境噪声名单放行：`cmd/stats ← ERR_NO_BUFFER_SPACE`）。
+
+**下一步不是"再排一批"，是等一台安静的机器**：03:50 起提交额度从早上的 4.7–5.0 GB 掉到 **1.52 GB**，
+`verify-layout` 的额度预检按设计**拒绝开跑**（闸门 2 GB 是按两个真实崩点 0.84 / 0.51 GB 留一档定的）。
+⇒ 待办 `.logs/leg74-motion-rendered-pending.patch`（腿 74：§4.9/§1.6 渲染后时长转录，92 行，`apply --check` 干净）
+**等额度回到 2 GB 以上**再接上跑；`LANE_PREFLIGHT_ONLY=1` 只出数不碰现场，可以先探。
+**两条别再做错的事**：① 别为了跑通把闸门调低或 `LANE_FORCE=1` 硬闯 —— 那正是这道闸存在的理由；
+② 判断"这一遍跑没跑"要读**日志正文里 `lane-exit=` 那一行**，不要信后台通知的 exit code ——
+`… | tee -a log` 会把管道尾巴的 0 报成结果（今天就这样把一次 `exit 3` 读成了"跑完了"）。
 
