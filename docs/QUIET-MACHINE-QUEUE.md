@@ -178,3 +178,20 @@ node .logs/leg74-predicate-check.mjs             # 必须回到 btn_曲线_每�
 不清才是证人，清了就和 ADR-0018 否证我上次那句"换账户造 stale"是同一个坑。
 两种结局都算 #96 完成：**造出现场当证人**，或**证明没有任何可达状态能在撞闸前留 true** ⇒ 那四行连注释一起删成冗余。
 本批一个字未提交（`git restore` 回 `a514fc3`，`sync_once` 复跑 16/0、1 ignored）。
+
+## 06:39 补：我想为 0.0.135 补那遍整跑，结果**把开发桥弄没了**——接手第一件事是把桥起回来
+
+**为什么欠这一遍**：第九十一批（`45c021e`，0.0.135）的 CHANGELOG 我自己写了"整跑这遍没跑"，那句到今天还没被任何全量读数证实。
+**做到哪、卡在哪**：① 发现跑着的桥是 **10:51 那份旧二进制**（早于 13:43 的 `lib.rs` 改动）⇒ 那一遍跑了也是测旧代码；
+② `cargo build -p notera-cli` 32.4 s ⇒ 新桥已在盘上（14:36）；③ `taskkill //PID 59048 //F` 停旧桥（**按 PID**，见 [[no-kill-by-image-name-only-by-pid]]）；
+④ **起新桥四次都没起来且一行输出都没有**（`nohup &` / 后台常驻 / `cmd //c start` / 前台 `timeout 8`）：`17323` 的 `LISTENING` = **0**，`/health` 恒 `000`，
+两份 `.logs/bridge-0-0-135*.log` **都是 0 字节** ⇒ 不是 panic（那会有字），是**静默不监听**。`5173` 仍是 `200`，dev server 无恙。
+
+**下一位按这个顺序做，别先跑 lane**（没桥的 lane 会在预检或第一条浏览器腿崩，那种红不是产品）：
+1. **决定性的一步**：换一份**干净 data-dir** 再前台起一次 ——
+   `./target/debug/notera-cli.exe --data-dir D:/code/Notes/.logs/g102-data2 serve --port 17323 > .logs/bridge.log 2>&1`。
+   干净目录能起 ⇒ 是 `taskkill` 打断 SQLite 的 WAL/锁让启动期卡住（"静默停摆"先数边界，见 [[localize-a-stall-by-counting-at-the-boundary]]），旧目录别再修、换名继续；
+   干净目录也起不来 ⇒ **这才轮到怀疑 `45c021e` 的核心改动**（我只动过 `import_files` 的报告装配，理论上不碰 `serve` 启动路径 —— 而"理论上不碰"在这条流水线上从来不算证据），
+   对比要用可逆方式（新 worktree / 另编一份旧 commit 到别的 target），**不要** `git checkout HEAD~1 --`。
+2. 桥起来后先 `LANE_PREFLIGHT_ONLY=1 node scripts/verify-layout.mjs` 出预检数，再整跑，期望 **782 PASS / 0 FAIL** 对上第八十九批那条基线；
+   跑到那一遍之**后**，才允许把"0.0.135 有全量读数"这句写进第九十一批那一格。
