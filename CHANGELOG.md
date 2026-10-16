@@ -4913,6 +4913,42 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 所以以后每次清点，每条待办至少配一条能证伪它前提的 grep / 一次 `--check`，写进那条的台账里（这也是 `.logs/*-superseded.patch` 那两份的由来）。
 本批只动台账与任务描述 ⇒ 不升版本。
 
+### 界面（2026-10-16 第八十二批）：§2.2 最后两行「方框 / 文件夹」接上自绘 SVG —— 顺带被自己的动效门禁抓出一条真回归
+
+**产品改了四件事**：
+- `AppCheckbox.vue` 的方框从"CSS 画的框 + `::after` 那颗转 45° 的边"换成图标系统里的 `checkbox-unchecked` / `checkbox-checked`
+  （§2.3 那条原则：同族共用同一条基形，只多一笔）。**那颗原生 `input` 留着做行为载体**（空格切换、真 checkbox 角色、表单参与），
+  绘制层 `.app-check__art` 带 `pointer-events: none` ⇒ 命中的还是那颗 input，§5 的 44 那一档由整行 label 兜。
+- 侧栏「新建文件夹」那颗从 `plus` 换成 `folder-plus`（§2.2 里"组织相关"那一族的载体）。
+- 四枚新名字进唯一来源 `icons.ts`；`CARRIERS` 里的 `folder` / `box` 两族从今天起**有可比较的基形对**
+  —— 以前那两行在 §2.2 的载体台账里机检不到，因为方框根本不在图标表里。
+
+**这一批自己踩出来的一条真回归（判据抓到，不是判据坏）**：换掉 CSS 画框的同时，
+`AppCheckbox.vue` 里那两条 `var(--motion-fast)` 过渡**一起失去了主语**（`.app-check__box` 的 `background` / `border-color` 与 `::after` 的 `transform`），
+于是 `motion.spec.ts` 那条"§4.9 两档各有真消费者"当场红：`expected 5 to be greater than or equal to 7`。
+修法：新的 `.app-check__art` 上补回 `color` / `opacity` 两条 token 过渡（换 `path` 那一笔本身不可过渡，可过渡的是**选中色**与**禁用那层淡出**），
+并把总数下界 `7 → 6`、理由与新旧分解写进注释（这一族从 2 处降到 1 处，动的属性仍是两个）。
+
+**下界改完必须复验牙齿**：真删那条过渡 ⇒ `expected 5 >= 6` 红；还原后 `cmp` 报字节一致 ⇒ 绿。
+⚠ **我第一把刀是废刀**：把关键字 `transition:` 改名成 `__mutated_transition:` 之后**照样绿** —— 那条正则是
+`/transition(?:-property)?\s*:[^;{}]*var\(--motion/`，**开头没有词边界**，改名串里的 `transition:` 子串照样命中 ⇒ 等价变异。
+记进口径：**计数 / 正则类判据的刀必须真删整条声明，改名不算下刀**。
+
+**整跑对读（这是本批的证人）**：
+- 基线（干净树 @ `82a1f5e`，本批开工前）：**776 PASS / 0 FAIL / 0 SKIP**，预检 物理 8.59 GB · 提交额度余 4.83 GB · 闸门 2 GB；
+- 本批（`LANE_ALLOW_DIRTY=1`，树上挂的就是这批改动）：**同样 776 PASS / 0 FAIL**，预检 物理 8.86 GB · 提交额度余 4.74 GB；
+- **两遍的腿名集合逐条对齐**（776 ↔ 776，差集只剩一处标题里带时间戳的夹具名 `弹窗夹具 012045 → 014031`）
+  ⇒ 图标换载体没有改变任何一条判据的判定，也没有让任何一条腿消失。
+- 一遍"日志不增长"的误判要留档：重定向到文件后 stdout 是**非 TTY 块缓冲**，跑了 10 分钟文件还是 312 字节看着像卡死。
+  量"活着"要按 PID 取 CPU 时间（14.5s → 15.7s / 25s 墙钟）与 playwright 子进程数（10 颗），**不是 tail 那个文件**。
+
+**便宜的几道全绿**：`pnpm --dir apps/desktop test` **684 / 0**、`typecheck` 0 错、`lint` 0 报、
+`node scripts/arch-check.mjs` **40 / 40**、`node scripts/check-versions.mjs` 一致（权威 = 根 `Cargo.toml`）。
+
+**版本**：改了产品 ⇒ patch 升 `0.0.131 → 0.0.132`（根 `Cargo.toml` + `Cargo.lock` + `apps/desktop/package.json` + 两个壳的 `tauri.conf.json`）。
+**整跑跑的是 0.0.131 那代二进制**：本批 Rust 侧只动 `Cargo.toml` 的 version 元数据、`.rs` 一个字未改，
+且盘上没有任何东西读那个版本串（前端 `grep app_version|getVersion|__APP_VERSION__` 零命中、lane 里零命中）⇒ 行为同代，照实记在这儿而不是含糊说"二进制是本批的"。
+
 ### 工装（2026-10-16 第八十一批）：那道"提交额度闸门"**从写下那天起一直在假报 0** —— 它读了 `Win32_OperatingSystem.FreeSpace`，而本机该字段恒为 0；同时把并行那一路滞留三天的批次撤回主干（用户拍板，快照可逆）
 
 **先说这条最贵的部分：我读错了一个 CIM 字段，于是连续三天把"这台机器跑不动整跑"当成了一个有数的事实。**

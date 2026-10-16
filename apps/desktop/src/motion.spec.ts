@@ -252,10 +252,14 @@ describe('§1.6 / §4.9 动效那四个数与归零的执行者', () => {
     for (const text of Object.values(FILES)) {
       tokenTransitions += [...stripComments(text).matchAll(/transition(?:-property)?\s*:[^;{}]*var\(--motion/g)].length;
     }
-    // ⚠ 这个下界是**这条扫描自己数出来的 7**，不是 grep 的行数 —— 第一次写成 6（照 grep 抄），
+    // ⚠ 这个下界是**这条扫描自己数出来的 6**，不是 grep 的行数 —— 第一次写成 6（照 grep 抄），
     // 于是 K9 那一刀（拿掉一处 token 过渡）没能让它红：AppCheckbox.vue 里有一条跨行的声明，grep 数成 1、这里数成 2。
-    // 7 = AppCheckbox 2 + base.css 3（.btn / 抽屉 / dock）+ editor.css 2。少一处就得写下为什么。
-    expect(tokenTransitions, '用 token 的过渡掉出 7 处（AppCheckbox 2 + base.css 3 + editor.css 2）—— 删掉过渡=§4.9 那一档没人执行了').toBeGreaterThanOrEqual(7);
+    // 6 = AppCheckbox 1 + base.css 3（.btn / 抽屉 / dock）+ editor.css 2。少一处就得写下为什么。
+    // 2026-10-16 第八十二批：AppCheckbox 的画框从"CSS 画的方框 + ::after 那颗勾"换成 §2.2 的 SVG 载体，
+    // 那条 `::after` 的 transform 过渡随之失去主语 ⇒ 这个文件从 2 处降到 1 处（**动的属性仍是两个**：color 与 opacity）。
+    // 下界跟着改成 6，不是消音：这一族原来那两处里有**一处已经不存在**，硬留 7 就等于要求代码里再长出一条没人用的过渡。
+    // 牙齿复验过 —— 拿掉 AppCheckbox 这一处，总数 5 仍然红（K9 那一刀的判定不受影响）。
+    expect(tokenTransitions, '用 token 的过渡掉出 6 处（AppCheckbox 1 + base.css 3 + editor.css 2）—— 删掉过渡=§4.9 那一档没人执行了').toBeGreaterThanOrEqual(6);
   });
 
   it('每一处 animation: 只能等于规范那句同步转圈；例外只准台账里那几条，且必须真的命中', () => {

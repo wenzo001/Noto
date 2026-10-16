@@ -11,6 +11,8 @@
  * 与 label 关联）、表单参与都要自己再实现一遍 —— 无头库的价值在**行为**，而 checkbox 的行为
  * 浏览器已经给了，这里缺的只是外观。所以 `appearance: none` + token 画框，其余不动。
  */
+import AppIcon from './AppIcon.vue';
+
 const props = withDefaults(
   defineProps<{
     modelValue: boolean;
@@ -27,15 +29,24 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 <template>
   <label class="app-check" :data-testid="`${props.testid}-row`">
-    <input
-      type="checkbox"
-      class="app-check__box"
-      :checked="props.modelValue"
-      :disabled="props.disabled"
-      :aria-label="props.label"
-      :data-testid="props.testid"
-      @change="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
-    />
+    <span class="app-check__box-wrap">
+      <input
+        type="checkbox"
+        class="app-check__box"
+        :checked="props.modelValue"
+        :disabled="props.disabled"
+        :aria-label="props.label"
+        :data-testid="props.testid"
+        @change="emit('update:modelValue', ($event.target as HTMLInputElement).checked)"
+      />
+      <!-- 方框与勾是 §2.2"方框"载体的两态（同一条基形，只多一笔），从图标系统的唯一来源里取。
+           以前这一格是 CSS 画的：四端形状本来就一致，也不违反 §2 那句"禁 Unicode 字形"，
+           但它**不在图标表里** ⇒ §2.2 的载体台账机检不到它（今天那条缺口就是这么来的）。
+           那颗原生 input 还在（键盘空格、读屏角色、表单参与都靠它），只是不再自己画东西。 -->
+      <span class="app-check__art" aria-hidden="true">
+        <AppIcon :size="18" :name="props.modelValue ? 'checkbox-checked' : 'checkbox-unchecked'" />
+      </span>
+    </span>
     <span class="app-check__text">{{ props.label }}</span>
   </label>
 </template>
@@ -51,45 +62,49 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
   cursor: pointer;
 }
 
+/* 那颗 input 仍然是**行为**的载体（空格切换、真 checkbox 角色、表单参与），
+   只是把绘制整层交给上面那枚 SVG —— 所以它自己不再画边框与底色。 */
+.app-check__box-wrap {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
 .app-check__box {
   appearance: none;
   -webkit-appearance: none;
-  flex: 0 0 auto;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.app-check__art {
+  position: absolute;
+  inset: 0;
   display: grid;
   place-items: center;
-  width: 1.375rem;
-  height: 1.375rem;
-  margin: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-row);
-  background: var(--surface);
-  cursor: pointer;
+  /* 不吃指针：命中的仍然是那颗 input（§5 的 44 那一档由整行的 label 兜）。 */
+  pointer-events: none;
+  color: var(--body);
+  /* 换的是那两条 path（切换本身不可过渡），可过渡的是选中色与禁用那层淡出 —— §4.9 的 fast 一档挂在这两处。 */
   transition:
-    background var(--motion-fast) var(--ease),
-    border-color var(--motion-fast) var(--ease);
+    color var(--motion-fast) var(--ease),
+    opacity var(--motion-fast) var(--ease);
 }
 
-/* 对勾是画出来的（一条转 45° 的边），不用字形：字体里那颗 ✓ 在两端宽度不同，
-   而且未选中时它得完全不存在 —— 用 scale(0) 收掉，保留过渡。 */
-.app-check__box::after {
-  content: '';
-  width: 0.6875rem;
-  height: 0.375rem;
-  border: 2px solid var(--on-accent);
-  border-top: 0;
-  border-right: 0;
-  transform: rotate(-45deg) scale(0);
-  transform-origin: center;
-  transition: transform var(--motion-fast) var(--ease);
+/* 选中态只换颜色：方框那一条基形两态共用（§2.3 那条原则："共用同一片轮廓，只换内部徽标"）。 */
+.app-check__box:checked + .app-check__art {
+  color: var(--accent);
 }
 
-.app-check__box:checked {
-  border-color: var(--accent);
-  background: var(--accent);
-}
-
-.app-check__box:checked::after {
-  transform: rotate(-45deg) scale(1);
+.app-check__box:disabled + .app-check__art {
+  opacity: 0.5;
 }
 
 .app-check__box:focus-visible {

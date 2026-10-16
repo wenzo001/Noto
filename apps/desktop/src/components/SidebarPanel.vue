@@ -117,7 +117,7 @@ function selectTrash(): void {
     <div class="pane-body">
       <div class="section-head">
         <span class="section-title">{{ t('sidebar.folders') }}</span>
-        <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('sidebar.newFolder')" data-testid="new-folder" @click="openNewFolder"><AppIcon :size="18" name="plus" /></button>
+        <button type="button" class="btn btn--quiet btn--icon" :aria-label="t('sidebar.newFolder')" data-testid="new-folder" @click="openNewFolder"><AppIcon :size="18" name="folder-plus" /></button>
       </div>
 
       <AppDialog

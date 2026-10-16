@@ -28,6 +28,9 @@ export type IconName =
   | 'pin-on' | 'pin-off'
   | 'attach-file' | 'attach-image'
   | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'arrow-back'
+  // §2.2 载体表里最后两行的真 SVG（2026-10-14 用户拍"按 §2.1 规格自绘"）：
+  // 方框 = 勾选 / 清单项，文件夹 = 组织相关。两族各自**共享同一条基形**，只换内部徽标（§2.3 那条原则）。
+  | 'folder' | 'folder-plus' | 'checkbox-unchecked' | 'checkbox-checked'
   | 'indent-in' | 'indent-out' | 'trash' | 'warn' | 'rule'
   | 'list' | 'alert' | 'question' | 'menu' | 'settings' | 'undo' | 'redo'
   | 'save-saving' | 'save-dirty' | 'save-saved' | 'save-failed'
@@ -64,6 +67,25 @@ export const ICONS: Record<IconName, IconSpec> = {
   'attach-image': { d: ['M3.8 5.4h12.4v9.2H3.8Z', 'M3.8 12.1l3.3-2.9 2.8 2.4 2.4-1.9 4.9 4', 'M7.3 8.5h.01'] },
 
   check: { d: ['M4.6 10.4l3.4 3.4 7.4-7.6'] },
+  /**
+   * 文件夹族的**那一条基形**（§2.2"组织相关"载体）。`folder-plus` 复用同一串开头那条路径，
+   * 只在里面加一横一竖 —— 这样 §2.2 的"同族共享同一条基形"是**机器看得见**的，不是注释里的说法。
+   */
+  folder: {
+    d: ['M3.6 6.3a1.6 1.6 0 0 1 1.6-1.6h2.3a1.6 1.6 0 0 1 1.3.65l.75 1.05h4.6a1.6 1.6 0 0 1 1.6 1.6v5.9a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6V6.3Z'],
+  },
+  'folder-plus': {
+    d: ['M3.6 6.3a1.6 1.6 0 0 1 1.6-1.6h2.3a1.6 1.6 0 0 1 1.3.65l.75 1.05h4.6a1.6 1.6 0 0 1 1.6 1.6v5.9a1.6 1.6 0 0 1-1.6 1.6H5.2a1.6 1.6 0 0 1-1.6-1.6V6.3Z',
+      'M10 9.5v3.5', 'M8.25 11.25h3.5'],
+  },
+  /** 方框族（§2.2"勾选 / 清单项"载体）：两态共用那一个圆角方，勾是加在里面的第二笔。 */
+  'checkbox-unchecked': {
+    d: ['M6.2 4.4h7.6a1.8 1.8 0 0 1 1.8 1.8v7.6a1.8 1.8 0 0 1-1.8 1.8H6.2a1.8 1.8 0 0 1-1.8-1.8V6.2a1.8 1.8 0 0 1 1.8-1.8Z'],
+  },
+  'checkbox-checked': {
+    d: ['M6.2 4.4h7.6a1.8 1.8 0 0 1 1.8 1.8v7.6a1.8 1.8 0 0 1-1.8 1.8H6.2a1.8 1.8 0 0 1-1.8-1.8V6.2a1.8 1.8 0 0 1 1.8-1.8Z',
+      'M6.9 10.1l2.3 2.3 4-4.4'],
+  },
   'drag-handle': { dots: [[7.6, 5.4], [12.4, 5.4], [7.6, 10], [12.4, 10], [7.6, 14.6], [12.4, 14.6]] },
   plus: { d: ['M10 4.6v10.8', 'M4.6 10h10.8'] },
   pencil: { d: ['M4.8 15.2l.9-3 7.5-7.5 2.1 2.1-7.5 7.5Z', 'M12.2 5.6l2.1 2.1'] },
@@ -115,6 +137,9 @@ export const CARRIERS: Record<string, IconName[]> = {
   // 所以旧注释那句"与保存同载体、破了一次"是过期话（`iconSystem.spec.ts` ② 的例外台账一旦登记它就会红着要求撤掉）。
   // 仍然单列一组：§2.2 要的是"不同语义不同载体" —— 混进 `document` 只会让那条判据再也看不见将来真去共用轮廓的人。
   attachment: ['attach-file'],
+  // §2.2 那两行从今天起**有机检对象**了：族里两枚必须共用同一条基形（① 那条判据自动覆盖新族）。
+  folder: ['folder', 'folder-plus'],
+  box: ['checkbox-unchecked', 'checkbox-checked'],
 };
 
 /**
