@@ -8843,6 +8843,99 @@ async function pressSweep(p) {
   await ctx.close();
 }
 
+/**
+ * 74 · §4.9 / §1.6 那四个数的**渲染后**读数（第八十九批，收 #85 欠的那半格）。
+ *
+ * 静态那一半早就有执行者（`motion.spec.ts` 那一族，十刀记分），但它量的是 CSS 文本 ——
+ * "写了"与"画出来是这个数"是两件事：跨行的声明、被后一句同名声明盖掉、被媒体条件改掉，
+ * 静态扫描都看不见（本仓为这两族各红过一次脸）。所以这一腿读 `getComputedStyle`。
+ *
+ * 期望值**逐字抄自规范**（`docs/design/Noto-界面设计规范.from-share.txt` §4.9 / §1.6），不由被测 CSS 反推：
+ *  · 悬停 / 按下 `120ms cubic-bezier(0.2, 0, 0, 1)` ⇒ 主语 `.btn`
+ *  · 浮层进出 `220ms 同一条曲线` ⇒ 主语单栏档那块抽屉 `.pane--sidebar`
+ *  · 同步转圈 `1.4s linear infinite` ⇒ 主语底栏那颗 `.dock__glyph`（把 `data-spin` 拨上去量**那条规则**的渲染效果）
+ *  · `prefers-reduced-motion` ⇒ 全部归零、循环收成一次
+ * 反向对照臂不可省：只判"reduce 下是 0"是一条**恒真风险**（若媒体条件从来没生效，产品也照样是 0 的话就说不清）
+ * ⇒ 同一个页面把媒体条件撤掉，必须回到 120ms 那一档。
+ */
+{
+  const readMotion = (page) => page.evaluate(() => {
+    const pick = (sel, props) => {
+      const el = document.querySelector(sel);
+      if (!el) return { missing: true };
+      const cs = getComputedStyle(el);
+      const out = {};
+      for (const p of props) out[p] = cs[p];
+      return out;
+    };
+    const glyph = document.querySelector('.dock__glyph');
+    if (glyph) glyph.setAttribute('data-spin', 'true');
+    return {
+      btn: pick('.btn', ['transitionDuration', 'transitionTimingFunction']),
+      drawer: pick('.pane--sidebar', ['transitionDuration', 'transitionTimingFunction']),
+      spin: pick('.dock__glyph', ['animationName', 'animationDuration', 'animationTimingFunction', 'animationIterationCount']),
+    };
+  });
+  const topLevel = (s) => {
+    const out = [];
+    let buf = '', depth = 0;
+    for (const ch of String(s ?? '')) {
+      if (ch === '(') depth += 1;
+      else if (ch === ')') depth -= 1;
+      if (ch === ',' && depth === 0) { out.push(buf.trim()); buf = ''; } else buf += ch;
+    }
+    if (buf.trim()) out.push(buf.trim());
+    return out;
+  };
+  const first = (s) => topLevel(s)[0] ?? '';
+  const secs = (s) => Number.parseFloat(first(s)) || 0;
+  const CURVE = /^cubic-bezier\(0\.2,\s*0,\s*0,\s*1\)$/;
+  const allCurve = (s) => { const p = topLevel(s); return p.length > 0 && p.every((x) => CURVE.test(x)); };
+
+  const ctxN = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'no-preference' });
+  const pN = await ctxN.newPage();
+  await pN.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pN.waitForSelector('.app-shell', { timeout: 20000 });
+  const normal = await readMotion(pN);
+  await pN.close();
+  await ctxN.close();
+
+  const ctxR = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+  const pR = await ctxR.newPage();
+  await pR.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pR.waitForSelector('.app-shell', { timeout: 20000 });
+  const reduced = await readMotion(pR);
+  await pR.emulateMedia({ reducedMotion: 'no-preference' });
+  await pR.waitForTimeout(150);
+  const back = await readMotion(pR);
+  await pR.close();
+  await ctxR.close();
+
+  check('74 仪器自检：三处主语在两种媒体条件下都真读到了（读不到就是选择器过期，下面全是空判据）',
+    [normal, reduced, back].every((x) => !x.btn.missing && !x.drawer.missing && !x.spin.missing),
+    JSON.stringify({ normal: [!!normal.btn.missing, !!normal.drawer.missing, !!normal.spin.missing] }));
+  check('74 §4.9 悬停/按下那一档渲染出来就是 120ms + 规范那条曲线（不是 CSS 文本里有就算；三个属性各自那一档都得是同一条）',
+    Math.abs(secs(normal.btn.transitionDuration) - 0.12) < 1e-6 && allCurve(normal.btn.transitionTimingFunction),
+    JSON.stringify({ 时长: first(normal.btn.transitionDuration), 曲线: topLevel(normal.btn.transitionTimingFunction) }));
+  check('74 §4.9 浮层进出那一档渲染出来是 220ms + 同一条曲线（抽屉 `.pane--sidebar` 自己）**且不是**被悬停那一档冒充的',
+    Math.abs(secs(normal.drawer.transitionDuration) - 0.22) < 1e-6 && allCurve(normal.drawer.transitionTimingFunction),
+    JSON.stringify({ 时长: first(normal.drawer.transitionDuration), 曲线: topLevel(normal.drawer.transitionTimingFunction), 按钮档: first(normal.btn.transitionDuration) }));
+  check('74 §1.6 同步转圈渲染出来是 1.4s / linear / infinite，且 `animation-name` 不是 none（none 时时长再对也不转）',
+    normal.spin.animationName !== 'none' && normal.spin.animationName !== ''
+    && Math.abs(secs(normal.spin.animationDuration) - 1.4) < 1e-6
+    && first(normal.spin.animationTimingFunction) === 'linear'
+    && first(normal.spin.animationIterationCount) === 'infinite',
+    JSON.stringify({ name: normal.spin.animationName, 时长: first(normal.spin.animationDuration), 节奏: first(normal.spin.animationTimingFunction), 循环: first(normal.spin.animationIterationCount) }));
+  check('74 §1.6 reduced-motion 下两处过渡都归零、转圈不再无限循环',
+    secs(reduced.btn.transitionDuration) < 0.01 && secs(reduced.drawer.transitionDuration) < 0.01
+    && first(reduced.spin.animationIterationCount) === '1',
+    JSON.stringify({ 按钮: first(reduced.btn.transitionDuration), 抽屉: first(reduced.drawer.transitionDuration), 循环: first(reduced.spin.animationIterationCount) }));
+  check('74 反向对照：同一个页面把媒体条件撤掉必须回到 120ms（否则上一条"归零"是恒真 —— 媒体查询可能压根没生效）',
+    Math.abs(secs(back.btn.transitionDuration) - 0.12) < 1e-6,
+    JSON.stringify({ 撤掉之后: first(back.btn.transitionDuration) }));
+  notes.push(`     74 §4.9/§1.6 渲染后实测：悬停 ${first(normal.btn.transitionDuration)} · 抽屉 ${first(normal.drawer.transitionDuration)} · 转圈 ${normal.spin.animationName} ${first(normal.spin.animationDuration)} ${first(normal.spin.animationTimingFunction)} ${first(normal.spin.animationIterationCount)} · reduced 归零后循环=${first(reduced.spin.animationIterationCount)}`);
+}
+
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
 async function purgeByTitle(prefix) {
   for (const trash of [false, true]) {

@@ -125,3 +125,39 @@ FAIL ⑫ / ⑬ / 宽 390·⑭：console error 为零 —— net::ERR_INSUFFICIEN
 腿 74 抄的那四个数逐条对上 —— `.btn` `0.12s × 3` + `cubic-bezier(0.2, 0, 0, 1)`、抽屉 `.pane--sidebar` `0.22s`、
 `.dock__glyph[data-spin]` `sync-spin 1.4s linear infinite`；`reducedMotion:'reduce'` ⇒ 三处全 `1e-06s` 且循环变 `1`；
 撤掉媒体条件反向对照 ⇒ 回到 `0.12s`。**这条只证"产品那四个数是真的"，不证"腿 74 在门禁里会红"**（牙还没下）。
+
+## 04:35 补：安静机上这一遍跑到头了 —— 唯一那条 FAIL 是**我的仪器坏了**
+
+04:21 重挂的那遍（无并发）跑到底：**781 PASS / 1 FAIL**，而那条红是腿 74 自己的第一条曲线判据：
+```
+FAIL 74 §4.9 悬停/按下那一档渲染出来就是 120ms + 规范那条曲线 —— {"时长":"0.12s","曲线":"cubic-bezier(0.2"}
+```
+**数是对的、串被切断了**：我写的 `first = (s) => s.split(',')[0]` 是给 `0.12s, 0.12s, 0.12s` 这种列表用的，
+而 `transitionTimingFunction` 渲染出来是 `cubic-bezier(0.2, 0, 0, 1), cubic-bezier(…), cubic-bezier(…)` ——
+**函数自身就带逗号**，按裸逗号切第一刀就落在 `cubic-bezier(0.2` 上，那条正则**永远不可能命中**。
+⇒ 这是一条**恒红**的判据（与恒真同样没用：它抓不到任何东西，只会把每条合法曲线都判成违规）。
+修法：换成**按括号深度切的顶层逗号分割** `topLevel()`，并把判据从"第一档匹配"改成"**每一档都得是规范那条曲线**"（`allCurve`）；
+顺手给抽屉那一档补上规范同一条曲线那句（原文写的就是"220ms 同一条曲线"，以前只量了时长）。
+**复验方式**（`.logs/leg74-predicate-check.mjs`，04:36，与门禁里那两个 helper 逐字一致）：
+`btn_时长_012=true`、`btn_曲线_每一档=true`、切出来三档都是 `cubic-bezier(0.2, 0, 0, 1)`、`drawer_时长_022=true`、`drawer_曲线=true`；
+**负面对照**：空串 ⇒ 时长假、曲线假；`ease` ⇒ 曲线假 ⇒ 新尺子不恒真。
+⇒ 04:36 重挂 `.logs/lane-92-leg74-fixed.log`（期望 **782 PASS / 0 FAIL** = 86/87 那两遍的 775 + 腿 74 的 7 条）。
+
+**这条要进的那条口径**：凡读 computed style 里"逗号列表"的判据，**先分清这个列表的每一项会不会自己带逗号**
+（`transition-*`、`animation-*`、`background`、`box-shadow`、`grid-template-*` 全都会）。
+与 [[compare-the-same-normalization-on-both-sides]] 同族但方向相反：那条是"两侧归一化要同一套"，这条是"**别用比数据本身更粗的分割符**"。
+
+## 05:12 起**工作树上有一颗活的变异**（腿 74 的专属刀）—— 还原办法写在这儿，崩了也不许留着
+
+变异点：`base.css:263` 的 `.btn` 那一条 `transition`，把三个 `var(--ease)` 改成 `linear`（**只动缓动、不动时长**）。
+下刀前已证它**不是等价变异**：`.logs/leg74-predicate-check.mjs` 读真渲染值 ⇒ `btn_切出来=["linear","linear","linear"]`、
+`btn_曲线_每一档=false` 而 `btn_时长_012` 仍 `true` ⇒ 没有更后面的规则把它盖回来，且改动是单变量。
+期望：整跑 **781 PASS / 1 FAIL**，唯一那条 FAIL 必须是 `74 §4.9 悬停/按下那一档…`；其余 781 条与 04:36 那遍逐条同数。
+
+**还原（跑完立刻做，别等下一遍）**：`base.css` 在这次变异之前相对 HEAD 是干净的 ⇒
+```bash
+git restore apps/desktop/src/styles/base.css     # 单路径，不碰别的未提交文件
+git diff --stat HEAD -- apps/desktop/src/styles/base.css   # 必须为空
+node .logs/leg74-predicate-check.mjs             # 必须回到 btn_曲线_每一档=true
+```
+⚠ 同族教训见 [[mutation-harness-kill-leaves-product-mutated]]：后台任务被杀不等于变异被撤销。
