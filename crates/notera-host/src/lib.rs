@@ -1608,11 +1608,24 @@ impl App {
             CmdError::of("save_failed", false).with(serde_json::json!({ "detail": e.to_string() }))
         })?;
         let mut notices: Vec<String> = report.notices.clone();
+        // §4.8「报告固定三行：新增 / 重复 / 失败」里**「失败」这一位要配平**：
+        // 屏幕打的是 `failed.length`，所以"没进来的每一份"都得落进这一本账 —— 只写进 `notices`
+        // 等于把一份超限的文件从计数里抹掉（超限那份 8 MiB 以上是在门口就拒的，既不进 `sources` 也不进 `apply`，
+        // 于是曾经出现过 HTTP 200 / `failed: []` / 屏幕"1 / 0 / 0"而实际少了一份）。
+        // 三本账互不重叠：门口拒的在 `unreadable`、规划阶段跳过的在 `plan.failures`、落库失败的在 `report.failed`。
+        let mut failed: Vec<serde_json::Value> = report
+            .failed
+            .iter()
+            .map(|f| serde_json::json!({ "label": f.label, "why": f.error.to_string() }))
+            .collect();
         for f in &plan.failures {
             notices.push(format!("{}：{}", f.label, f.error));
+            failed.push(serde_json::json!({ "label": f.label, "why": f.error.to_string() }));
         }
         for u in &unreadable {
             notices.push(format!("读不了 {}：{}", u["path"], u["why"]));
+            failed
+                .push(serde_json::json!({ "label": u["path"].as_str(), "why": u["why"].as_str() }));
         }
         Ok(serde_json::json!({
             "folderName": report.folder_name,
@@ -1620,9 +1633,7 @@ impl App {
                 "label": c.label, "title": c.stored_title, "id": c.note_id.as_str(),
             })).collect::<Vec<_>>(),
             "duplicates": report.duplicates.len(),
-            "failed": report.failed.iter().map(|f| serde_json::json!({
-                "label": f.label, "why": f.error.to_string(),
-            })).collect::<Vec<_>>(),
+            "failed": failed,
             "notices": notices,
         }))
     }

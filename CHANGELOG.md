@@ -4926,6 +4926,35 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 界面（2026-10-16 第九十一批）：导入「失败」这一位现在配平 —— 屏幕那句"1 / 0 / 0"不再说谎（0.0.135，#83 / §4.8）
+
+规范 §4.8 明写报告固定三行「新增 / 重复 / 失败」，且"超了要显式失败"。第六十一批用**真载荷**量过这一格的谎：
+一份 >8 MiB 的文件在门口就被 `ImportSource::read` 拒了（`MAX_SOURCE_BYTES = 8 * 1024 * 1024`，
+`crates/notera-importer/src/source.rs:13`），但那份**只被写进 `notices`**，`report.failed` 仍是空的
+⇒ 命令回 HTTP 200、屏幕打「新增 / 重复 / 失败：1 / 0 / **0**」，而实际少了一份。
+
+**改的是账不是文案**（`crates/notera-host/src/lib.rs:1610-1636`）：`failed` 现在收齐**三本互不重叠**的账 ——
+门口拒的（`unreadable`）+ 规划阶段跳过的（`plan.failures`，超限 / 二进制 / 编码）+ 落库失败的（`report.failed`）。
+前端那一行**一个字没改**：它本来就打 `filesReport.failed.length`（`SettingsView.vue:763-769`），
+所以这一位一对，屏幕立刻从「1 / 0 / 0」变成「1 / 0 / 1」。
+`TooLarge` 那句自带限值（`error.rs:13-14`："有 {size} 字节，超过导入上限 {limit} 字节：请拆分后再导入"）⇒ §4.8 要的"限制值上屏"跟着来了。
+
+**证人**：`crates/notera-host/tests/limits_and_overwrite.rs::an_oversized_import_lands_in_the_failed_slot_not_only_in_notices`
+（那份文件本来就登记成 §4.4/§4.8 承诺的那本判据文件）。它断四件事：合法那份收下、`failed.len()==1`、
+**配平不变量** `created + duplicates + failed == 送进来的份数`、以及只送超限那一份也不许把整条命令折成错误（反向对照）。
+**刀下过了**：把两处 `failed.push(...)` 摘掉 ⇒ 同一条判据红，且红的那一行把历史现场原样打出来
+（`"failed":[]` 与 `notices` 里那句「有 8388609 字节，超过导入上限 8388608 字节」并排），还原后 4/4。
+
+**验证范围要写清**（不含水分）：`cargo fmt --all --check` = 0、`cargo test -p notera-host --test limits_and_overwrite` 4/0、
+`arch-check 40/40`、`check-versions` 一致、版本 **0.0.134 → 0.0.135**（改了产品行为，按口径升 patch）。
+⚠ **整跑这遍没跑**：这一批没动任何前端文件，且整跑那 782 条里没有导入这一格（导入不在布局/界面判据的射程内）⇒
+"UI 无回归"这句话的依据是**改动面为零**而不是"跑过一遍读数不变"；`cargo clippy --workspace --all-targets -D warnings` 也**没在本地跑**
+（我第一次误用 `-p notera-host`，那条命令丢了 workspace 的 feature 合并，报出 62 条 `E04xx` 是**我这条命令的形状错了**，不是回归 —— 按 [[先验自己的探针与判据]] 记在这儿）。
+两者都由 CI 覆盖，但 CI 现在卡在 #98 那步 `zip` 审计 ⇒ **"CI 绿"这句话依旧不许引用**。
+
+**残留一格（不改判据、只改措辞）**：屏幕上那句打的是**字节数**（8388608），不是"8 MiB"那种人话单位；
+§4.8 那句要的是"限制值上屏"，字节数算上了，但要更好看得等人话单位那一版文案（属产品措辞，另批）。
+
 ### 判据（2026-10-16 第八十九批）：腿 74 接上 —— §4.9 / §1.6 那四个数第一次有"**读渲染结果**"的执行者（不升版本）
 
 规范那四句此前只有**静态**证人（CSS 文本里写着 `120ms cubic-bezier(0.2,0,0,1)` 就算过）。这一条腿读的是 `getComputedStyle`，

@@ -100,6 +100,70 @@ fn a_blob_over_the_limit_is_refused_at_the_door_and_nothing_lands() {
 }
 
 #[test]
+fn an_oversized_import_lands_in_the_failed_slot_not_only_in_notices() {
+    // §4.8「报告固定三行：新增 / 重复 / 失败」的后半个分支。2026-10-14 用真载荷量过红的那格：
+    // 超限那一份是在门口就拒的（`ImportSource::read`），它当时**只被写进 `notices`**，
+    // 于是屏幕打 `failed.length` 的那一行报的是"失败 0"，而实际少了一份 —— 那句话就是说谎。
+    let (app, dir) = boot();
+    let small = dir.path().join("small.md");
+    let big = dir.path().join("big.md");
+    std::fs::write(&small, "# 收得下的一份\n").unwrap();
+    // 8 MiB 那道闸门是导入侧的（`MAX_SOURCE_BYTES`），与上面附件那 32 MiB 不是同一个数。
+    std::fs::write(&big, vec![b'a'; (8 * 1024 * 1024) + 1]).unwrap();
+
+    let report = app
+        .import_files(&[
+            small.to_string_lossy().to_string(),
+            big.to_string_lossy().to_string(),
+        ])
+        .expect("门口拒掉一份不是整条命令失败：另一份要收下来");
+
+    let created = report["created"].as_array().cloned().unwrap_or_default();
+    let failed = report["failed"].as_array().cloned().unwrap_or_default();
+    assert_eq!(created.len(), 1, "合法那一份必须真收进来 {report}");
+    assert_eq!(report["duplicates"], json!(0), "{report}");
+    // 这一条就是本批的牙齿：改之前 `failed` 是空的（那一份只长在 notices 上）。
+    assert_eq!(
+        failed.len(),
+        1,
+        "「失败」这一位要配平：没进来的那一份得在这里 {report}"
+    );
+    // 配平不变量：送进来几份，三个数加起来就得是几份 —— 谁都不许从账上消失。
+    assert_eq!(
+        created.len() + report["duplicates"].as_u64().unwrap_or(0) as usize + failed.len(),
+        2,
+        "两份都要有去处 {report}"
+    );
+
+    let why = failed[0]["why"].as_str().unwrap_or("");
+    assert!(why.contains("超过导入上限"), "要说什么没进来：{why}");
+    assert!(why.contains("8388608"), "§4.8 要限制值上屏：{why}");
+    assert_eq!(
+        failed[0]["label"].as_str().unwrap_or(""),
+        big.to_string_lossy().as_ref(),
+        "要指着是哪一份"
+    );
+    // 反向对照：同一份超限文件单独送，也不能把整条命令折成错误（门口拒 ≠ 整单失败）。
+    let solo = app
+        .import_files(&[big.to_string_lossy().to_string()])
+        .expect("只送超限那一份也不许让整条命令失败");
+    assert_eq!(
+        solo["created"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .len(),
+        0,
+        "{solo}"
+    );
+    assert_eq!(
+        solo["failed"].as_array().cloned().unwrap_or_default().len(),
+        1,
+        "{solo}"
+    );
+}
+
+#[test]
 fn a_blob_exactly_at_the_limit_is_accepted() {
     let (app, dir) = boot();
     let (note, block) = new_note(&app);
