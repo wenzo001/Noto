@@ -35,3 +35,34 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 
 - 提交额度会在几分钟内从 5.2 GB 掉到 0 GB ⇒ 预检 `exit 3` 是常态，等到稳了再跑，别用 `LANE_FORCE=1` 硬闯。
 - 共享工作树里挂着别人的未提交产品改动 ⇒ 预检 `exit 4`。真要跑就 `LANE_ALLOW_DIRTY=1`，但那份读数**不许归因到任何 commit、也不许当"回到绿"的证据引用**。
+
+## 执行现场（2026-10-16 起）
+
+**第 0 步基线已拿到**：干净树 @ `82a1f5e`，预检"物理 8.59 GB · 提交额度余 4.83 GB"、归因预检放行，
+整跑 **776 PASS / 0 FAIL / 0 SKIP**（日志 `.logs/lane-82a1f5e.log`；开局自动收残骸 74 项，95.9 MB → 5.1 MB）。
+⇒ 后面每一遍都对读这一行。
+
+**前提更新（原第 30/31 行已被这次拍板改掉一半）**：
+- D15 / D16① / #93 于 2026-10-16 拍完（见 `docs/design/SPEC-AMENDMENTS.md` A8、A9 与 `NEEDS-OTHER-MACHINE-TESTING.md` 那三行）⇒
+  **`.force-show` 不再"等拍板"**，它现在就是队列里的一步（#90 剩下那一半）。
+  D13、D14 与 D16 的 ②③ **仍未拍**，别当已裁定。
+- 并行那一路滞留三天的 7 份未提交文件已按用户拍板**撤回主干**，快照存在 `.logs/parallel-caps-batch-20261013.patch`
+  （`git apply --reverse --check` 验过可原样落回）⇒ **#83 / #89 的"缺文件所有权"这条阻塞解除**，现在只缺实现与整跑证人。
+
+**第八十二批（图标 #62/#82）踩到的一条，记在这儿免得重演**：那份补丁把 `AppCheckbox` 的方框从"CSS 画的框 + `::after` 那颗勾"
+换成 §2.2 的 SVG 载体，于是**两条 token 过渡一起没了主语** ⇒ `motion.spec.ts` 那条"§4.9 两档各有真消费者"的下界当场红
+（`expected 5 >= 7`）。这不是判据坏了，是它抓到了真回归。处理：给新的 `.app-check__art` 补回 `color` / `opacity` 两条
+`var(--motion-fast)` 过渡（换 path 那一笔本身不可过渡，可过渡的是选中色与禁用淡出），并把下界从 7 改成 6、理由写进注释。
+**下界改完必须复验牙齿**：真删那条过渡 ⇒ `expected 5 >= 6` 红；还原后字节一致 ⇒ 绿。
+⚠ 第一把刀我下错了——只把关键字 `transition:` 改名，**照样绿**：那条正则是 `/transition(?:-property)?\s*:[^;{}]*var\(--motion/`，
+**没有词边界**，改名后的 `__mutated_transition:` 里的子串仍然命中 ⇒ 等价变异。计数类判据的刀**必须真删整条声明**。
+
+**#92（G129）的修法已经读到两侧源码，范围比台账原先记的宽**：核心**本来就有** `SyncView.retryable`
+（`crates/notera-host/src/lib.rs:274`，`:3297` 进 DTO），而前端 `stores/sync.ts:77-85` 把它整个忽略、硬编 `retryable: true`；
+且三处**确定性失败**站点（`sync.auth_failed` :2297、`sync.root_mismatch` :2362/:2371、`sync.foreign_root` :2387）
+只设 badge + message_key、**没把这个常驻字段置回 false** ⇒ 继承上一轮的值。
+可复用的现场：`crates/notera-host/tests/crash_recovery.rs:231` 那段就是能真跑出 `root_mismatch` 的夹具形状
+⇒ 核心那一腿打在**真 DTO** 上（`retryable == false`），而不是打在帮助函数的自洽上；前端那一腿要配**反向对照臂**
+（瞬态 IO 失败那颗「重试」必须出现），否则"root_mismatch 不许有重试"是一条恒真断言。
+改到 Rust ⇒ `cargo +stable-x86_64-pc-windows-gnu test -p notera-host` + **重建桥**（残留进程测旧代码）+ 整跑对读。
+
