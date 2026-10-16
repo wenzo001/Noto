@@ -187,12 +187,53 @@ describe('§2.4 清单：进了唯一来源的每一枚都必须真有人用（�
     .map((m) => m[1] ?? '').join('\n');
   const others = texts.filter((t) => t !== iconsSrc);
 
-  const consumersOf = (name: string): number =>
-    others.filter((t) => t.includes(`name="${name}"`) || t.includes(`'${name}'`) || t.includes(`"${name}"`)).length
-    + (tables.includes(`'${name}'`) ? 1 : 0);
+  /**
+   * 旧尺子的洞（2026-10-16 量到）：`t.includes("'X'")` 这种**裸引号串**匹配会把"领域词撞车"算成消费者 ——
+   * `{ kind: 'folder' }` 在 9 个文件里出现（`stores/notes.ts:20`、`App.vue:84`、`FolderTree.vue`、`NoteList.vue`、
+   * `SidebarPanel.vue:56`、`WorkspaceView.vue:128`…），于是 `folder` 这一枚**即使全仓没有一处图标位用它**也算"有人用"。
+   * 同类会撞的名字还有 `all` / `list` / `settings` / `trash` / `menu` / `check`。⇒ 判定恒真。
+   *
+   * 现在的口径分清三种"用"，各自独立数：
+   * ① **界面真画到**：模板静态 `name="X"`、动态 `:name="… 'X' …"`（三元/映射都在这条里，因为整个表达式都在同一对双引号内）、
+   *    以及两张**驱动上屏**的查表 `SYNC_ICONS` / `SAVE_ICONS`（:160-163 那次修正的对象，别退回去）。
+   * ② **门禁自己的账本**：`CARRIERS` 里的成员 —— 它是"同族共享基形"那条判据的**差分对象**，不是界面使用者。
+   *    命中 ② 而未命中 ① 的名字合法（族基形证人），但**身份必须是显式的**，不许靠撞车词混过去。
+   * ③ 定义段自己（`ICONS` 与那个 `IconName` 联合类型）永远不算 —— 那会让每一枚都"被用"一遍，判据立刻恒绿。
+   */
+  /**
+   * "图标位"的三种写法（都是实测量出来的，不是猜的）：
+   *  - 静态属性 / prop：`<AppIcon name="menu" />`、`<EmptyState icon="question" />`（`NoteList.vue:275`）
+   *  - 动态属性里的字面量：`:icon="errorKey ? 'alert' : 'list'"`（`NoteList.vue:265`）、`:name="m ? 'a' : 'b'"`
+   *  - 对象字面量交出的名字：`{ icon: 'mark-bold' }`（`editor/marks.ts:20`、`editor/toolbarItems.ts:46`）
+   * 再加两张**驱动上屏**的查表 `SYNC_ICONS` / `SAVE_ICONS`。除此之外一律不算 —— 特别是**裸引号串**
+   * （`{ kind: 'folder' }`、`{ kind: 'all' }` 那种领域词）与定义段自己（`ICONS`、`IconName` 联合类型）。
+   */
+  const ICON_ATTRS = 'name|icon|glyph';
+  const uiConsumersOf = (name: string): number => {
+    const staticAttr = new RegExp(`(?:^|[^:\\w])(?:${ICON_ATTRS})="${name}"`);
+    // ⚠ 这一条的分支必须整体括起来：`":name|icon|glyph=\"…\""` 会被读成三条独立分支
+    // （`:name`、`icon`、`glyph="…"`），于是任何含 "icon" 字样的文件都算消费者 —— 我第一版就这么把
+    // 两条负自检（`zz-no-such-icon` / `all`）打成"20 个消费者"，是自检把它抓出来的。
+    const dynamicAttr = new RegExp(`:(?:${ICON_ATTRS})="[^"]*['"]${name}['"]`);
+    const objectKey = new RegExp(`\\b(?:${ICON_ATTRS}):\\s*['"]${name}['"]`);
+    return others.filter((t) => staticAttr.test(t) || dynamicAttr.test(t) || objectKey.test(t)).length
+      + (tables.includes(`'${name}'`) ? 1 : 0);
+  };
+
+  /** 只用来做自检：领域串在不在场（"撞车的字符串确实存在于树上"这条正对照）。 */
+  const rawStringHits = (s: string): number =>
+    others.filter((t) => t.includes(`'${s}'`) || t.includes(`"${s}"`)).length;
+
+  const LEDGER = CARRIERS as Record<string, string[]>;
+  const ledgerNames = new Set<string>(Object.values(LEDGER).flat());
 
   const keys = Object.keys(ICONS);
-  const orphans = keys.filter((k) => consumersOf(k) === 0);
+  /** ①②③ 全无才叫孤儿：既没画到、也不是任何一族的账本成员。 */
+  const orphans = keys.filter((k) => uiConsumersOf(k) === 0 && !ledgerNames.has(k));
+  /** 一族里连一枚真上屏的都没有 ⇒ 这族的"共享基形"没有任何可观察后果，台账就成了空转的许可证。 */
+  const deadFamilies = Object.entries(LEDGER)
+    .filter(([, members]) => !members.some((m) => uiConsumersOf(m) > 0))
+    .map(([family, members]) => `${family}:${JSON.stringify(members)}`);
 
   const REGISTERED: Array<{ name: string; why: string }> = [
     {
@@ -206,11 +247,23 @@ describe('§2.4 清单：进了唯一来源的每一枚都必须真有人用（�
     expect(texts.length, '一个 .vue/.ts 都没扫到').toBeGreaterThan(20);
     expect(tables.length, '读不到 *_ICONS 那几张查表 ⇒ 会把表驱动的图标全误报成孤儿').toBeGreaterThan(40);
     // 表驱动的那一枚必须算"有人用"（这就是上次误报 6 枚的那一格）
-    expect(consumersOf('sync-synced'), 'SYNC_ICONS 里的名字没被算成消费者 ⇒ 这把尺子又坏了').toBeGreaterThan(0);
+    expect(uiConsumersOf('sync-synced'), 'SYNC_ICONS 里的名字没被算成消费者 ⇒ 这把尺子又坏了').toBeGreaterThan(0);
     // 模板里直接写名字的那一枚也要算
-    expect(consumersOf('menu'), '模板里的 name="menu" 没被扫到').toBeGreaterThan(0);
+    expect(uiConsumersOf('menu'), '模板里的 name="menu" 没被扫到').toBeGreaterThan(0);
+    // 三元里给的动态名也要算（第八十二批那对 checkbox 就是这么用的）
+    expect(uiConsumersOf('checkbox-checked'), ':name 表达式里的三元名字没被扫到').toBeGreaterThan(0);
     // 反向：不存在于任何地方的名字必须是 0（不然这一判是恒真的）
-    expect(consumersOf('zz-no-such-icon'), '一个不存在的名字居然算有消费者 ⇒ 判据恒真').toBe(0);
+    expect(uiConsumersOf('zz-no-such-icon'), '一个不存在的名字居然算有消费者 ⇒ 判据恒真').toBe(0);
+  });
+
+  it('撞车的领域词不算消费者（这条就是那把尺子的洞被补上的证人）', () => {
+    // `all` 是 ListMode 的判别值、**不是**图标名：裸串在场上，但图标位一处没有。
+    expect(rawStringHits('all'), '树上没有 `{ kind: \'all\' }` 这类串 ⇒ 这条对照臂空转，测不出撞车').toBeGreaterThan(0);
+    expect(uiConsumersOf('all'), '领域词 `all` 被算成图标消费者 ⇒ 裸串匹配又混进来了').toBe(0);
+    // 同一格的正身：`folder` 这枚只有账本身份、没有图标位使用者（2026-10-16 实测量到的形状）
+    expect(rawStringHits('folder'), '树上没有 `\'folder\'` 串 ⇒ 这一问无意义').toBeGreaterThan(0);
+    expect(uiConsumersOf('folder'), '`folder` 靠 `kind: \'folder\'` 被撞成"有人画" ⇒ 洞没补上').toBe(0);
+    expect(ledgerNames.has('folder'), '`folder` 不在 CARRIERS 账本里 ⇒ 它的合法身份不存在，该算孤儿').toBe(true);
   });
 
   it('没有消费者的图标只能正是台账里那几枚；被接上了不撤账也红', () => {
@@ -218,5 +271,6 @@ describe('§2.4 清单：进了唯一来源的每一枚都必须真有人用（�
     const unused = REGISTERED.filter((r) => !orphans.includes(r.name));
     expect(extra, `这些图标画进了唯一来源却没人用（§2.4）：${JSON.stringify(extra)}`).toEqual([]);
     expect(unused, `台账里这几枚已经不成立了（接上消费者了就撤账）：${JSON.stringify(unused.map((u) => u.name))}`).toEqual([]);
+    expect(deadFamilies, `这些族一枚都没上屏 ⇒ "同族共享基形"没有可观察后果：${JSON.stringify(deadFamilies)}`).toEqual([]);
   });
 });
