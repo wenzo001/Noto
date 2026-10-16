@@ -4926,6 +4926,31 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 判据（2026-10-16 第九十三批）：#96 那颗「重试」的权威第一次有了**会红的**证人（`auth_failed` 那一处；不升版本）
+
+第八十六批那四处 `v.retryable = false` 一直没证人 —— 我先前交的那条判据把四行全摘掉**照样绿**
+（夹具开局这一位就是 `false`）。06:02 我按"先发可重试的一发、再发确定性的一发"重写证人，
+**前置断言当场把它自己否掉了**：`Injection::status("GET *", 500)` 之后 `sync_status()` 是
+`{phase:"provisioning", badge:"offline", message_key:None, retryable:false}` ——
+500 走 `remote_read_key` 的 `_ => sync.protocol_unreadable` 那一支，而**那一支根本不碰 view**（`lib.rs:2303-2316`），
+只有 `RemoteError::Auth`（401/407）会写 view。⇒ 网络故障类注入造不出"可重试的一发"，这条量实记进 #96。
+
+真正可达的来源是**让路**（§11.4 `SyncEvent::Deferred`，`lib.rs:3429-3432` 明确 `v.retryable = true`，
+证人现成在 `tests/sync_once.rs:767`）。于是新证人 `deterministic_failure_clears_a_retry_bit_left_bright_by_yielding` 把顺序摆成产品真实会走的样子：
+弱服务器开租约 ⇒ A 先入伙推上去并贴住租约 ⇒ X 空库入伙、后写内容、再走一轮 ⇒ X 让路（断 `message_key==sync.leaseHeld` **且** `retryable==true`，前置不成立就红，不留空转）
+⇒ 撤掉现场改成 401 ⇒ 同一台 X 撞确定性失败（断 `sync.auth_failed` 且 `!retryable`）。
+
+**刀（这一批的关键）**：只摘 `auth_failed` 那一处那行 ⇒ 第 ③ 步红，红行把 §4.9 的缺陷形状原样打出来 ——
+`SyncStatusDto { phase:"error", badge:"failed", message_key:Some("sync.auth_failed"), retryable:true, pending_ops:1 }`
+⇒ **这一行是承重的**，界面会一边说"请改口令"一边留着那颗点了没用的「重试」。还原后 `sync_once` **17/0（1 ignored）**、`cargo fmt --all --check` = 0、
+`git diff` 只有测试文件 +57 行（`lib.rs` 与 HEAD 逐字节一致）。不升版本：改的是判据。
+
+**这一格没全结**：另外三处（`root_mismatch` 两处 `:2376`/`:2386`、`foreign_root` `:2403`）仍然没有各自证人 ——
+它们要的是"让路之后**远端 root 变了**"那同一块形状，缺的是覆盖写远端 `protocol.json` 的 `root_id` 的能力
+（`Injection` 的字段面 `status_for/corrupt_manifest/hang_for/abort_for/…` 里**没有**伪造响应体那一类，`crates/notera-test-webdav/src/inject.rs:52-78`）；
+候选路是把账户指到另一个目录（`AccountDraftCmd` 已在 `tests/sync_once.rs:13` 引进来），但**动手前要先量**它会不会顺带把 view 那一位清掉 ——
+不清才是证人，清了就和 ADR-0018 否证我上次那句"换账户造 stale"是同一个坑。
+
 ### 判据（2026-10-16 第九十二批）：#88 是一条**报错**，但它露出 §6 那条判据的绕法口并补上了（不升版本）
 
 **先撤回我自己**：#88 原先写的是"`caps.ts:79-80` 按 UA 把 `safeArea` / `compactToolbar` 默认成 mobile ⇒ 假开关形状"。

@@ -1353,6 +1353,63 @@ async fn accepting_the_peers_purge_after_a_restore_actually_purges_locally() {
 /// 这一条打在**真 `sync_status` DTO** 上（不是打在帮助函数的自洽上）。
 /// 反向对照在本文件里已经有：`lease_held...` 那一族断的是 `assert!(status.retryable, "让路是可重试状态")`
 /// ⇒ 同一个字段在可重试那一类上必须为真，所以"不许为真"这一条不是恒真。
+/// #96 的证人：**上一轮可重试失败点亮的那一位，撞确定性失败时必须被关掉**。
+///
+/// 下面那条 `deterministic_sync_failure_does_not_offer_retry` 证明不了那几行 `v.retryable = false` 有用 ——
+/// 夹具开局这一位就是 `false`（`SyncView` 构造那一处），把四行全摘掉它照样绿。
+/// 所以这一条把顺序摆成产品真实会走的样子，并把前置**写成断言**（06:02 我第一版拿 500 注入造"可重试的一发"，
+/// 前置当场红：500 走 `_ => sync.protocol_unreadable`，那条分支**根本不碰 view**，只有 `RemoteError::Auth` 会 ——
+/// 那次没重犯空转，就是靠这条前置断言）：
+/// ① 弱服务器开租约 ⇒ A 先入伙并推上去（A 手里那份租约是新鲜的）；
+/// ② X 空库入伙、写下一篇、再走一轮 ⇒ 看见 A 的租约还新鲜 ⇒ **让路**（§11.4），这一位被点亮成 `true`；
+/// ③ 撤掉让路现场、改成 401 ⇒ 同一台 X 撞 `sync.auth_failed`（确定性）⇒ 这一位**必须回到 `false`**。
+/// 摘掉 `remote_read_key` 里那一行 `v.retryable = false`，第 ③ 步就红在"继承上一轮"那个形状上 —— 那正是 §4.9 那颗「重试」的权威所在。
+#[tokio::test]
+async fn deterministic_failure_clears_a_retry_bit_left_bright_by_yielding() {
+    let srv = TestServer::start(Backend::Mem).await;
+    let url = srv.base_url();
+    pretend_no_strong_etag(&srv).await;
+
+    let a = Device::boot("retryclear-a", &url);
+    a.app
+        .create_note(&a.app.default_folder_id().unwrap(), doc("A 的先手"))
+        .unwrap();
+    let st_a = a.app.sync_once().await.expect("A 的一轮");
+    assert!(st_a.pushed >= 1, "A 要先推上去并贴上租约：{st_a:?}");
+
+    // ② X：空库先协商（不触发"两库并一库"那道闸），后写内容 ⇒ 这一轮该让路。
+    let x = Device::boot("retryclear-x", &url);
+    x.app.sync_once().await.expect("X 先入伙");
+    x.app
+        .create_note(&x.app.default_folder_id().unwrap(), doc("X 的后手"))
+        .unwrap();
+    let _ = x.app.sync_once().await;
+    let after_yield = x.app.sync_status().unwrap();
+    assert_eq!(
+        after_yield.message_key.as_deref(),
+        Some("sync.leaseHeld"),
+        "前置不成立：X 这一轮没让路，第 ③ 步就退化成下面那条空转 —— {after_yield:?}"
+    );
+    assert!(
+        after_yield.retryable,
+        "前置不成立：让路是可重试状态，这一位没亮起来 —— {after_yield:?}"
+    );
+
+    // ③ 凭据被拒是**确定性**失败：改口令才有出路，重试一百次是同一个结果。
+    srv.inject(Injection::status("GET *", 401)).await;
+    let _ = x.app.sync_once().await;
+    let status = x.app.sync_status().unwrap();
+    assert_eq!(
+        status.message_key.as_deref(),
+        Some("sync.auth_failed"),
+        "第 ③ 步要落在确定性那一发上；换键就说明夹具走岔了 —— {status:?}"
+    );
+    assert!(
+        !status.retryable,
+        "确定性失败不许继承让路那一轮点亮的「重试」—— {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn deterministic_sync_failure_does_not_offer_retry() {
     let srv = TestServer::start(Backend::Mem).await;
