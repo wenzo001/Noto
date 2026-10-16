@@ -139,6 +139,12 @@ function selectTrash(): void {
             @keydown.enter.prevent="commitNewFolder"
           />
         </label>
+        <!-- §4.9 两臂里的"说清为什么"那一臂：这颗「确认」在名字为空时是禁的（:confirm-disabled 同一个条件），
+             所以这一句必须**共用同一个条件**出现，否则用户只看到一颗按不动的按钮。
+             用 `.field-hint`（提示）而不是 banner（警报）：这不是故障，是还没填。 -->
+        <p v-if="newName.trim().length === 0" class="field-hint" data-testid="new-folder-hint">
+          {{ t('sidebar.nameRequired') }}
+        </p>
       </AppDialog>
 
       <FolderTree />

@@ -205,12 +205,11 @@ describe('§4.9 禁用态的两臂：把动作禁死了就得说一句为什么�
 
   /**
    * 已知缺陷台账（**不是豁免**：它记的是"这一处还没修"）。
-   * 修法是给那个 `<AppDialog>` 里加一句 `v-if="newName.trim().length === 0"` 的可见文案
-   * （或按 §4.9 后半个分支：条件不满足时干脆不给这颗按钮）—— 那是产品改动，要整跑证人。
+   * 2026-10-14 第七十三批：`SidebarPanel.vue` 那颗「确认」的原因文案补上了（同一条件的 `.field-hint`），
+   * 所以这一条**按台账要求撤掉** —— 留着不撤会被 `unused` 那条判据红。
+   * 台账现在是空的：这一族的形状仍由"多一处没修就红"（`extra`）与上面那条合成串牙齿守着。
    */
-  const REGISTERED: Array<{ rel: string; expr: string }> = [
-    { rel: 'components/SidebarPanel.vue', expr: 'newName.trim().length === 0' },
-  ];
+  const REGISTERED: Array<{ rel: string; expr: string }> = [];
 
   it('仪器自检：这一族真扫到了调用点（扫到 0 处与"承诺成立"长得一模一样）', () => {
     expect(viewFiles.length, '一个 .vue 都没扫到').toBeGreaterThan(10);

@@ -19,6 +19,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'sidebar.syncSection': '同步',
   'sidebar.trash': '最近删除',
   'sidebar.newFolder': '新建文件夹',
+  // §4.9「把动作禁死了就得说一句为什么」：那颗「确认」在名字为空时是禁的，而同一个弹窗里以前没有一句话说明。
+  'sidebar.nameRequired': '先写个名字，才建得了这个文件夹。',
   'sidebar.rename': '重命名',
   'sidebar.moveTo': '移动到…',
   'sidebar.deleteFolder': '删除文件夹',
