@@ -7433,7 +7433,9 @@ function contrastRatio(fg, bg) {
       };
       const list = document.querySelector('.pane--list');
       const search = list?.querySelector('[data-testid="search-input"]');
-      const header = list?.querySelector('.pane-header');
+      // §1.2 那句「搜索框距列表顶 10px」的**测量边**由用户在 2026-10-16 拍定（A8 的 ③）：
+      // 取「搜索框外框底 → 第一行行顶」—— 三种读法里只有这一对两边都是硬边界、不含行高抖动。
+      const firstRow = list?.querySelector('[data-testid^="note-row-"]');
       const scroll = document.querySelector('.editor-scroll');
       const scs = scroll ? getComputedStyle(scroll) : null;
       return {
@@ -7441,7 +7443,7 @@ function contrastRatio(fg, bg) {
         listHeader: inset('.pane--list', '.pane-title'),
         listRow: inset('.pane--list', '[data-testid^="note-row-"] .row-item__title, [data-testid^="note-row-"] .row-item__main'),
         search: search && list ? Math.round((search.getBoundingClientRect().left - list.getBoundingClientRect().left - (parseFloat(getComputedStyle(list).borderLeftWidth) || 0)) * 10) / 10 : null,
-        searchGap: search && header ? Math.round((search.getBoundingClientRect().top - header.getBoundingClientRect().bottom) * 10) / 10 : null,
+        searchGap: search && firstRow ? Math.round((firstRow.getBoundingClientRect().top - search.getBoundingClientRect().bottom) * 10) / 10 : null,
         editorPad: scs ? { l: parseFloat(scs.paddingLeft), r: parseFloat(scs.paddingRight) } : null,
         gutter: scs ? parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nb-handle-gutter')) : null,
       };
@@ -7466,9 +7468,16 @@ function contrastRatio(fg, bg) {
   check('60 §1.2 编辑器版心左右 40px（--sp-10）；左边那一条另加把手道，是规范里"悬浮控件不遮正文"的落点',
     wide.r.editorPad.r === 40 && wide.r.editorPad.l === 40 + wide.r.gutter,
     JSON.stringify({ pad: wide.r.editorPad, gutter: wide.r.gutter }));
-  check('60 §1.2 那句"搜索框距列表顶 10px"与 4 倍数网格冲突，钉在 8px（--sp-2）上：改数要先过这条',
-    narrow.r.searchGap === 8 && wide.r.searchGap === 8,
-    JSON.stringify({ narrow: narrow.r.searchGap, wide: wide.r.searchGap, 规范原句: '移动端…搜索框距列表顶 10px（token 网格无 10 这一档）' }));
+  // 用户 2026-10-16 拍的口径（A8 的 ③）：这一句量的是「搜索框外框底 → 第一行行顶」，**允许 ±1**。
+  // 旧写法钉的是 `搜索框顶 − .pane-header 底 = 8` 那一对边 —— 那是另一种读法，且把"10 不在 4 倍数网格上"
+  // 这件事当成要钉死的数；现在按拍定的那对边量，9 / 10 / 11 都算守约，**不再拿 1px 报缺陷**。
+  const gapBad = [];
+  for (const [tag, x] of [['1440', wide], ['390', narrow]]) {
+    const g = x.r.searchGap;
+    if (typeof g !== 'number' || g < 9 || g > 11) gapBad.push(`${tag}=${g}`);
+  }
+  check('60 §1.2「搜索框距列表顶 10px」按拍定的那对边量：搜索框外框底 → 第一行行顶，允许 ±1（9..11）',
+    gapBad.length === 0, JSON.stringify({ gapBad, 规范原句: '搜索框距列表顶 10px' }));
   check('60 右侧缩进与左侧同数（列表行不许一边 16 一边挤掉）',
     wide.r.listRow.r === 16 && narrow.r.listRow.r === 16,
     JSON.stringify({ wide: wide.r.listRow.r, narrow: narrow.r.listRow.r }));
