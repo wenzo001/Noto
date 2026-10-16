@@ -4913,6 +4913,19 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 所以以后每次清点，每条待办至少配一条能证伪它前提的 grep / 一次 `--check`，写进那条的台账里（这也是 `.logs/*-superseded.patch` 那两份的由来）。
 本批只动台账与任务描述 ⇒ 不升版本。
 
+### 清理（2026-10-16 第九十批）：删掉 `base.css:194` 那条结构上不可达的 `.pane--editor { display: none }`（D17/#99，不升版本）
+
+单栏档"列表那一面不许把编辑器叠在下面"这一格，实现靠的是选择器 `[data-layout='one'][data-pane='list'] .pane--editor`。
+但挂载条件（`WorkspaceView.vue:77` 的 `v-if="shell.editorVisible"`）与 `data-pane` **同源** ⇒
+"`pane='list'` 且元素挂载"这两个前提不能同时成立，这条规则**从来没有作用对象**（D17 那一节把三处来源连起来读过）。
+
+**可证惰删除四条读数**（04:27 复扫 + 05:32 实测）：
+① 结构推导：上面那三行；② **真 DOM 三档逐一取**：`390/list ⇒ mounted:false`、`390/open ⇒ pane='editor'` 且 `flex 382×716`、`1440/idle ⇒ three` 且 `flex 824×852` ——
+**删前删后这三行读数逐字节相同**（`.logs/pane-editor-probe.mjs` 同一份脚本各跑一遍）；
+③ 全仓没有任何代码依赖这条规则：`.force-show` 在源文件里已为零，门禁里两处 `.pane--editor` 是 `closest()` **定位器**、读的是元素在不在这条栏里，不是这条 `display` 生没生效；
+④ 静态闸没有引用它。
+⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
+
 ### 判据（2026-10-16 第八十九批）：腿 74 接上 —— §4.9 / §1.6 那四个数第一次有"**读渲染结果**"的执行者（不升版本）
 
 规范那四句此前只有**静态**证人（CSS 文本里写着 `120ms cubic-bezier(0.2,0,0,1)` 就算过）。这一条腿读的是 `getComputedStyle`，
