@@ -124,3 +124,22 @@
 | 新格 | 事实 | 要拍的 |
 |---|---|---|
 | **D17** `.pane--editor { display: none }`（`base.css:194`，被删掉的那条 `.force-show` 的成对上一行）**作用面比我在 D15 里说的窄** | 第八十五批删 `.force-show` 时顺手量的：390 单栏停在 `pane='list'` 那一面时，探针取 `document.querySelector('.pane--editor')` 得到的是 **`null`** —— 编辑器**根本没挂载**，不是"挂载了但被这条藏掉"。1440 三栏那档它是 `flex`（正常）。⇒ 我先前那句"这条不是死码，不许删一半"**说重了**：在今天能到达的状态里它没有作用对象 | 它可能仍为"编辑器挂载着、而 `data-pane` 还是 `list`"那个**过渡态/深链态**服务（我没证伪也没证明）。**要拍的只有两句**：**A** 认定它是过渡态的兜底 ⇒ 留着，并把"哪个状态会用到它"写成一条可证伪台账（找得到现场就加判据，找不到就永远留着）；**B** 认定它和 `.force-show` 同族、一起删 ⇒ 那要一次整跑对读（这条改的是栏的可见性，牵动 §3.1 那族读数）。**本批不动它** —— 删规则要的是"证明没有可观察后果"，今天只做到"当前状态到不了" |
+
+### D17 已答（2026-10-16 04:12）：`base.css:194` 那条 `.pane--editor { display: none }` 是**结构上不可达**，不是"今天到不了"
+
+把三处来源连起来读，结论比删 `.force-show` 那批更硬：
+
+- `apps/desktop/src/App.vue:45` 与 `:295` —— `data-pane` 绑的是 **`shell.mobilePane`**；
+- `apps/desktop/src/stores/shell.ts:55` —— `editorVisible = layout ∈ {three, two} || mobilePane === 'editor'`；
+- `apps/desktop/src/views/WorkspaceView.vue:77` —— 那一栏是 **`v-if="shell.editorVisible"`**（不是 `v-show`）。
+
+⇒ 选择器 `[data-layout='one'][data-pane='list'] .pane--editor` 要求"布局一 + `mobilePane='list'` + 元素挂载"三者同时成立；
+而 `layout='one'` 且 `mobilePane='list'` 时 `editorVisible` 必为 **false** ⇒ `v-if` 根本不挂载那个节点。
+**藏住编辑器的从来是 `v-if`，不是这条 CSS** —— 这条规则**永远匹配不到一个存在的元素**。
+今天两处独立读数与此一致：390 单栏停在 list 时探针取 `.pane--editor` 得 `null`（不是 `display:none`），1440 三栏时它是 `flex`。
+
+**所以处置是"可以删"，但本批没删**，理由只有一条：删它要跑一遍全量前端测试与 arch-check 复绿，
+而**这台机器现在跑不动**（04:09 起 `pnpm test` 连撞四次 V8 OOM，提交额度 0.55–1.34 GB）。
+把一条产品改动在"无法验证"的状态下推上主干，比多留一行死 CSS 更贵。
+⇒ 待办已登记（#99）：等能跑验证的机器，按**可证惰删除**四条读数走 —— ① 结构推导（上面那三行）② 真 DOM 在两档下都取不到该节点 ③ 全仓没有任何代码依赖这条规则（`grep force-show` 同族扫法）④ 静态闸全绿；
+然后删掉它，并按 D15 那次一样**不升版本、不占整跑**（同一族先例：`.badge` 死块、`.force-show`）。
