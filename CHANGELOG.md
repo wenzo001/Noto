@@ -4926,6 +4926,29 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 判据（2026-10-16 第九十二批）：#88 是一条**报错**，但它露出 §6 那条判据的绕法口并补上了（不升版本）
+
+**先撤回我自己**：#88 原先写的是"`caps.ts:79-80` 按 UA 把 `safeArea` / `compactToolbar` 默认成 mobile ⇒ 假开关形状"。
+"假开关"那个形状的定义是**界面上画了一颗勾、存得下、没有后果**（`tray` / `globalShortcuts` / `keychain` / `transparency` 当年正是这样，
+`caps.ts:62-64` 与 `:81-86` 那两段注释就是消灭它们的）。而这两键**界面侧一个读者都没有**：
+① `negativePromises.spec.ts` 那一族正是为 §6 立的判据（六键读者必须为零，例外走台账，且"登记了又不存在 ⇒ 红、撤了又冒出来 ⇒ 也红"）；
+② 05:52 全量扫 `apps/desktop/src` 的 `caps` 消费点，真读者只有 `TitleBar.vue:19/30`（`windowChrome` / `shouldHideOnClose`）、
+`RichEditor.vue:612/633`（`dragAndDrop`）、`SidebarPanel.vue:79`（`drawsTitleBar`）；
+③ 桥侧从不发这两键（`caps.ts:9`、`arch-check.mjs:463`）⇒ UA 猜出来的那份值是**没人读的字段**，不是可拨的开关。
+**代码一字未改**：动它只是给一位惰性数据换个来源，零行为差别、零读数差别。
+
+**但证伪过程本身量出一个真缺口**：`readerRe` 只认 `caps.k` / `caps['k']` / 解构三种写法。
+"设置页把整张能力表列成一排开关"那种写法（`Object.keys(caps)`、`caps[name]` 里 `name` 是变量、`v-for="c in caps"`）
+**一个键名都不出现** ⇒ 那条腿会照样报"零读者"，而实际每一位都被读了。今天这种写法确实不存在（我扫过），但**没有任何东西守着它不许出现** ——
+而它恰是 §6 那句"别发明"最省事的绕法。
+
+补两条腿（`negativePromises.spec.ts`）：一条**合成牙齿**（四种通用写法都要被抓，而 `caps["safeArea"]` 这种字面量下标与 `capsMap[3]` 不许误伤，不碰源文件）；
+一条**全源扫描**（界面侧出现任何"整表读 caps"就红，报出文件名）。
+**刀**：往 `apps/desktop/src` 落一份真做 `Object.keys(settings.caps)` 的探针 `.vue` ⇒ 全源那条红并点名 `__knife_probe.vue`，同文件其余 61 条照旧过；删掉探针 ⇒ **62/62**。
+**验证按实写**：`vitest run src/negativePromises.spec.ts` 62/62、`arch-check 40/40`；全量 `pnpm --dir apps/desktop test` **有一遍跑完是 75 files / 75 passed**，
+另两遍**死于环境**（`FATAL ERROR: Zone Allocation failed - process out of memory`，即今天 04:10 那四次同族），那两遍不是读数（[[lane-hygiene-fresh-binary-and-step-interference]]）。
+不升版本：改的是判据，产品一行没动。
+
 ### 界面（2026-10-16 第九十一批）：导入「失败」这一位现在配平 —— 屏幕那句"1 / 0 / 0"不再说谎（0.0.135，#83 / §4.8）
 
 规范 §4.8 明写报告固定三行「新增 / 重复 / 失败」，且"超了要显式失败"。第六十一批用**真载荷**量过这一格的谎：

@@ -148,6 +148,36 @@ describe('§6 零消费者的能力位：真接上之前不许在界面里露头
     expect(readerRe('shareSheet').test('<button v-if="caps.tray">'), '误伤了别的能力位').toBe(false);
   });
 
+  /**
+   * §6 那条"别发明"最省事的绕法不是 `caps.safeArea`（上面那条腿抓得到），而是**把整张能力表通用渲染**：
+   * `Object.keys(caps)` 列成一排开关、`caps[name]` 用变量当下标、`v-for="c in caps"` ——
+   * 三种写法里没有任何键名出现，所以 `readerRe` 那把尺子量到的是"零读者"，而实际上每一位都被读了。
+   * 2026-10-16 撤回报错那条 #88 时扫的就是这一格：当时**确实不存在**这种写法，但**没有东西守着它不许出现**。
+   */
+  const genericRe = /Object\.(?:keys|entries|values)\s*\(\s*[^)]*\bcaps\b|\bcaps\s*\[\s*[A-Za-z_$][\w$]*\s*\]|\bv-for="[^"]*\bcaps\b/;
+
+  it('牙齿（不碰源文件）：通用渲染那三种写法都要被抓，而字面量下标那种合法读法不许误伤', () => {
+    for (const sample of [
+      'const keys = Object.keys(settings.caps);',
+      'const shown = Object.entries(caps).map(([k, v]) => k);',
+      'const value = caps[name];',
+      '<li v-for="c in caps" :key="c">{{ c }}</li>',
+    ]) {
+      expect(genericRe.test(sample), `这种绕法抓不到：${sample}`).toBe(true);
+    }
+    for (const sample of ['caps["safeArea"]', "caps['compactToolbar']", 'capsMap[3]']) {
+      expect(genericRe.test(sample), `误伤了字面量/别的下标：${sample}`).toBe(false);
+    }
+  });
+
+  it('通用渲染今天必须不存在：界面侧不许把整张能力表读成控件（§6 的绕法口）', () => {
+    const offenders: string[] = [];
+    for (const rel of viewFiles) {
+      if (genericRe.test(stripComments(read(rel)))) offenders.push(rel);
+    }
+    expect(offenders, `界面侧出现"整表读 caps"的写法 —— 那会让没接的能力位自己长出控件：${JSON.stringify(offenders)}`).toEqual([]);
+  });
+
   it('没登记成"真接上"的那几个键，界面侧一处都不许读它；登记的那条必须真命中', () => {
     const unregistered = SIX.filter((k) => !WIRED.some((w) => w.key === k));
     const exposed = unregistered.flatMap((k) => hitsOf(k).map((rel) => `${k}@${rel}`));
