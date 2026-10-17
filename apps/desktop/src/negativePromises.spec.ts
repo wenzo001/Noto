@@ -281,6 +281,65 @@ describe('§4.5 冲突面板的动作恰好是"逐条"那三颗（批量动作�
   });
 });
 
+/**
+ * §0.2「界面不许说协议话」—— 规范那一条点名九个词，并且**自己声称"有 eslint + grep 门禁"**。
+ * 那半句在今天是不成立的：`arch-check` 的 `layer:ui-protocol-vocab` 扫的是**线协议词**
+ * （`PROPFIND` / `If-Match` / `propstat` …）落在源码里，与这九个字不是同一份名单；`eslint.config.js`
+ * 里一条词汇禁令都没有 ⇒ 这一格就是那份承诺的执行者。
+ *
+ * 面为什么只取 i18n 的**值**：`arch-check` 的 `hygiene:rust-message-keys-registered` 已经钉住
+ * "文案键唯一登记处 = `i18n.ts`"，所以扫这一份就是扫用户可见文案（模板里另写一句的说法本身就被那条门拦住）。
+ *
+ * 「清单」为什么不能一刀切：它在界面上有三种**正当**用法（待办清单 / 编辑器的勾选块 / 备份清单），
+ * 整词禁掉会红三处合法现场 —— 扫到一片红同样不等于抓对了。于是它只在"被用来称呼 manifest 那个内部对象"
+ * 的那一族键里禁：同步那一族（`sync.`）与错误码发下来的键。⚠ `sync.cap.strongEtag` 与 `sync.divergence`
+ * 这两句到屏幕的路都是**间接**的（前者 `serverCaps.ts` 动态拼键、后者 `notera-core/src/error.rs` 的错误码注册表），
+ * 所以"grep 键名找不到消费者"在这里等于假阴性 —— 判据只看文案本身，不看它怎么被取到。
+ */
+describe('§0.2 界面不许说协议话（九个词不许出现在用户可见文案）', () => {
+  /** 名单逐字抄自规范 §0.2 那一行，**不许由被测文案反推**（那等于让被测对象给自己出题）。 */
+  const HARD = /\bWebDAV\b|\bETag\b|\bmanifest\b|\btombstone\b|\brevision\b|\bpull\b|\bpush\b|墓碑/i;
+  const SYNC_FAMILY = /^(sync|error)\./;
+  const hits = (pairs: Array<{ key: string; value: string }>): string[] =>
+    pairs
+      .filter((p) => HARD.test(p.value) || (SYNC_FAMILY.test(p.key) && p.value.includes('清单')))
+      .map((p) => `${p.key}=${p.value}`);
+
+  it('仪器自检：这一族面真的在盘上（否则"零违规"与"什么都没扫到"长得一模一样）', () => {
+    const pairs = i18nPairs();
+    expect(pairs.length, 'i18n 的键值对数量').toBeGreaterThan(400);
+    // 反例证人必须在场：这三处的「清单」是正常中文，不许被这把刀碰
+    for (const k of ['template.todo', 'tb.checklist', 'settings.backupLoading']) {
+      expect(pairs.some((p) => p.key === k && p.value.includes('清单')), `${k} 必须还在说「清单」`).toBe(true);
+    }
+    expect(pairs.some((p) => p.key.startsWith('sync.')), '同步那一族必须在场').toBe(true);
+  });
+
+  it('牙齿：三种说法都要被同一把尺子抓到（合成串，不碰源文件）', () => {
+    const caught = hits([
+      { key: 'sync.probe', value: '服务器的 ETag 对不上' },
+      { key: 'settings.addr', value: '你的 WebDAV 地址' },
+      { key: 'sync.diverge', value: '远端的清单与本机对不上' },
+    ]);
+    expect(caught.length, '三句假话必须全被抓到').toBe(3);
+    // 而合法的那三处「清单」与一句普通的"拉取更新"式中文不许误伤
+    expect(
+      hits([
+        { key: 'template.todo', value: '待办清单' },
+        { key: 'tb.checklist', value: '清单' },
+        { key: 'settings.backupLoading', value: '正在读这台设备的备份清单…' },
+        { key: 'list.newNote', value: '新建笔记' },
+      ]),
+      '反例证人被误伤了',
+    ).toEqual([]);
+  });
+
+  it('今天没有任何一句用户可见文案在说协议话', () => {
+    expect(hits(i18nPairs()), '这些句子把内部对象说给了用户听').toEqual([]);
+  });
+});
+
+
 describe('§4.7 界面不许说"本地数据已加密"（本地库加密未实现）', () => {
   const pairs = i18nPairs();
   const CLAIM = /本地[^']{0,10}加密|已加密|静态加密|存储加密|at[\s-]?rest/i;
