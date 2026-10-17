@@ -3028,6 +3028,96 @@ function contrastRatio(fg, bg) {
 }
 
 /**
+ * 75 §4.2 第三行的后半：「这条在最近删除里」⇒ **恢复后必须能立刻打字**。
+ *
+ * 前面那半截早就有人守着（`stores/trashFlush.spec.ts`：恢复后 `inTrash=false`、`rev` 跟上、打字能落库），
+ * 但"**立刻**"这个词量的是**渲染结果**：点完「恢复」那颗键，光标到底在不在正文里。
+ * 机制不是靠 `:key` —— `WorkspaceView.vue:125` 的 `:key="editor.noteId"` 在恢复前后是同一个值；
+ * 真让它重挂的是 `stores/editor.ts:190/205` 那一转 `loading`（父链上 `v-if="editor.loading"` 是骨架屏），
+ * 于是 `RichEditor.vue:714` 的 `onMounted` 聚焦规则重跑。**这条腿量的就是这一整串的最终读数**，
+ * 而不是去信任何一环的注释（[[ui-assert-rendered-geometry-not-dom-presence]] 同一族）。
+ *
+ * 现场刻意走用户的门：新建 → 点删除那颗 → 进回收站 → **点开那一行**（停在只读）→ 点「恢复」→
+ * 之后**什么都不点**，直接敲一个字。
+ */
+{
+  const MARK3 = '恢复打字夹具';
+  const fctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const fp = await fctx.newPage();
+  const fErrors = [];
+  fp.on('console', (m) => { if (m.type() === 'error') fErrors.push(m.text().slice(0, 90)); });
+
+  const made3 = await cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: 'f75a1b01', type: 'paragraph', content: [{ text: `${MARK3} 正文` }] }] },
+  });
+  await fp.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await fp.waitForSelector('[data-testid^="note-row-"]', { timeout: 20000 });
+  await fp.click(`[data-testid="note-row-${made3.id}"]`);
+  await fp.waitForTimeout(700);
+  await fp.click('[data-testid="trash-note"]');
+  await fp.waitForTimeout(900);
+  await fp.click('[data-testid="nav-trash"]');
+  await fp.waitForTimeout(900);
+  await fp.click(`[data-testid="note-row-${made3.id}"]`);
+  await fp.waitForTimeout(900);
+
+  // 前置：**这一步必须是真的只读**，否则下面"恢复之后就聚焦"是空对空（同一格的假绿形状）。
+  const before = await fp.evaluate(() => {
+    const el = document.querySelector('.nb-block .nb-content');
+    const a = document.activeElement;
+    return {
+      ce: el?.getAttribute('contenteditable') ?? null,
+      note: (document.querySelector('.editor-note')?.textContent ?? '').replace(/\s+/g, ' ').trim().slice(0, 30),
+      activeInBlock: Boolean(a?.closest?.('.nb-block')),
+    };
+  });
+  check('75 前置：回收站里点开这一篇，编辑区真的停在只读那一格（不是只读就说明现场没造出来）',
+    before.ce === 'false' && /最近删除/.test(before.note), JSON.stringify(before));
+
+  await fp.click('[data-testid="restore-note"]');
+  await fp.waitForTimeout(1300);
+
+  const after = await fp.evaluate(() => {
+    const a = document.activeElement;
+    const block = a?.closest?.('.nb-block') ?? null;
+    const caret = (() => {
+      const s = window.getSelection();
+      if (!s || s.rangeCount === 0 || !block) return null;
+      const r = s.getRangeAt(0);
+      return { inside: block.contains(r.startContainer), offset: r.startOffset, len: (a?.textContent ?? '').length };
+    })();
+    return {
+      activeTag: a === document.body ? 'body' : `${a?.tagName}.${String(a?.className).slice(0, 24)}`,
+      activeInBlock: Boolean(block),
+      activeCe: a?.getAttribute?.('contenteditable') ?? null,
+      caret,
+    };
+  });
+  check('75 点完「恢复」不再点任何东西：焦点自己就落进了正文块，且那颗元素是可写的',
+    after.activeInBlock === true && after.activeCe === 'true', JSON.stringify(after));
+  check('75 光标落在文末（不是第 0 格 —— 那样会把已有正文顶到光标后面，用户第一眼看到的是错的位置）',
+    after.caret !== null && after.caret.inside === true && after.caret.offset === after.caret.len,
+    JSON.stringify(after.caret));
+
+  await fp.keyboard.type('甲');
+  await fp.waitForTimeout(1100);
+  const typed = await fp.evaluate(() =>
+    (document.querySelector('.nb-block .nb-content')?.textContent ?? '').replace(/\s+/g, ' ').trim());
+  const back = await cmd('get_note', { id: made3.id });
+  check('75 直接敲的那一个字真的上了屏（"能打字"不能只看焦点，要看它落没落进那一段）',
+    typed.includes(`${MARK3} 正文甲`), JSON.stringify({ typed }));
+  check('75 那一发也进了核心：读回来的正文带着同一个字（焦点对了但没落库等于没打字）',
+    JSON.stringify(back?.doc ?? back).includes('正文甲'), JSON.stringify({ title: back?.title ?? null }));
+  check('75 这一腿 console error 为零', fErrors.length === 0, fErrors.slice(0, 3).join(' | '));
+
+  await fp.screenshot({ path: `${OUT}/75-focus-after-restore-1440.png` });
+  await fctx.close();
+  await cmd('purge_note', { id: made3.id });
+  await purgeByTitle(MARK3);
+}
+
+/**
  * ㉗ §4.1 保存四格：正在保存 / 有改动没存 / 已存在本机 / 失败（必须带具体原因）。
  *
  * 四格全部走**真的一次保存往返**量出来：`edit_note` 那一发用 route 拦下来 ——
