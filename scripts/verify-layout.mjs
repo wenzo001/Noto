@@ -9084,6 +9084,50 @@ async function purgeByTitle(prefix) {
   await ctx.close();
 }
 
+// 腿 76：设计稿那句「Toast 底部居中堆叠，**最宽 520px**」的**渲染后**那一格（第一百十八批）。
+// 为什么要单独一条：`.toast-host` 那句 `min(520px, calc(100vw - var(--sp-6)))` 在 vitest（jsdom 没有排版引擎）里
+// 只能验到声明那一句；渲染后的矩形宽此前只有一次本机一次性探针的读数（520 / 520 / 366），**那不是门禁** ——
+// 于是"把 520 改成 640"长期没人守。这一条把它变成台面的一部分。
+{
+  const want = [
+    { w: 1440, expectW: 520 },
+    { w: 900, expectW: 520 },
+    // 366 = 390 减 2×--sp-6。两个期望值都写成**字面量**，不由被测的那个 token 算出来
+    // （见 [[mutation-test-every-gate]]：期望值不许由被测常量派生，否则换成 640 也照样"自洽"）。
+    { w: 390, expectW: 366 },
+  ];
+  const read = [];
+  for (const { w, expectW } of want) {
+    const ctx = await browser.newContext({ viewport: { width: w, height: 700 } });
+    const p = await ctx.newPage();
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.waitForSelector('.app-shell', { timeout: 20000 });
+    const got = await p.evaluate(() => {
+      const el = document.querySelector('.toast-host');
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return {
+        rectW: Math.round(r.width),
+        maxW: getComputedStyle(el).maxWidth,
+        sp6: getComputedStyle(document.documentElement).getPropertyValue('--sp-6').trim(),
+        right: Math.round(r.right),
+        vw: window.innerWidth,
+      };
+    });
+    read.push({ 视口: w, 期望: expectW, 读数: got });
+    check(`76 最宽 520px 在 ${w} 档是**渲染出来的那个数**（不是 CSS 里那句话）`,
+      got !== null && got.rectW === expectW, JSON.stringify({ 视口: w, 期望: expectW, 读数: got }));
+    await p.close();
+    await ctx.close();
+  }
+  const narrow = read[2];
+  check('76 前置：390 档那一段的右边缘还在窗口里（是 min() 夹住的，不是被窗口裁掉的）',
+    narrow.读数 !== null && narrow.读数.right <= narrow.读数.vw, JSON.stringify(narrow.读数));
+  check('76 前置：--sp-6 仍是 24px（366 = 390−48 这个期望值的地基；地基换了要说得出是谁换的）',
+    narrow.读数 !== null && narrow.读数.sp6 === '24px', JSON.stringify(narrow.读数));
+  notes.push(`     腿 76（渲染后的 toast 栈宽，声明那一句归 deckNumbers.spec.ts）：${read.map((r) => `${r.视口}⇒${r.读数?.rectW ?? '没挂上'}`).join(' / ')}`);
+}
+
 await browser.close();
 // 夹具清干净：这条门禁反复跑，不许每次往开发库里多堆 31 篇。
 for (const id of [...fx.ids, fx.longId]) await cmd('purge_note', { id });
