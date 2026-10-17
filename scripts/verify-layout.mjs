@@ -3061,7 +3061,6 @@ function contrastRatio(fg, bg) {
   await fp.waitForTimeout(900);
   await fp.click(`[data-testid="note-row-${made3.id}"]`);
   await fp.waitForTimeout(900);
-
   // 前置：**这一步必须是真的只读**，否则下面"恢复之后就聚焦"是空对空（同一格的假绿形状）。
   const before = await fp.evaluate(() => {
     const el = document.querySelector('.nb-block .nb-content');
@@ -3075,7 +3074,13 @@ function contrastRatio(fg, bg) {
   check('75 前置：回收站里点开这一篇，编辑区真的停在只读那一格（不是只读就说明现场没造出来）',
     before.ce === 'false' && /最近删除/.test(before.note), JSON.stringify(before));
 
-  await fp.click('[data-testid="restore-note"]');
+  // 「恢复」这颗必须限定在**我自己那一行**里：回收站里可能挂着别的腿留下的夹具笔记，
+  // 点全局第一颗会量到别一篇（读数量的是"焦点回没回来"，点错一篇就整条作废）。
+  const restoreBtn = fp.locator(`[data-testid="note-row-${made3.id}"] [data-testid="restore-note"]`);
+  const restoreCount = await restoreBtn.count();
+  check('75 现场限定：回收站里属于这一篇的「恢复」恰好一颗（0 或 >1 都说明现场不是我以为的那个）',
+    restoreCount === 1, JSON.stringify({ restoreCount, noteId: made3.id }));
+  await restoreBtn.click().catch(() => {});
   await fp.waitForTimeout(1300);
 
   const after = await fp.evaluate(() => {
