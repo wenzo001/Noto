@@ -4926,6 +4926,30 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 判据（2026-10-17 第一百零四批）：G133 关闭 —— §4.6 设置页那两句口令文案第一次有证人（只加判据，不升版本）
+
+第一百零三批登记的那一格。产品**没毛病**（两句话的触发条件早就写对了），缺的是**证人**：
+`credentialStoreUnavailable` 与 `credentialVolatile` 这两个 computed 到屏幕的那一段（`SettingsView.vue:471-476`）从前**零断言**，
+所以"该说的时候不说"和"不该说的时候乱说"两个方向都没人守 —— 后者尤其贵：对着**有**系统凭据库的用户说"这台设备留不住口令"，是一句当场可见的谎。
+
+**新判据**（`credentialHints.spec.ts`，四条，挂的是整个 `SettingsView`，形状照 `conflictVersions.spec.ts` 那个视图级先例）：
+① `keychain: 'none'` ⇒ 填前那句在场；② **正对照** `keychain: 'keychain'` ⇒ 那句不许在场；
+③ 账户 `credentialLive: true` 且 `credentialPersistent: false` ⇒「只在这次运行里有效」在场；④ **正对照** `persistent: true` ⇒ 那句不许在场。
+③④ 故意把现场摆在**核心回传的那三位**上而不是界面开关上 —— 这一族的语义是"两位一起决定一句话"，
+只测"在/不在"会漏掉真正的错法（把 `persistent` 那半截掉，③ 照样绿）。
+
+**四把刀，各自只红一条、且红的是该红的那条**（还原后 `git diff` 为空才算数）：
+**K1** `:471` 的 `v-if` → `false` ⇒ 只有 ① 红；**K2** → `true` ⇒ 只有 ② 红；
+**K3** `:474` 的 `v-if` → `false` ⇒ 只有 ③ 红；
+**K4**（这把才是关键）`settings.ts:158` 去掉 `credentialPersistent === false` 那半截 ⇒ **只有 ④ 红** —— 它证明 ④ 守的是"配对"，不是一个开关位置。
+
+**一条如实记录**：本批第一次跑全量时**红过一遍**，但我那条命令把退出码喂给了管道、只 `tail -6`，**红的是哪条腿没留下名字**
+（[[verify-build-claims-in-this-shell]] 与 [[reflake-classify-by-signature]] 同族：调大超时或重跑一遍当没事，都是消音）。
+当场按顺序复跑：全量 **697/697（76 文件）`rc=0`** · `vue-tsc` 0 错 · `arch-check 40/40` · `eslint` 0 问题 ⇒ 第三遍全量交给 CI（CI 跑全量 vitest、不跑整跑）。
+
+**布局门禁本批一条没动**：新加的四条是 vitest 判据，不在 `verify-layout.mjs` 的 782 条里。
+⇒ 第一百零三批那遍 `782/0` **不能**当本批的证人（[[new-gate-cannot-certify-its-own-batch]]）；本批的证人就是上面那四把刀 + 全量绿。
+
 ### 整跑 + 台账（2026-10-17 第一百零三批）：782/0 落在那两个 commit 的树上，顺手扫出 G133（不改代码，不升版本）
 
 **这一批只有一件事是贵的**：把整跑放到**第一百零一批 + 第一百零二批共用**的那棵树上跑一遍。
