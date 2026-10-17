@@ -979,6 +979,38 @@ check('ci:gates-are-actually-blocking', 'CI-CD §流水线分层 / 实际落地�
   ciGateProblems.join('\n    '));
 
 
+// --------------------------------------------- 33. 步骤名不许钉住它自己会重写的读数 ---
+// 起因（2026-10-17 对 CI 做收盘分诊时发现的）：四条步骤名把**某一次本机实测**抄成了长期标签
+// —— `Rust 全量（本机基线 640 通过 / 0 失败 / 6 ignored）`、`架构适应度…（本机基线 34/34）`、
+// `前端单测（本机基线 559 通过 / 67 文件）`、`契约图（本机基线 59/59）`。每一步自己每次都打印
+// 真实读数，于是过期的永远是标签：到今天实际是 723/0/6、40/40、789/0。CI 页眉上那一句不是读数，
+// 是一个没人更新的旧主张 —— 而读的人先看见它。
+// 判据只打在 `- name:` 那一行，不追注释：带日期的注释是**归因**（"2026-10-09 实测"），
+// 无日期的标签是**主张**（"基线就是这个数"），两类里只有后者会撒谎。
+const pinnedNames = [];
+{
+  const wfDir = join(ROOT, '.github', 'workflows');
+  let files = [];
+  try {
+    files = readdirSync(wfDir).filter((f) => f.endsWith('.yml')).sort();
+  } catch {
+    files = [];
+  }
+  if (files.length === 0) pinnedNames.push(`${rel(wfDir)} 里读不到任何 .yml —— 本条在空转`);
+  for (const f of files) {
+    for (const line of readFileSync(join(wfDir, f), 'utf8').split(/\r?\n/)) {
+      const m = /^ {6}- name:\s*(.+)$/.exec(line);
+      if (!m) continue;
+      const hit = /本机基线|\d+\s*\/\s*\d+|\d+\s*(?:通过|失败|ignored|条|个|文件)/.exec(m[1]);
+      if (hit) pinnedNames.push(`${f}：步骤名里钉着读数「${hit[0]}」→ ${m[1].trim()}`);
+    }
+  }
+}
+check('ci:step-names-pin-no-readings',
+  'ARCHITECTURE-MAP §8（报告不许钉住它自己会重写的读数；2026-10-17 收盘分诊）', pinnedNames,
+  pinnedNames.join('\n    '));
+
+
 // ------------------------------------------------------------------------- 输出 ---
 
 // "扫了 0 个文件"和"扫了但没问题"必须能区分开：前者是门禁在空转，

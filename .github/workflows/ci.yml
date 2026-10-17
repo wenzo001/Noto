@@ -81,7 +81,7 @@ jobs:
       - name: 版本单源（CI-CD §版本与单一版本源）
         run: node scripts/check-versions.mjs
 
-      - name: 架构适应度 + §26 无障碍 + 扫描台账 + CI 门禁对账（本机基线 34/34，2026-10-09 实测）
+      - name: 架构适应度 + §26 无障碍 + 扫描台账 + CI 门禁对账（条数以这一步自己的输出为准）
         run: node scripts/arch-check.mjs
 
       # 图标这条必须阻断：0.0.63 之前那批是纯色方块（1 种颜色、ico 单帧、压根没有 .icns），
@@ -101,7 +101,7 @@ jobs:
       - name: Clippy（-D warnings，与本地同一条命令）
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - name: Rust 全量（本机基线 640 通过 / 0 失败 / 6 ignored，85 个 result 行；串行跑，见下面那条注释）
+      - name: Rust 全量（串行跑，理由见下面那条注释；通过/失败/ignored 数以输出为准）
         # `--test-threads=1` 不是习惯，是判据：`notera-test-webdav` 的
         # `latency_injection_delays_responses` 量的是墙钟（"控制面必须即时"），
         # 同一个二进制里那十几条并发打服务器时，机器一忙就假红 —— 本机 2026-09-28
@@ -118,7 +118,7 @@ jobs:
       #  2026-10-10 第 16 步「前端单测」红的时候它已经被"过去"了、照样 skipped，读数一条都没递出来。
       #  末尾那一步同时读 cargo 与 pnpm 两份输出。）
 
-      - name: 前端单测（本机基线 559 通过 / 67 文件，2026-10-09 实测）
+      - name: 前端单测（全量，通过数与文件数以 pnpm-test.txt 为准）
         working-directory: apps/desktop
         shell: bash
         run: |
@@ -157,7 +157,7 @@ jobs:
 
       # 契约图要一个可用的 chromium；脚本里写死的是本机路径，CI 上要么找不到浏览器
       # 要么装到别处 —— 所以这一步也先不阻断，等首次运行看清实际行为再收紧。
-      - name: 契约图（本机基线 59/59；CI 里浏览器路径未验证，先不阻断）
+      - name: 契约图（CI 里浏览器路径未验证，先不阻断）
         continue-on-error: true
         run: node scripts/verify-diagram.mjs
 
