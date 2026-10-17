@@ -6,7 +6,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 import { stubLocalService, stubServiceDown } from '../testing/http';
-import { buildTree, useFolderStore } from './folders';
+import { buildTree, flattenTree, useFolderStore } from './folders';
 
 /** 形状与键名照抄 dev 桥响应，含 null 的 color / systemKind。 */
 function treeNode(id: string, parentId: string | null, name: string, children: unknown[] = []): Record<string, unknown> {
@@ -15,6 +15,63 @@ function treeNode(id: string, parentId: string | null, name: string, children: u
 
 beforeEach(() => {
   setActivePinia(createPinia());
+});
+
+describe('超过 64 个文件夹（缺口 G132 的现场）', () => {
+  /**
+   * `flattenTree` 里那个 `limit = 64` **不是产品决定**，是函数自己的默认值，
+   * 而它喂的是四个用户看得见的面：侧栏文件夹列表（`FolderTree.vue:42`）、
+   * 「移到」下拉（`WorkspaceView.vue:52`）、导出选择器（`SettingsView.vue:738`）、
+   * 删除确认里那句"东西会去哪"（`FolderTree.vue:170` 取 `defaultNode`）。
+   * 规范 §7 把"文件夹选择器 64 条硬上限"列成**未决**（"这些格子上先别作画"），
+   * 核心侧一条限制都没有（全仓 grep `MAX_FOLDER` / `folder_limit` 为空）——
+   * 于是今天的事实是：界面在没人拍过的情况下静默裁掉了第 65 个之后的文件夹。
+   * §5「文本裁切不许静默裁掉」管的就是这一族。
+   */
+  it('121 个文件夹要一个都不隐形，`byId` 与 `defaultNode` 也不许被上限摘掉', async () => {
+    const kids = Array.from({ length: 120 }, (_, i) =>
+      treeNode(`f${i}`, null, `夹${String(i).padStart(3, '0')}`),
+    );
+    const tree = [...kids, { ...treeNode('default', null, '默认本'), systemKind: 'default' }];
+    stubLocalService({ list_folders: () => tree });
+    const folders = useFolderStore();
+    await folders.load();
+    expect(folders.flat.length).toBe(121);
+    expect(folders.byId.size).toBe(121);
+    // 排在第 65 个之后的那一个，也得能被查到 —— 它就是「移到」下拉里消失的那一类
+    expect(folders.byId.get('f119')?.node.name).toBe('夹119');
+    expect(folders.defaultNode?.node.id).toBe('default');
+  });
+
+  /** 「默认本」被排在第 65 个之后时，删除确认里那句"东西会去哪"就取到空字符串。 */
+  it('默认本排在第 65 个之后时也要认得它（那是删除确认里唯一的落点）', async () => {
+    // 一条 121 层深的链：桥下发的是**嵌套**树，所以从链尾往回包 children；
+    // 深度优先遍历 ⇒ 链尾那一个天然排在第 121 位，不靠中文排序的运气
+    let children: unknown[] = [];
+    const root = (() => {
+      let node: Record<string, unknown> = { ...treeNode('c120', 'c119', '层120', []), systemKind: 'default' };
+      children = [node];
+      for (let i = 119; i >= 0; i -= 1) {
+        node = treeNode(`c${i}`, i === 0 ? null : `c${i - 1}`, `层${i}`, children);
+        children = [node];
+      }
+      return node;
+    })();
+    stubLocalService({ list_folders: () => [root] });
+    const folders = useFolderStore();
+    await folders.load();
+    expect(folders.flat.length, '链上 121 层一个都不许隐形').toBe(121);
+    expect(folders.defaultNode?.node.id, '排在第 121 位的默认本也必须被认出来').toBe('c120');
+  });
+
+  /** 直接对导出的纯函数下手：**默认值不许是一个静默的截断**。 */
+  it('`flattenTree` 不传 limit 时不许截断 —— 64 不是产品决定，是函数自己的默认值', () => {
+    const kids = Array.from({ length: 121 }, (_, i) => treeNode(`k${i}`, null, `夹${String(i).padStart(3, '0')}`));
+    expect(flattenTree(buildTree(kids)).length).toBe(121);
+    // 而**显式**要限流是另一件事：给了数字就照办
+    //（§7 那一格真要拍"选择器只列前 N 条"，得连"还有 M 条"一起画，先例是 §3.3 搜索回满那一句）
+    expect(flattenTree(buildTree(kids), 10).length).toBe(10);
+  });
 });
 
 describe('后端给的嵌套树', () => {

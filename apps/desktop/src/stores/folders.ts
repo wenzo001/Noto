@@ -63,11 +63,21 @@ export function buildTree(value: unknown): FolderNode[] {
   return roots;
 }
 
-export function flattenTree(roots: readonly FolderNode[], limit = 64): FlatFolder[] {
+/**
+ * 深度优先摊平整棵树。
+ *
+ * `limit` **默认不给**：从前这里写死 `limit = 64`，而 64 不是产品决定，是这个函数的默认值 ——
+ * 它喂的是四个用户看得见的面（侧栏列表 `FolderTree.vue:42`、「移到」下拉 `WorkspaceView.vue:52`、
+ * 导出选择器 `SettingsView.vue:738`、删除确认里那句"东西会去哪"走 `defaultNode`），
+ * 于是第 65 个之后的文件夹在界面上静默隐形；核心侧一条限制都没有（缺口 G132，规范 §7 恰把
+ * "文件夹选择器 64 条硬上限"列为未决："这些格子上先别作画"）。
+ * ⇒ 要限流必须由调用方**显式**传，而且真到拍板那天得连"还有 M 条"一起画（先例：§3.3 搜索回满那一句）。
+ */
+export function flattenTree(roots: readonly FolderNode[], limit?: number): FlatFolder[] {
   const out: FlatFolder[] = [];
   const walk = (nodes: readonly FolderNode[], depth: number, path: string[]) => {
     for (const node of nodes) {
-      if (out.length >= limit) return;
+      if (limit !== undefined && out.length >= limit) return;
       out.push({ node, depth, path: [...path, node.name] });
       walk(node.children ?? [], depth + 1, [...path, node.name]);
     }
