@@ -4954,7 +4954,9 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 > **16:45 追记（同一棵 0.0.136 的树）**：提交额度回到 21 GB 之后，补上了始终缺的那遍 **workspace 级 Rust 全量** ——
 > `cargo +stable-x86_64-pc-windows-gnu test --workspace -- --test-threads=1` ⇒ **rc=0，99 个 `test result` 行、723 passed / 0 failed / 6 ignored**（含 `notera-mobile`，日志 `.logs/ws-test-136.log`）。
 > 本表最上面那一行的 **647** 是 0.0.52 时代的同口径读数，723 是这两周新增判据累加之后的数（差 76 条，不是我改了测试口径）。
-> ⚠ 这一行**不等于 lint**：`cargo clippy --workspace --all-targets -- -D warnings` 本机仍没跑，CI 那条又卡在 #98 的 `zip` 审计 ⇒ **"lint 全绿 / CI 绿"这两句现在依旧不许引用**。
+> ⚠ 这一行**不等于 lint** —— 但 lint 随后（16:48）也真跑了：`cargo +stable-x86_64-pc-windows-gnu clippy --workspace --all-targets -- -D warnings` ⇒ **rc=0、18 个 `Checking` 行、0 条 error**
+> （21 s 就过是因为依赖元数据被上一遍 workspace 测试焐热了，不是没跑 —— 判它跑没跑看 `Checking` 行数，别只看耗时）。
+> ⇒ 本机这一侧的 lint 现在是**可以引用**的；**CI 整体仍不许引用**，因为 CI 还卡在 #98 的 `zip` 审计那一步（那条与本段无关）。
 
 ### 判据（2026-10-16 第九十六批）：#96 收尾 —— 第四处证人 `:2376` 与其专属刀（`3861d77`，不升版本）
 
