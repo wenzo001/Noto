@@ -3106,14 +3106,26 @@ function contrastRatio(fg, bg) {
     JSON.stringify(after.caret));
 
   await fp.keyboard.type('甲');
-  await fp.waitForTimeout(1100);
+  await fp.waitForTimeout(300);
   const typed = await fp.evaluate(() =>
     (document.querySelector('.nb-block .nb-content')?.textContent ?? '').replace(/\s+/g, ' ').trim());
-  const back = await cmd('get_note', { id: made3.id });
   check('75 直接敲的那一个字真的上了屏（"能打字"不能只看焦点，要看它落没落进那一段）',
     typed.includes(`${MARK3} 正文甲`), JSON.stringify({ typed }));
-  check('75 那一发也进了核心：读回来的正文带着同一个字（焦点对了但没落库等于没打字）',
-    JSON.stringify(back?.doc ?? back).includes('正文甲'), JSON.stringify({ title: back?.title ?? null }));
+  // 核心那一发等的是**谓词落定**，不是固定 sleep：自动保存是 `AUTOSAVE_DEBOUNCE_MS = 1200` 的防抖窗 + 一次往返。
+  // 这一条的第一版只等了 1100ms 就去读 ⇒ 它红在仪器上（屏幕上那个字明明是对的）。上界 6000ms = 防抖窗的 5 倍：
+  // 真有"永远不落库"那种回归，它照样红，而且带得上 waitedMs，不许拿调大超时当修好。
+  const settleStart = Date.now();
+  let stored = '';
+  let waitedMs = 0;
+  for (;;) {
+    const back = await cmd('get_note', { id: made3.id });
+    stored = JSON.stringify(back?.doc ?? back);
+    waitedMs = Date.now() - settleStart;
+    if (stored.includes('正文甲') || waitedMs >= 6000) break;
+    await fp.waitForTimeout(250);
+  }
+  check('75 那一发也进了核心：读回来的正文带着同一个字（等"防抖 + 往返"这条谓词落定；退化会红且带 waitedMs）',
+    stored.includes('正文甲'), JSON.stringify({ waitedMs }));
   check('75 这一腿 console error 为零', fErrors.length === 0, fErrors.slice(0, 3).join(' | '));
 
   await fp.screenshot({ path: `${OUT}/75-focus-after-restore-1440.png` });
