@@ -4953,6 +4953,24 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ⇒ **这张表现在真正欠的三格没有一个靠安静机**：**#98**（`zip` 2.x/3.x 被 yank，用户的路）· **D19 / #107**（包元数据那句算不算"用户可见文案"）·
 **D18 / D20**（真 Windows 壳里那一眼 —— dev server 没有原生菜单栏，782 条读数**结构上看不见**）。
 
+### 读数（2026-10-17 第一百十二批）：欠了四天的 **workspace 级 Rust 全量**补上了 —— `725 passed / 0 failed / 6 ignored`（99 个 target，`exit 0`）
+
+任务 #102 那格从 0.0.136 起就写着"本机跑不动是提交额度耗尽（1.98 GB）⇒ workspace 级 Rust 全量读数仍缺"。
+今天这台机器额度回到 **21 GB**，就把那一遍补跑了：`cargo +stable-x86_64-pc-windows-gnu test --workspace -- --test-threads=1`，
+跑在 HEAD `77c2097` 上，日志 `.logs/rust-workspace-77c2097.log`。
+
+**对账对得上**：上一本是 **723/0/6**，这本是 **725/0/6** ⇒ **+2**，正好是 G131 那两条跨表判据
+（`the_native_menu_shows_exactly_the_app_shortcut_table` 与 `no_chord_is_advertised_for_two_different_actions`）。
+数不是一样多就算过——**多出来的两条必须说得出是谁**。
+
+⚠ **3 条 warning 不是代码告警，别去"修代码"**：全是同一句 linker stderr 的两份重复 ——
+`ld.exe: .rsrc merge failure: multiple non-default manifests`，挂在 `notera-desktop` / `notera-mobile` 两个测试二进制上（MinGW + Windows 清单）。
+它与"clippy `--workspace --all-targets -D warnings` 当天 `rc=0`"**不矛盾**：clippy 只做检查、不做链接，所以看不见 linker 的 stderr。
+记在这儿是为了下次真在 Windows 上打壳时知道该先看哪：真要变成 error，那是**清单资源合并**的问题（`.manifest` 被塞了两份非默认清单），不是某处 Rust 代码写坏了。
+
+**当场复验的两条便宜门**：`check-versions: 一致（权威 = 根 Cargo.toml）`（覆盖里含 `apps/mobile/src-tauri/tauri.conf.json`，
+`check-versions.mjs:39-41` 那条报错文案直接把"Android 会退回 1.0"写出来了 ⇒ "各端"的版本一致性是有守卫的，不是靠我记着）· `arch-check 40/40`。
+
 ### 文档（2026-10-17 第一百十一批）：执行者表剩下的「据审计」行全部扫完 —— 三条都成立，没有新缺口（不改代码，不升版本）
 
 第一百零六批那把尺子（**对着 `it(` / `check(` 的标题逐条读，不看文件名**）这轮扫完最后三行还写着「据审计」的：
