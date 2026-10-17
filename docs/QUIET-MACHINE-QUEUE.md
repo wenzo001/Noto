@@ -265,7 +265,10 @@ CI 也覆盖这一格，但 CI 现在卡 #98 的 `zip` 审计 ⇒ **"CI 绿"这�
 
 **「清单」不能一刀切**：这个字有三处正当用法（`template.todo` 待办清单 / `tb.checklist`+`editor.blockChecklist` 勾选块 / `settings.backupLoading` 备份清单）。
 把整词禁掉会红三处合法现场 —— **扫到一片红同样不等于抓对了**。待落那把刀的口径写在台账里，并已连第六处（`tauri.conf.json` 的 `longDescription` 那句 WebDAV）一起摆到 **D19** 等人拍：
-**前五句不用拍（点名禁就是合规），只有包元数据那句算不算"用户可见文案"是口径**；#104 等 D19，除它之外不欠机器也不欠额度。
+**前五句不用拍（点名禁就是合规），只有包元数据那句算不算"用户可见文案"是口径**。
+**订正（第一百批）：#104 不等 D19** —— 上一行那句"#104 等 D19"说过头了：等一个包元数据的问题去挡五句屏幕上确实在说的协议话，是把不确定的那一小块扩成整批的阻塞。
+D19 只决定那把刀的**扫描面要不要多包一层 `*.conf.json`**；迟迟没拍就按"应用内文案面"落刀，包元数据那一格继续留账（这不等于拍 B）。
+来历：同一句"唯一阻塞"我同时写进台账与记忆 ⇒ 又造出一次"同一件事两份账"（见 `NEEDS-OTHER-MACHINE-TESTING.md` D19 那节末与 [[two-ledgers-on-one-fact-collide-check-them]]）。
 
 **顺带发现、本批不修的一处文档伤**（写在这儿免得丢）：`python` 扫全部 `docs/**/*.md`，**有 3 处叙述插进了表格中间**
 （`IMPLEMENTATION-STATUS.md:27`、`PRODUCTION-READINESS.md:58`、`NEEDS-OTHER-MACHINE-TESTING.md:72-73`）⇒ 从那一行起 GFM 表格降级成纯文本、后面那些 `|` 行也不再是表。

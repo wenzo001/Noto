@@ -4926,6 +4926,46 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 界面 + 判据（2026-10-17 第一百批）：G131 快捷键定唯一权威（0.0.137，`3815a51`）—— 整跑 **782 PASS / 0 FAIL** 覆盖这一批
+
+**用户拍 D21 选 A**（裁定正文 `docs/design/SPEC-AMENDMENTS.md` **A11**）：`apps/desktop/src/platform/caps.ts` 的 `SHORTCUTS` 是快捷键的**唯一权威**，原生菜单改成它的另一层外壳。
+起因是第九十九批扫 §7 陷阱一量到的事实：**同一个 `Ctrl+K` 在一个窗口里被说成两件事** —— 菜单挂 `view.conflicts`、表里写"搜索"、真按键动手的是第三个实现（`App.vue:135`）。
+
+**改了什么**（`3815a51`，升 patch 0.0.137）：
+- `menu_plan` 五支改成与表**逐字符**一致：新建 `⌘N`/`Ctrl+N`（原样）、搜索 `⌘K`/`Ctrl+K`（从前是 `F`）、设置 `⌘,`/`Ctrl+,`（原样）、
+  同步 `⌘R`/`F5`（从前是 `Ctrl+S`）、冲突收件箱 `⌘⇧C`/`Ctrl+Shift+C`（从前是 `Ctrl+K` ⇒ 那正是撞车那一支）。
+- `MenuSpec` 新增 `shortcut: Option<&'static str>` —— **"这一发键盘归哪一项菜单"从测试里的第四份手抄名单变成产品声明**；
+  写了组合键却指不到表里一行（`accel: Some` 而 `shortcut: None`）当场红。
+- 表里从前**没有**"设置"那一行（`Ctrl+,` 一直只有菜单在动，浏览器档根本没有菜单栏）⇒ 补上那一行并在 `App.vue` 真接上这一发，
+  于是 `Ctrl+,` 在 dev server 里也按得动；§5「每个快捷键都要有等价的指点路径」那条腿（腿 69）的双向差集同步加了 `nav-settings` 这条路径。
+- ⚠ `sync` 在 Windows 是**裸功能键** `F5` ⇒ 旧断言"win 必以 Ctrl 开头"为它单独摘出去（`mac_and_windows_get_the_same_items…` 那两条显式 `assert_eq`）。
+  **别把它"顺手统一"成 `Ctrl+S`** —— 那正是这一批刚拍掉的撞车。
+
+**两条新判据 + 三把刀**（都在 `notera-host/src/platform.rs` 的 tests 里，形状照抄现成的那条 global-shortcut 跨语言测试）：
+① `the_native_menu_shows_exactly_the_app_shortcut_table`（菜单每一支 == 表里那一行，逐字符，mac/win 各一遍）；
+② `no_chord_is_advertised_for_two_different_actions`（**一张"和弦 → 动作"的账**：表里每一行与菜单每一项都往同一张账登记，同一和弦被第二个动作占用就红 ——
+这条不是冗余：**两份表互比看不见"表里自己撞了"**）。
+刀：**K1** 菜单 search 换回 `Ctrl+F` ⇒ ①红（连带那条旧的前缀断言一起红，正是它编码了旧权威）；
+**K2** 表里把 `pin` 也写成 `Ctrl+K` ⇒ **只有②红、①不红**（证明②有自己独立的牙）；
+**K3** 某一项 `accel: Some` 而 `shortcut: None` ⇒ ①红。三把刀各自见血，**还原后 14/14 复绿**。
+
+**顺带修掉一处我自己的仪器病**：`quoted_list` 从前按逗号切数组 ⇒ `keys: ['Ctrl', ',']` 那个**元素本身就是逗号**的被切碎，
+第一版判据把设置那一行读成 `"Ctrl"`（与腿 74 的 `cubic-bezier` 同一族坑，这次踩在自己身上）。改成**按引号对取元素**。
+
+**台面读数**（这一批全部在 `3815a51` 那棵树上现取）：前端 **690/0**（75 个文件）· `vue-tsc` 0 错 · `arch-check 40/40` ·
+`notera-host --lib` **58/0** · clippy `--workspace --all-targets -D warnings` **rc=0** ·
+**整跑 782 PASS / 0 FAIL、`lane-exit=0`、`>>> 布局门禁 PASS`**，归因预检"产品路径干净 ⇒ 算 HEAD `3815a51` 的证人"。
+⚠ 这一遍跑在**重编后的桥**上（`cargo build -p notera-cli` ⇒ 19:28 的新 exe，里面就是 0.0.137 的 `platform.rs`），
+且**换了干净 data-dir**：老目录 `.logs/g102-data` 这次起不来（`taskkill` 之后新 exe 静默不监听、日志 0 字节），
+按台账既有做法**不修旧目录、换名 `.logs/g131-data` 继续** —— 这正是 06:39 那一节写的第 1 步。
+
+**同一轮把 §7 与 §8 也逐行对完了账**（`docs/design/SPEC-EXECUTOR-MAP-2026-10-14.md` 第一百批那两格）：
+§7 十一行里"只允许一层"核心确实强制了（`commands.rs:789`）、"无感合并"那种话界面一句都没有（但那只是零命中，撑起它的是 §4.5 那条双向动作判据）、
+**扫出第二格真缺口 ⇒ G132**（`flattenTree` 那个没人拍过的 64 默认值静默裁掉四个用户看得见的面，第一百零一批修）；
+§8 三问里只有第一问的后半句"不能出现任何协议词汇"没人守（= G130）。
+
+
+
 ### 文档（2026-10-17 第九十九批）：§7 那一格点名过的陷阱，扫出来是真的 —— `Ctrl+K` 在同一个窗口里被说成两件事（G131，不升版本）
 
 **这批仍然只动文档**（`docs/NEEDS-OTHER-MACHINE-TESTING.md` 新开 D20），因为结论是"要先有读数、要拍权威归属"，不是我能替你定的那一种。
