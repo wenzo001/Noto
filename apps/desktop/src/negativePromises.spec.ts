@@ -283,8 +283,9 @@ describe('§4.5 冲突面板的动作恰好是"逐条"那三颗（批量动作�
 
 /**
  * §0.2「界面不许说协议话」—— 规范那一条点名九个词，并且**自己声称"有 eslint + grep 门禁"**。
- * 那半句在今天是不成立的：`arch-check` 的 `layer:ui-protocol-vocab` 扫的是**线协议词**
- * （`PROPFIND` / `If-Match` / `propstat` …）落在源码里，与这九个字不是同一份名单；`eslint.config.js`
+ * 那半句在今天是不成立的：`arch-check` 的 `layer:ui-protocol-vocab` 扫的是**另一份名单**
+ * （`arch-check.mjs:267` 那一行，全是线协议上的方法名与头字段，一个中文字都没有）落在源码里，
+ * 与这九个字不是同一份名单；`eslint.config.js`
  * 里一条词汇禁令都没有 ⇒ 这一格就是那份承诺的执行者。
  *
  * 面为什么只取 i18n 的**值**：`arch-check` 的 `hygiene:rust-message-keys-registered` 已经钉住
