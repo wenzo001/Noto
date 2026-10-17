@@ -9,12 +9,12 @@
 git status --porcelain --untracked-files=no    # 必须为空：共享工作树里别人的未提交改动会让读数归不了因
 node scripts/verify-layout.mjs; echo $?        # 只跑预检：退出 0 才算现场够（3 = 提交额度不够，4 = 树不可归因）
 nohup pnpm --dir apps/desktop dev >/dev/null 2>&1 &                                    # 5173
-nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 17323 &    # 桥；两天以上旧就先重编
+nohup ./target/debug/notera-cli.exe --data-dir .logs/g131-data serve --port 17323 &   # 桥；**数据目录用干净的**（2026-10-17 量到的：`g102-data` 那种跑过很多遍的老目录会让新 exe 静默不监听 —— 0 字节日志、端口不 LISTENING，而干净目录秒起。按仓内既有做法**换名继续、不修旧库**）；Rust 侧改动不在同一棵树上时先重编，否则整跑读数不算同一棵树
 ```
 桥若是旧的，先 `cargo +stable-x86_64-pc-windows-gnu build -p notera-cli` 再起（Rust 侧改动不在同一棵树上时，整跑读数不算同一棵树）。
 跑 lane 期间**不要有任何本地负载**（自己连跑 `vitest`、开 `gh run watch` 轮询都算 —— 会把 lane 挤挂在 0 条真 FAIL 上，那种读数不是证人）。
 
-## 顺序（每步都是一次"改前 / 改后"的整跑对读，776 条读数逐条 diff）
+## 顺序（每步都是一次"改前 / 改后"的整跑对读，**782** 条读数逐条 diff —— 2026-10-17 前写的 776 已过期）
 
 | 步 | 做什么 | 期望 | 出错怎么办 | 版本 |
 | --- | --- | --- | --- | --- |
@@ -24,6 +24,25 @@ nohup ./target/debug/notera-cli.exe --data-dir .logs/g102-data serve --port 1732
 | 3 | #92（G129 那颗必然没用的「重试」）：`stores/sync.ts` 的 `case 'failed'` 不再无条件 `retryable: true` | 按 #92 里写好的：store 级腿 + `sync-retry` 渲染腿 + **反向对照臂**（网络类失败仍必须给重试）；三把刀各红一次 | 折叠一改，徽标族任何一条读数变化都要能指名是哪一发信号引起的；说不清就 park 成 patch 记 BLOCKED | 升 patch |
 | 4 | #85：把 `.logs/motion-rendered-probe.mjs` 那三档形状**转录成整跑一条腿**（渲染后 `animation-duration` / `transition-duration`） | 新腿必须自己带牙：改 `--motion-fast` ⇒ 那条腿红；**只加腿不改产品** ⇒ 其余 776 条应 0 差异 | 转录时两个坑：期望值从规范原文抄，别由被测 CSS 反推；字面 `sync-spin 1.4s` 不许算进"token 消费者"下界 | 不升（只动门禁） |
 | 5 | 收尾三件套 | `node scripts/clean-scratch.mjs --self-test && node scripts/clean-scratch.mjs --check`（`.logs` 上界 24 / 128 MB）；证据图单独一次 `docs(evidence)` 提交；`.logs/*-pending.patch` 里已落的**改名 `-applied`**，别留重复可打的残骸 | — | — |
+
+## 队列状态（2026-10-17 晚订正 —— **这张表现在是空的**）
+
+上面第 0–4 步**已全部落进主干**，逐条对号（今天一台安静机把队列清完了）：
+
+| 步 | 结论 | 证人 |
+| --- | --- | --- |
+| 0 基线 | 读数上界从 **776 换成 782** | 今天两遍各 **782 PASS / 0 FAIL**（`lane-exit=0`）：一遍在 `3815a51`（0.0.137），一遍在 `f5860c7`（同时盖 0.0.138 + 0.0.139） |
+| 1 两枚载体图标（#82/#62） | **已落**（0.0.132 那一族） | `components/ui/icons.ts:141-142` 的 `folder` / `box` 两族在树上，注释那句"从今天起有机检对象了"就是它落地时写的；§2 图标族那几条腿今天全绿 |
+| 2 新建文件夹那句原因文案（#86） | **已落** | `689fcfd`（0.0.133，第八十四批）：`SidebarPanel.vue:145-146` + `i18n.ts:23` `sidebar.nameRequired`，且 ③ 那半边的 `REGISTERED` 确实随批撤成 `[]`（`negativePromises.spec.ts:242`） |
+| 3 G129 那颗「重试」（#92） | **已落** | 四处确定性站点**全有证人、四把刀都下过**（见 `notera-g129` 那一族台账）；今天 lane 里徽标族全绿 |
+| 4 运动参数转录成腿 74（#85） | **已落** | 今天那遍的日志里有 `PASS 74 …`（悬停/浮层/转圈三档 + reduced-motion + 反向对照），且 `PASS 74 仪器自检` 那条也在线上 |
+
+⚠ **两份补丁残骸的处理方式与第 5 步写的不一样，如实记在这里**：`leg74-motion-rendered-applied.patch` 按规矩改了名留下；
+`.logs/icons62-folder-box-pending.patch` 与 `.logs/kp86-namehint-pending.patch` **已经不在这台机器上了**（不是改名，是没有了）⇒
+**任何人接手都别再 `git apply` 第 1、2 步**，那两格现在唯一的作用是历史。
+
+⇒ **现在真正欠的三格没有一个靠安静机**：**#98**（`zip` 2.x/3.x 被 yank，要么上游迁移要么逐条写理由豁免，**不许松 `--deny warnings`** —— 这是用户的路）·
+**D19 / #107**（包元数据那句算不算"用户可见文案"，等他拍）· **D18 / D20**（真 Windows 壳里那一眼：`Ctrl+K` / `F5` / `Ctrl+,` 各按下去动了谁、最大化那颗键的图标跟不跟着换 —— dev server 没有原生菜单栏，782 条读数**结构上看不见这一格**）。
 
 ## 这一份**不**包含的（别在这里顺手做）
 
