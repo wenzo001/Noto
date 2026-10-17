@@ -4951,6 +4951,11 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 后半句要在 **Windows 真壳**里目视一次（最大化 → 图标变"还原"、点它变回去），已挂在任务 #89 与 `NEEDS-OTHER-MACHINE-TESTING.md` 那一族（同一族的先例：真窗口 9/9 那批也只能在真壳里量）。
 改的是可见界面 ⇒ 按口径升 patch：**0.0.135 → 0.0.136**。
 
+> **16:45 追记（同一棵 0.0.136 的树）**：提交额度回到 21 GB 之后，补上了始终缺的那遍 **workspace 级 Rust 全量** ——
+> `cargo +stable-x86_64-pc-windows-gnu test --workspace -- --test-threads=1` ⇒ **rc=0，99 个 `test result` 行、723 passed / 0 failed / 6 ignored**（含 `notera-mobile`，日志 `.logs/ws-test-136.log`）。
+> 本表最上面那一行的 **647** 是 0.0.52 时代的同口径读数，723 是这两周新增判据累加之后的数（差 76 条，不是我改了测试口径）。
+> ⚠ 这一行**不等于 lint**：`cargo clippy --workspace --all-targets -- -D warnings` 本机仍没跑，CI 那条又卡在 #98 的 `zip` 审计 ⇒ **"lint 全绿 / CI 绿"这两句现在依旧不许引用**。
+
 ### 判据（2026-10-16 第九十六批）：#96 收尾 —— 第四处证人 `:2376` 与其专属刀（`3861d77`，不升版本）
 
 第九十三～九十五批立了三处证人，第四处 `lib.rs:2369-2376`（"本机已有内容、却要接受别库的根"）一直构造不出来。

@@ -181,6 +181,11 @@ node .logs/leg74-predicate-check.mjs             # 必须回到 btn_曲线_每�
 
 ## 07:20 补：`cargo test --workspace` 在本机跑不动 —— 是**额度**，不是代码；今天的核心改动另有读数
 
+> ✅ **16:45 已补上（额度回到 21 GB 之后）**：`cargo +stable-x86_64-pc-windows-gnu test --workspace -- --test-threads=1` ⇒ **rc=0**，
+> **99 个 `test result` 行、723 passed / 0 failed / 6 ignored**（编译的是 0.0.136 那棵树，含 `notera-mobile`）。
+> ⇒ 下面那段"仍缺 workspace 全量"的欠账**已结**；这一行数是 **#102** 的结案证据（也第一次给了 CHANGELOG 基线表那条 647 之后的新数）。
+> 注意口径：这一遍是 `cargo test`，**不是** `cargo clippy --workspace --all-targets -- -D warnings` —— 后者仍未在本机跑（CI 那条被 #98 卡着），所以"lint 全绿"这句仍不许引用。
+
 07:18-07:20 想给今天那些 `lib.rs` 改动补一遍 **workspace 级 Rust 全量**，两条命令都红，但报错形状是链接器层的：
 `only metadata stub found for rlib dependency core` / `found invalid metadata files for crate serde` /
 `linking with x86_64-w64-mingw32-gcc failed: exit code 1`，同一时刻 `FreeVirtualMemory` = **1.98 GB**
