@@ -14,6 +14,7 @@
  * 跑法：`pnpm --dir apps/desktop test src/stores/trashFlush.spec.ts`
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { watch } from 'vue';
 import { createPinia, setActivePinia } from 'pinia';
 import { noteFixture, stubLocalService } from '../testing/http';
 import { useEditorStore } from './editor';
@@ -193,5 +194,55 @@ describe('移进最近删除之前在飞的保存（缺口 G41）', () => {
     expect(purged.has(B)).toBe(true);
     expect(editor.noteId, '关错篇 ⇒ 用户正在看的那一篇凭空消失').toBe(A);
     expect(editor.blocks.length, '当前这篇的正文不许被清掉').toBeGreaterThan(0);
+  });
+});
+
+/**
+ * §4.2「恢复后必须能立刻打字」里**界面那一侧的机制**（缺口 G135，判据不证产品）。
+ *
+ * 上一条判据证的是"改了要能落库"（`inTrash` 摘掉、`rev` 跟上、真打一段字进核心）。
+ * 而"立刻"这两个字还依赖另一件事：`WorkspaceView.vue:125` 挂的是
+ * `<RichEditor v-else-if="editor.blocks.length > 0" :key="editor.noteId ?? 'empty'" />`，
+ * 而 `RichEditor.vue:714` 的聚焦规则写在 **`onMounted`** 里（非只读 ⇒ 聚焦第一个文字块末尾）。
+ * 恢复走的还是**同一篇**笔记 ⇒ `:key` 不变 ⇒ 只靠 key 不会重挂；真正让它重挂的是
+ * `editor.loading` 在 `open()` 里那一转（`:190` 置真、`:205` 收回）——`v-if="editor.loading"` 先把
+ * 编辑器换成骨架屏，再换回来。少了那一转，用户点完「恢复」还得再点一次正文才能打字，
+ * 而这句话在规范里是硬要求（§4.2 第三行"恢复后必须能立刻打字"）。
+ *
+ * ⚠ 这条判据**量的是 store 那一转**，不是 `document.activeElement`（jsdom 里挂整个 RichEditor 的代价
+ * 与它要防的东西不成比例）。渲染级的焦点证人仍欠着，已按台账记在 `SPEC-EXECUTOR-MAP` 那一行里。
+ */
+describe('恢复那一步要经过"重新读取"这一转（§4.2 立刻能打字的机制）', () => {
+  it('恢复让编辑器经过 loading ⇒ 界面必然重挂一次，`onMounted` 的聚焦规则跟着重跑', async () => {
+    makeCore();
+    const editor = useEditorStore();
+    const notes = useNoteStore();
+
+    await editor.open(B); // 编辑器先停在别处，免得上一条判据那句 flush 掺进来
+    await notes.moveToTrash(A);
+    await editor.open(A); // 回收站里点开它
+    expect(editor.inTrash, '前提：这一篇现在是只读的（这条不是判据）').toBe(true);
+
+    const seen: boolean[] = [];
+    const stop = watch(() => editor.loading, (value) => seen.push(value), { flush: 'sync' });
+    await notes.restore(A);
+    stop();
+
+    expect(seen, '恢复不许只刷列表不重读编辑器 —— 少了这一转，重挂不会发生（2026-10-02 真机：打字没反应、桥那边一支写都没收到）').toContain(true);
+    expect(editor.loading, '重读完了要把 loading 收回去，否则界面一直停在骨架屏').toBe(false);
+    expect(editor.inTrash, '转完之后这一篇必须是可写的').toBe(false);
+  });
+
+  it('对照：点列表里已经开着的那一行不许经过这一转（那会当着用户把他正打的字刷掉）', async () => {
+    makeCore();
+    const editor = useEditorStore();
+
+    await editor.open(A);
+    const seen: boolean[] = [];
+    const stop = watch(() => editor.loading, (value) => seen.push(value), { flush: 'sync' });
+    await editor.open(A); // 同一篇、非 force ⇒ 早退
+    stop();
+
+    expect(seen, '默认那条早退不许被"顺手改成每次都重读" —— 上面那条判据能红，靠的就是这一转只在必要时发生').not.toContain(true);
   });
 });
