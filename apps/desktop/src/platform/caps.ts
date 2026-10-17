@@ -171,6 +171,10 @@ export const SHORTCUTS: ShortcutEntry[] = [
   { id: 'attach', keys: ['Ctrl', 'Shift', 'F'], macKeys: ['⌘', '⇧', 'F'], labelKey: 'tb.attach' },
   { id: 'sync', keys: ['F5'], macKeys: ['⌘', 'R'], labelKey: 'sync.syncNow' },
   { id: 'conflicts', keys: ['Ctrl', 'Shift', 'C'], macKeys: ['⌘', '⇧', 'C'], labelKey: 'conflict.title' },
+  // 这一行是**被补上来的**，不是新功能：原生菜单上「设置」一直写着 `Ctrl+,`/`⌘,`，而这张表里没有那一行
+  // —— 于是同一个窗口里两张表说的话不一样（§7 陷阱一，2026-10-17 拍定"表是唯一权威"）。
+  // 补上它 + `App.vue` 里真接上这一发，两张表才都说同一句话；浏览器档也因此按得动了。
+  { id: 'settings', keys: ['Ctrl', ','], macKeys: ['⌘', ','], labelKey: 'settings.title' },
   { id: 'tray', keys: ['—'], macKeys: ['—'], labelKey: 'settings.trayHint', requires: 'tray' },
   // 下面两行**不是**应用内快捷键，是系统级的（窗口收在托盘里、甚至焦点在别的应用上也生效）。
   // id 与组合键必须和 Rust 侧 `notera_host::platform::global_shortcut_plan()` 一字不差 ——

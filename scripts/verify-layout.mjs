@@ -8507,6 +8507,9 @@ async function pressSweep(p) {
     'attach': ['[data-tb-key="attach"]'],
     'sync': ['[data-testid="sync-badge"]', '[data-testid="sync-now"]'],
     'conflicts': ['[data-testid="nav-conflicts"]'],
+    // 2026-10-17 与键位表那一行同时加的：`Ctrl+,` 从前只有原生菜单在动（浏览器档没有菜单栏），
+    // 现在 `App.vue` 真接上了这一发，指点路径就是侧栏那颗「设置」。
+    'settings': ['[data-testid="nav-settings"]'],
   };
 
   const inTable = rows.map((r) => r.id);

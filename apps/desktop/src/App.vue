@@ -142,6 +142,13 @@ function onGlobalKeydown(event: KeyboardEvent): void {
       shell.toggleSidebar();
       return;
     }
+    if (key === ',') {
+      // 原生菜单上那颗「设置 Ctrl+,」以前只有菜单在动（浏览器档根本没有菜单栏），
+      // 表里也没有这一行 —— 现在两处都接上，键位表才是那句唯一的话（§7 陷阱一）。
+      event.preventDefault();
+      shell.goto('settings');
+      return;
+    }
     if (key === 'p') {
       // 这一条**不带** `!typing` 守卫（0.0.54 改的）：设置页那张表写的是「Ctrl+P 固定」，
       // 而用户最常要固定的正是**手上正开着、焦点在正文里**的那一篇 —— 带着守卫时那一刻按下去

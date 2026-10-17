@@ -9,11 +9,18 @@ use crate::{Badge, BusEvent};
 
 /// 一个菜单项：`id` 是给前端的路由键，`label` 是原生菜单上显示的字，
 /// `accel` 是 accelerator（`Cmd+…` / `Ctrl+…`，由调用方按平台给）。
+///
+/// `shortcut` 是这一项在**前端键位表**（`apps/desktop/src/platform/caps.ts` 的 `SHORTCUTS`）里
+/// 对应那一行的 `id`。**它是产品事实，不是测试里的名单**：菜单上写着组合键而它指不到一行，
+/// 就是"同一个窗口里两张表各说各话"那个 bug 的形状（§7 陷阱一），由
+/// `the_native_menu_shows_exactly_the_app_shortcut_table` 逐字符钉住。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuSpec {
     pub id: &'static str,
     pub label: &'static str,
     pub accel: Option<&'static str>,
+    /// `SHORTCUTS` 里对应那一行的 `id`；`accel` 有值而这里是 `None` 就是"菜单上写了一句表里没有的话"。
+    pub shortcut: Option<&'static str>,
 }
 
 /// 分组的原生菜单（每组渲染成一个子菜单）。
@@ -23,11 +30,19 @@ pub struct MenuPlan {
 }
 
 /// macOS 用 `Cmd`，其余桌面用 `Ctrl`。这是**平台差异**，不是机型分支（ADR-0011）。
+///
+/// **组合键的权威是前端那份键位表**（`apps/desktop/src/platform/caps.ts` 的 `SHORTCUTS`），
+/// 菜单只是它的另一层外壳。这条归属是 2026-10-17 拍下来的（规范 §7「两处文档陷阱」第一条：
+/// 两张表曾把同一个 `Ctrl+K` 说成两件事 —— 菜单说是冲突收件箱、表说是搜索，而真按键动手的是第三个实现）。
+/// 逐字符钉住两边一致的执行者是 `the_native_menu_shows_exactly_the_app_shortcut_table`。
 pub fn menu_plan(mac: bool) -> MenuPlan {
+    // ⚠ 每一支都要与 `SHORTCUTS` 那一行的 `keys` / `macKeys` 逐字符相等，改动请两处一起改。
+    // `sync.now` 在 Windows 上是裸功能键 `F5`（表里就没有修饰键），所以这里按平台各给一整串，
+    // 而不是"同一串换个修饰键前缀" —— 别把它"顺手统一"成 `Ctrl+S`，那正是刚拍掉的那种撞车。
     let (note_new, search, settings, sync, conflicts) = if mac {
-        ("Cmd+N", "Cmd+F", "Cmd+,", "Cmd+S", "Cmd+K")
+        ("Cmd+N", "Cmd+K", "Cmd+,", "Cmd+R", "Cmd+Shift+C")
     } else {
-        ("Ctrl+N", "Ctrl+F", "Ctrl+,", "Ctrl+S", "Ctrl+K")
+        ("Ctrl+N", "Ctrl+K", "Ctrl+,", "F5", "Ctrl+Shift+C")
     };
     let groups: Vec<(&'static str, Vec<MenuSpec>)> = vec![
         (
@@ -37,11 +52,13 @@ pub fn menu_plan(mac: bool) -> MenuPlan {
                     id: "note.new",
                     label: "新建笔记",
                     accel: Some(note_new),
+                    shortcut: Some("new-note"),
                 },
                 MenuSpec {
                     id: "note.search",
                     label: "搜索笔记",
                     accel: Some(search),
+                    shortcut: Some("search"),
                 },
             ],
         ),
@@ -52,11 +69,13 @@ pub fn menu_plan(mac: bool) -> MenuPlan {
                     id: "sync.now",
                     label: "立即同步",
                     accel: Some(sync),
+                    shortcut: Some("sync"),
                 },
                 MenuSpec {
                     id: "view.conflicts",
                     label: "冲突收件箱",
                     accel: Some(conflicts),
+                    shortcut: Some("conflicts"),
                 },
             ],
         ),
@@ -64,14 +83,18 @@ pub fn menu_plan(mac: bool) -> MenuPlan {
             "前往",
             vec![
                 MenuSpec {
+                    // 这一项从来不写组合键，表里也没有"前往最近删除"这一行
+                    //（表里那行 `delete` 干的是"把当前这条移到最近删除"，是另一件事）。
                     id: "view.trash",
                     label: "最近删除",
                     accel: None,
+                    shortcut: None,
                 },
                 MenuSpec {
                     id: "view.settings",
                     label: "设置",
                     accel: Some(settings),
+                    shortcut: Some("settings"),
                 },
             ],
         ),
@@ -322,7 +345,169 @@ mod tests {
         }
     }
 
+    /// §7「两处文档陷阱」第一条的执行者：**原生菜单那一套 ⇄ 设置页那张键位表，必须是同一份话**。
+    /// 撞车的形状是"同一个和弦给两个动作"：`Ctrl+K` 一度同时是菜单上的"冲突收件箱"
+    /// 和表里的"搜索"，而真按键时动手的是第三个实现（`App.vue` 那个处理程序）。
+    /// 判法：菜单上每个带 accel 的项，组合键必须与它那一行动作在表里的字面**逐字符相同**。
+    #[test]
+    fn the_native_menu_shows_exactly_the_app_shortcut_table() {
+        let spec = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/desktop/src/platform/caps.ts"
+        );
+        let src = std::fs::read_to_string(spec).unwrap_or_else(|e| panic!("读不到 {spec}：{e}"));
+        let rows: Vec<&str> = src.lines().filter(|l| l.contains("labelKey:")).collect();
+        assert!(
+            rows.len() >= 14,
+            "键位表只读到 {} 行 —— 这条判据根本没在看东西",
+            rows.len()
+        );
+
+        for mac in [false, true] {
+            let plan = menu_plan(mac);
+            let on = if mac { "mac" } else { "win" };
+            for item in plan.groups.iter().flat_map(|(_, v)| v.iter()) {
+                // 菜单上写着组合键，却指不到表里的一行 ⇒ 那正是"两张表各说各话"的形状。
+                if let Some(accel) = item.accel {
+                    assert!(
+                        item.shortcut.is_some(),
+                        "{}：菜单上写着 {accel}，可它没有指向键位表里的任何一行（{on}）",
+                        item.id
+                    );
+                }
+                let Some(sid) = item.shortcut else { continue };
+                let marker = format!("id: '{sid}'");
+                let row = rows
+                    .iter()
+                    .find(|l| l.contains(&marker))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "键位表里没有 {sid} 这一行，可菜单上带着 {}（{on}）",
+                            item.id
+                        )
+                    });
+                let list = quoted_list(row, if mac { "macKeys:" } else { "keys:" });
+                let want = if mac {
+                    list.iter()
+                        .map(|s| {
+                            s.replace('⌘', "Cmd")
+                                .replace('⇧', "Shift")
+                                .replace('⌥', "Alt")
+                                .replace('⌫', "Backspace")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("+")
+                } else {
+                    list.join("+")
+                };
+                assert!(
+                    !want.is_empty(),
+                    "{sid} 在 {on} 上解析出空组合键 —— 取错了字段（{row}）"
+                );
+                assert_eq!(
+                    item.accel.unwrap_or("<菜单上没写>"),
+                    want,
+                    "{}：菜单上写的是 {:?}，键位表里 {sid} 那一行说的是 {want:?}（{on}）",
+                    item.id,
+                    item.accel
+                );
+            }
+        }
+    }
+
+    /// 反向那一半：**同一个和弦不许有两个动作**。上面那条只验"菜单那一行等于表那一行"，
+    /// 抓不到"表里两行自己撞了"或"菜单某一项抢了别人那一发的动作"。
+    #[test]
+    fn no_chord_is_advertised_for_two_different_actions() {
+        let spec = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/desktop/src/platform/caps.ts"
+        );
+        let src = std::fs::read_to_string(spec).unwrap_or_else(|e| panic!("读不到 {spec}：{e}"));
+        let rows: Vec<&str> = src.lines().filter(|l| l.contains("labelKey:")).collect();
+        let mac_chord = |list: Vec<String>| -> String {
+            list.iter()
+                .map(|s| {
+                    s.replace('⌘', "Cmd")
+                        .replace('⇧', "Shift")
+                        .replace('⌥', "Alt")
+                        .replace('⌫', "Backspace")
+                })
+                .collect::<Vec<_>>()
+                .join("+")
+        };
+        // 行上的 id：`{ id: 'search', … }` —— 抠第一对单引号。别用 `quoted_list(line, "id:")`：
+        // 它会顺着找下一个 `[`，取回来的是 keys 那个数组。
+        let row_id = |line: &str| -> String {
+            line.split("id: '")
+                .nth(1)
+                .and_then(|s| s.split('\'').next())
+                .unwrap_or("?")
+                .to_string()
+        };
+
+        for mac in [false, true] {
+            let on = if mac { "mac" } else { "win" };
+            let field = if mac { "macKeys:" } else { "keys:" };
+            let mut owner: std::collections::BTreeMap<String, String> = Default::default();
+            let mut collisions: Vec<String> = vec![];
+            assert!(
+                rows.len() >= 14,
+                "{on}：键位表只读到 {} 行，这张和弦账根本没在看东西",
+                rows.len()
+            );
+            for line in &rows {
+                let list = quoted_list(line, field);
+                let chord = if mac { mac_chord(list) } else { list.join("+") };
+                if chord.is_empty() || chord == "—" {
+                    continue; // 「—」那两行是纯说明（托盘那一档），不占用和弦
+                }
+                let who = row_id(line);
+                if let Some(prev) = owner.get(&chord) {
+                    if *prev != who {
+                        collisions.push(format!("{chord}：既是 {prev} 又是 {who}"));
+                    }
+                } else {
+                    owner.insert(chord, who);
+                }
+            }
+            let menu_chords: Vec<(String, String)> = menu_plan(mac)
+                .groups
+                .iter()
+                .flat_map(|(_, v)| v.iter())
+                .filter_map(|i| {
+                    // 动作身份用**表里那一行的 id**：菜单 id（`note.new`）与表 id（`new-note`）
+                    // 是两套命名，直接互比会把每一行"对上了"的报成撞车。
+                    i.accel
+                        .map(|a| (a.to_string(), i.shortcut.unwrap_or(i.id).to_string()))
+                })
+                .collect();
+            assert!(
+                menu_chords.len() >= 5,
+                "{on}：只读到 {} 个菜单和弦，这条判据没在看菜单",
+                menu_chords.len()
+            );
+            for (chord, id) in menu_chords {
+                if let Some(prev) = owner.get(&chord) {
+                    if *prev != id {
+                        collisions.push(format!("{chord}：表里给 {prev}，菜单挂在 {id}"));
+                    }
+                } else {
+                    owner.insert(chord, id);
+                }
+            }
+            assert!(
+                collisions.is_empty(),
+                "{on} 上有和弦被说成两件事：{}",
+                collisions.join("；")
+            );
+        }
+    }
+
     /// 取 `keys: ['Ctrl', 'Alt', 'N']` 这种字段里的字符串数组。
+    ///
+    /// **按引号对取元素，不许按逗号切**：`keys: ['Ctrl', ',']` 里那个元素本身就是逗号，
+    /// 按 `,` 分会把它切碎（这一族坑在腿 74 的 `cubic-bezier` 上踩过一回，这次踩在自己身上）。
     fn quoted_list(line: &str, field: &str) -> Vec<String> {
         let Some(at) = line.find(field) else {
             return vec![];
@@ -332,11 +517,25 @@ mod tests {
             return vec![];
         };
         let close = after[open..].find(']').unwrap_or(after.len() - open);
-        after[open + 1..open + close]
-            .split(',')
-            .map(|s| s.trim().trim_matches('\'').trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect()
+        let inner = &after[open + 1..open + close];
+        let mut out: Vec<String> = vec![];
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c != '\'' {
+                continue;
+            }
+            let mut item = String::new();
+            for n in chars.by_ref() {
+                if n == '\'' {
+                    break;
+                }
+                item.push(n);
+            }
+            if !item.is_empty() {
+                out.push(item);
+            }
+        }
+        out
     }
 
     #[test]
@@ -356,9 +555,9 @@ mod tests {
         assert_eq!(accel(&w, "note.new"), Some("Ctrl+N"));
         for (id, suffix) in [
             ("note.new", "N"),
-            ("note.search", "F"),
-            ("sync.now", "S"),
+            ("note.search", "K"),
             ("view.settings", ","),
+            ("view.conflicts", "C"),
         ] {
             assert!(
                 accel(&m, id).unwrap().starts_with("Cmd")
@@ -371,6 +570,19 @@ mod tests {
                 "win {id}"
             );
         }
+        // `sync.now` 不在上面那个循环里，而且**这是有意的**：键位表（权威）给 Windows 那一档
+        // 写的是裸功能键 `F5`，没有修饰键前缀可验。它由
+        // `the_native_menu_shows_exactly_the_app_shortcut_table` 逐字符钉住，这两条各写一遍就够。
+        assert_eq!(
+            accel(&m, "sync.now"),
+            Some("Cmd+R"),
+            "mac 的同步要用表里那一支 ⌘R"
+        );
+        assert_eq!(
+            accel(&w, "sync.now"),
+            Some("F5"),
+            "win 的同步是裸功能键，别加修饰键"
+        );
     }
 
     #[test]
