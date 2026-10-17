@@ -4926,6 +4926,31 @@ D 刀（脏一侧）：`LANE_DIRTY_PATHS="crates/notera-host/src/lib.rs"` ⇒ ex
 ④ 静态闸没有引用它。
 ⇒ 删除面 = 4 行（3 行规则 + 1 行空行），`git diff` 自证没有连带改动。**不升版本、不占整跑**（同族先例：`.badge` 死块、`.force-show`）。
 
+### 界面（2026-10-17 第九十七批）：标题栏那颗键的图标现在跟着"最大化/还原"换（0.0.136，#89 / §2.4）
+
+`TitleBar.vue` 那颗键本来就 `win.toggleMaximize()`（**动作是真的**），但图标**恒**画 `win-max` ⇒ 窗口铺满整屏之后，
+标题栏还在画"去最大化"。这一格不是文案问题：`i18n.ts:406` 的 `win.maximize` 值本来就是「最大化或还原」（我先前把它写成"图标与标签都在说谎"，量过之后更正过）——
+**说谎的只有图标**。§2.4 那行"还原"那一枚（`icons.ts` 的 `win-restore`）早就画好了，一直是零消费者的死图标（`iconSystem.spec.ts` 的台账就是这么记的）。
+
+**改法**（只动 `TitleBar.vue` 一处）：`onMounted` 里先 `await win.isMaximized()` 抢一次**现值**，再挂 `win.onResized(...)` 在每次 resize 之后重问一次；卸载时解除监听。
+⚠ 为什么是 `onResized` 而不是 `onMaximized`/`onUnmaximized`：**这两个导出在 `@tauri-apps/api@2.12.0` 里不存在**——
+我第一版按 `api.onResized`（模块级）写，`vue-tsc` 当场报 `TS2339 Property 'onResized' does not exist`，
+而它确实是 **Window 实例上的方法** ⇒ 改成 `win.onResized(...)` 才过（[[verify-library-facts-from-shipped-package]]：包的导出面要打开包验，别照抄我的或任何人的说法）。
+不在前端复刻"是不是最大化"的判断（那是壳层的权威），也不给标签新增键（多一个没人读的键会撞 §8 那把死键尺子）。
+
+**同一批撤账**：`iconSystem.spec.ts` 的 `REGISTERED` 台账清空（那条 `win-restore` 的 `why` 原话就是"接上 isMaximized 之后来撤这条账"）——
+留着不动的话，它就成了替死图标背书的许可证（[[register-debt-as-falsifiable-ledger]]）。
+
+**读数**：`vue-tsc --noEmit` 0 错、`eslint .` 0 告、前端 `vitest` **75 files / 75 passed**（含 `iconSystem` 那一族）、`arch-check 40/40`、
+整跑 **782 PASS / 0 FAIL / 0 条环境噪声放行**（`>>> 布局门禁 PASS`、`lane-exit=0`；跑前先把重启后掉线的 dev(5173) 与桥(17323) 都起回来，`/health` = 200）。
+⚠ 那一遍带 `LANE_ALLOW_DIRTY=1`（未提交的正是这一处改动，HEAD 当时是 `1433b5f`）⇒ 它是**这一处改动自己的证人**（证明 782 条读数一条没动），
+**不是**"某 commit 回到绿"的证据。
+
+**没量到的一格要说清**（登记成待办，不算已验）：**图标跟着状态换这半本身在浏览器里验不到** —— 整跑走的是 dev server，
+`inTauri()` 为假 ⇒ 监听不挂、`maximized` 恒 `false`、图标恒 `win-max`。所以这一批改的是"浏览器档零行为差别 + 真壳里图标不再恒画"，
+后半句要在 **Windows 真壳**里目视一次（最大化 → 图标变"还原"、点它变回去），已挂在任务 #89 与 `NEEDS-OTHER-MACHINE-TESTING.md` 那一族（同一族的先例：真窗口 9/9 那批也只能在真壳里量）。
+改的是可见界面 ⇒ 按口径升 patch：**0.0.135 → 0.0.136**。
+
 ### 判据（2026-10-16 第九十六批）：#96 收尾 —— 第四处证人 `:2376` 与其专属刀（`3861d77`，不升版本）
 
 第九十三～九十五批立了三处证人，第四处 `lib.rs:2369-2376`（"本机已有内容、却要接受别库的根"）一直构造不出来。

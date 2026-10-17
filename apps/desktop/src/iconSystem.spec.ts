@@ -235,12 +235,12 @@ describe('§2.4 清单：进了唯一来源的每一枚都必须真有人用（�
     .filter(([, members]) => !members.some((m) => uiConsumersOf(m) > 0))
     .map(([family, members]) => `${family}:${JSON.stringify(members)}`);
 
-  const REGISTERED: Array<{ name: string; why: string }> = [
-    {
-      name: 'win-restore',
-      why: '§2.4 窗口控制那一行有"还原"这一枚，画好了（icons.ts:104）却全仓零消费者：TitleBar.vue:51-52 那颗恒画 win-max，而 click 走 win.toggleMaximize() ⇒ 最大化之后图标不跟着换。⚠ 标签没说谎：i18n 的 win.maximize 值就是「最大化或还原」（我一开始把它写成"图标与标签都在说谎"，量过 i18n.ts:404 之后更正）。接上 isMaximized 之后来撤这条账（任务 #89）。',
-    },
-  ];
+  /**
+   * 台账现在是空的。曾有的一条是 `win-restore`（§2.4 那枚"还原"画好了却零消费者 —— 因为 `TitleBar.vue` 那颗恒画 `win-max`）：
+   * 2026-10-16 任务 #89 把那颗键接上了 `isMaximized`（resize 之后重问现值，`@tauri-apps/api@2.12.0` 没有 onMaximized/onUnmaximized），
+   * 那枚图标从"待接的账"变成"真上屏"⇒ 按这条判据自己的规矩撤账（留着不动的话，它就成了替死码背书的许可证）。
+   */
+  const REGISTERED: Array<{ name: string; why: string }> = [];
 
   it('仪器自检：键、文件、两张查表都真读到了（这把尺子坏过一次，必须自证）', () => {
     expect(keys.length, 'ICONS 读空了').toBeGreaterThanOrEqual(40);

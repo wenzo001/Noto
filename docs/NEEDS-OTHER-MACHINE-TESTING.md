@@ -150,3 +150,12 @@
 - 门禁里两处 `.pane--editor` 全是**定位器**（`el.closest('.pane--editor')`：`verify-layout.mjs:3723` 与 `:7967`），它们读的是"这个元素在不在这条栏里"，
   **不是**"这条 `display:none` 生没生效" ⇒ 删规则不动这两个消费方（元素在三栏档照样挂载、照样是 `flex`）。
 ⇒ 四条为零成立，#99 可在腿 74 落完之后**直接执行**，不必为它另排一遍整跑。
+
+## D18（2026-10-17 新增，第九十七批 0.0.136）：标题栏那颗键"图标跟着最大化状态换"这半，只能在 **Windows 真壳**里目视
+
+已验的部分：`vue-tsc` 0 错、`eslint` 0 告、前端 75/75、`arch-check 40/40`、整跑 **782/0**（浏览器档零读数差别 —— 这正说明它在 dev 里不改变行为）。
+**验不到的部分**：整跑走 dev server，`inTauri()` 为假 ⇒ `onMounted` 那段监听根本不挂，`maximized` 恒 `false`。
+所以"最大化之后图标从 `win-max` 变成 `win-restore`、点一下又变回来"这半句**没有任何机器读数**，只有代码与类型层面的保证。
+
+请在真壳里做一次（约 10 秒）：① 启动 `Notera_0.0.136` 那个包（或本树 `pnpm --dir apps/desktop tauri dev`）；② 点标题栏那颗最大化键 ⇒ 窗口铺满、**图标应换成"还原"那一枚**（`icons.ts` 的 `win-restore`：两段折角方框）；③ 再点它 ⇒ 窗口还原、图标换回 `win-max`；④ 顺带看一眼悬停提示仍是「最大化或还原」（那句没有说谎，不需要改）。
+若②③的图标不换，就是这一格没落地 —— 报回来时请带"最大化前后那颗键上 `AppIcon` 的 `name` 实际值"（_devtools 里 `document.querySelector('[data-testid="titlebar"] .titlebar__button:nth-child(2) svg')` 的 `data-icon`/外层 `aria-label` 也行），不要只说"看着没变"。
