@@ -49,6 +49,30 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 门禁（2026-10-18 第一百三十五批：#118 关掉 —— 三条依赖豁免名单从此必须字面相等，本机把漂移抓出来并补齐，只动门禁与配置 ⇒ 不升版本）
+- **欠账的形状**：`scripts/audit-rust-deps.mjs` 的 `WAIVERS`、`.cargo/audit.toml` 的 `ignore`、
+  `deny.toml` 的 `ignore` 三处**注释里都写着"同一格"**，可这条关系没有任何门在看。
+  第一百二十七批就记了这条（#118），当天实测漂移是：**`deny.toml` 少 `RUSTSEC-2024-0429`（glib unsound）**，另两处有。
+- **补法不猜语义**：本机装不了 `cargo-deny` / `cargo-audit`（CI 是下载钉版本 + 校验和的产物，
+  这里 `cargo deny --version` 就是 `no such command`），所以我**不判断"deny 到底会不会报这一条"**，
+  而是把三处钉成**字面相等** —— 多一条也红、少一条也红。"同一格"这句话要么成立要么不成立，
+  没有"差一条也算一致"。补进去的那条带着与另两处同样的理由与回看时机（Linux 那半张图、修在 0.20.0、本轮不出 Linux 产物）。
+- **arch-check 加四条腿**（41 → **45**）：来源可解析、**每份名单非空**、三份两两双向差集为空、
+  每个被豁免的 id 必须在 §7 台账里有一格（台账那条是单向的：§7 比名单宽不算错，窄了才算）。
+  非空那条不是凑数：**两份空名单互比 = 完全一致 = 笑着绿过去**，与"扫到 0 项 ≠ 检查过"同形。
+- **四把刀，各自只红自己那一条**（台子 = 备份 → 改 → 跑 → 还原；事后 `git diff` 确认只剩我正当加的那 1 行）：
+  - K1 复原真实漂移（`deny.toml` 去掉 0429）⇒ 只红 `waivers-same-cell`。
+  - K2 `audit.toml` 多一条假的 `RUSTSEC-1999-0001` ⇒ 红 `same-cell` + `waivers-logged`（假 id 当然不在台账里）。
+  - K3 把 `deny.toml` 的 `ignore = [` 段名改坏 ⇒ 只红 `sources-readable` —— **解析器瞎了会自己喊，不会静默跳过**。
+  - K4 把 `audit.toml` 整段清空 ⇒ 红 `lists-nonempty` + `same-cell`（非空那条腿确实抓到了东西，不是陪跑）。
+  还原后回到 45/45。
+- **第一版切错范围这件事也记着**：最初我拿整个文件的 `RUSTSEC-*` 当名单，
+  于是 `selfTest()` 里那三条"故意造的脏样本"（`time@0.1.44 // RUSTSEC-2020-0071` 与两条 rustls 对照）
+  被当成豁免条目，报出"名单分叉 7 条"—— **红的是解析器不是名单**。
+  现在锚死到 `const WAIVERS = { … }` / `[advisories] ignore = [ … ]` 那一段并剥掉行尾注释，
+  取不到那一段就归到"来源读不到"那条腿报红。
+- 本机读数：`node scripts/arch-check.mjs` **45/45**；不涉及产品代码 ⇒ 按口径不升 patch。
+
 ### 构建（2026-10-18 第一百三十四批：0.0.144 —— Android 出包档位 debug → release，为拿体积数先把"能装机"那格押住）
 - **改的是 `.github/workflows/release.yml` 那一行**（从前 `android build --apk --debug --target aarch64`，
   现在去掉 `--debug`），理由与代价都写进 workflow 注释与两份文档里，不留"只改代码不说为什么"的那种改动：

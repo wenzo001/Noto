@@ -301,6 +301,96 @@ for (const f of rustKeyed) {
 check('hygiene:rust-message-keys-registered', 'ARCHITECTURE-MAP §5（文案键唯一登记处 = i18n.ts）', [...new Set(unregistered)],
   `核心发出了未登记的 messageKey（界面会退化成兜底文案）：\n    ${[...new Set(unregistered)].join('\n    ')}`);
 
+// #118：三条依赖豁免名单**声称是同一格**，可这条关系从前没有任何门在看 —— 实测就漂了：
+// 2026-10-18 时 `deny.toml` 少一条 `RUSTSEC-2024-0429`（glib unsound），另两条名单有。
+// 本机装不了 cargo-deny / cargo-audit（CI 是下载钉版本 + 校验和的产物），
+// 所以这里**不去猜"deny 会不会报这一条"**，而是把三份名单钉成字面相等：
+// 多一条也是红、少一条也是红 —— "同一格"这句话要么成立要么不成立，没有"差一条也算一致"。
+const RUSTSEC_ID = /RUSTSEC-\d{4}-\d{4}/g;
+/**
+ * 只吃**名单本体**，不吃整个文件。第一版就是切错范围吃了一套假红：
+ * `audit-rust-deps.mjs` 的 `selfTest()` 里放着"故意造的脏样本"
+ * （`{ name: 'time', version: '0.1.44' }, // RUSTSEC-2020-0071` 等三条 TLS 对照），
+ * 它们也带 RUSTSEC 号 ⇒ 被当成豁免条目，报出"名单分叉 7 条"。
+ * 红的不是名单，是解析器 —— 所以这里锚死到 `const WAIVERS = { … }` /
+ * `[advisories] ignore = [ … ]` 那一段，并把行尾注释剥掉。
+ * 取不到那一段就返回 null，交给"来源读不到"那条判据报红：解析器瞎了不许静默通过。
+ */
+const sliceTo = (text, from, to) => {
+  const a = text.indexOf(from);
+  if (a < 0) return null;
+  const b = text.indexOf(to, a + from.length);
+  return b < 0 ? null : text.slice(a + from.length, b);
+};
+const waiverIds = (path, from, to) => {
+  let text;
+  try {
+    text = read(join(ROOT, path));
+  } catch {
+    return null; // 读不到 = 这条比对本身在空转，下面按红处理，不许静默跳过
+  }
+  const body = sliceTo(text, from, to);
+  if (body === null) return null;
+  const cleaned = body
+    .split('\n')
+    .map((line) => line.replace(/(\s\/\/|\s#).*$/, ''))
+    .join('\n');
+  return new Set(cleaned.match(RUSTSEC_ID) ?? []);
+};
+const WAIVER_SOURCES = [
+  ['scripts/audit-rust-deps.mjs 的 WAIVERS', 'scripts/audit-rust-deps.mjs', 'const WAIVERS = {', '\n};'],
+  ['.cargo/audit.toml', '.cargo/audit.toml', 'ignore = [', '\n]'],
+  ['deny.toml', 'deny.toml', '[advisories]\nignore = [', '\n]'],
+];
+const waiverSets = [];
+const unreadable = [];
+for (const [label, path, from, to] of WAIVER_SOURCES) {
+  const s = waiverIds(path, from, to);
+  if (s === null) unreadable.push(`${label}：${path} 里找不到 \`${from.trim()}\` 那一段`);
+  else waiverSets.push([label, s]);
+}
+check(
+  'hygiene:dependency-waiver-sources-readable',
+  'CI-CD §流水线分层 的 audit 行（三份名单都得在盘上）',
+  unreadable,
+  `读不到豁免名单来源，下面那条比对就成空转：\n    ${unreadable.join('\n    ')}`,
+);
+// 三条腿的"值本身有效"（只互比的判据会一起犯同一个错）：任何一份名单空了，
+// 两份空名单互比 = 完全一致 = 笑着绿过去。所以空集先红。
+const emptied = waiverSets.filter(([, s]) => s.size === 0).map(([label]) => label);
+check(
+  'hygiene:dependency-waiver-lists-nonempty',
+  'PRODUCTION-READINESS §7（豁免名单空了不是"干净"，是解析器瞎了）',
+  emptied,
+  `这份名单里一个 RUSTSEC 号都没解析出来 ⇒ 要么真没豁免、要么解析器读不到那份文件的格式：\n    ${emptied.join('\n    ')}`,
+);
+const waiverDiff = [];
+for (const [la, sa] of waiverSets) {
+  for (const [lb, sb] of waiverSets) {
+    if (la >= lb) continue;
+    for (const id of sa) if (!sb.has(id)) waiverDiff.push(`${id}：在「${la}」里，但「${lb}」没有`);
+    for (const id of sb) if (!sa.has(id)) waiverDiff.push(`${id}：在「${lb}」里，但「${la}」没有`);
+  }
+}
+check(
+  'hygiene:dependency-waivers-same-cell',
+  'PRODUCTION-READINESS §7（三条豁免名单 = 同一格，谁都不许多着谁）',
+  waiverDiff,
+  `名单已经分叉：\n    ${waiverDiff.join('\n    ')}\n    —— 加豁免必须三处一起动（外加 §7 那一格）。`,
+);
+// 台账方向是单向的：每个被豁免的 id 都要在 §7 出现；§7 里多写几个（变异样本用的
+// RUSTSEC-2024-0336 等）不算错 —— 那只是它比名单更宽。
+const ledger = read(join(ROOT, 'docs/PRODUCTION-READINESS.md'));
+const unlogged = [...new Set(waiverSets.flatMap(([, s]) => [...s]))]
+  .filter((id) => !ledger.includes(id))
+  .map((id) => `${id} 在名单里，但 §7 台账没有它那一格`);
+check(
+  'hygiene:dependency-waivers-logged',
+  'PRODUCTION-READINESS §7（每条豁免都要有一格理由与回看时机）',
+  unlogged,
+  `豁免先落地、台账没跟上（下次没人记得为什么豁免）：\n    ${unlogged.join('\n    ')}`,
+);
+
 const RAW_SOCKET = /std::net::(TcpListener|TcpStream|UdpSocket)|std::net::\{[^}]*\b(TcpListener|TcpStream|UdpSocket)\b/;
 // 两个壳都不在 crates/ 下：按名字取源码目录，否则 `crates/notera-desktop/src` 这个
 // 不存在的目录会让"壳有没有自己开 socket"这条检查空转（实测就是这样漏的）。
