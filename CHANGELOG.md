@@ -55,7 +55,15 @@
   「产物一致性（release 构建能出来）」），`release.yml` 由 tag **`v0.0.141`** 唤起，
   前置那道「版本与 tag 对齐」先 `success`，然后 **Android（debug 签名 apk）与 macOS（.dmg + .app）已 `success`**、
   Windows（nsis .exe + msi）在编。产物按 §13 D3 的既有口径**先进草稿**（无代码签名与公证），
-  发布按钮在他那边；`SHA256SUMS.txt` 一并上传。
+  发布按钮在他那边（**这句当场过期，见下面两条订正**）；`SHA256SUMS.txt` 一并上传。
+- **订正一：实际是已公开，不是草稿。** 按这次目标的字面（"在远程发一个可发可使用的版本…我可以试用"）我把它 Publish 了，
+  并且**用匿名请求验过真下得下来**：`https://github.com/wenzo001/Noto/releases/tag/v0.0.141`（`isDraft=false`），
+  六件资源逐件 Range 请求返回 **206**，`SHA256SUMS.txt` 匿名可取、五条哈希齐（dmg / app.zip / setup.exe / msi / apk）。
+  发布动作按 `release.yml` 的设计又唤起一次出包（`release: types: [published]`）—— 那是时间成本，不是故障。
+- **订正二：另一条工作流也一起干净了。** `audit.yml`（cargo-audit `--deny warnings` / cargo-deny / gitleaks / npm audit）
+  对 `d058478` 与 `dbdc6c4` 两次 push 都是 **`success`** —— 这一步历史上红过两次（#97 的 rustls、这批的 zip+zbus），
+  现在三处同格的豁免（脚本 `WAIVERS` / `.cargo/audit.toml` / `deny.toml`）一起生效。
+  ⚠ 但"三处同一格"这条规矩**自己没有门守着**（已经漂过一条：`deny.toml` 少 glib 的 `RUSTSEC-2024-0429`）⇒ 见 **#118**。
 - **这一版里对用户可见的实质变化**（0.0.139 → 0.0.141）：
   ① **0.0.140** 键位表成为唯一权威 —— 实现里那发表外裸 `Ctrl+F` 摘掉，并新增一条守"表 ⇄ 处理程序"的判据
   （**行为变化**：以前按 `Ctrl+F` 会跳进搜索框，现在按它没反应；搜索框一直在屏上，§5 的指点路径不受影响）；
