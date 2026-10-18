@@ -10,6 +10,10 @@
  *   node scripts/clean-scratch.mjs              # 清理并打印
  *   node scripts/clean-scratch.mjs --check      # 只报不删，超预算 exit 1（CI / 门禁那一头用这个）
  *   node scripts/clean-scratch.mjs --self-test  # "何时该删"那套数学的合成序列自检（臂数由脚本自己报）
+ *   **其余任何参数一律拒绝（exit 2，先打印能用的三个）** —— 这一条是本脚本自己赔出来的：
+ *   敲 `--help` 以前会被读成"不是 --check"，于是**直接按默认档删文件**（2026-10-18 因此销毁了
+ *   `.logs/parallel-caps-batch-20261013.patch`，那是并行批次撤回主干之后**唯一那份可逆证明**，
+ *   `.logs` 不进版本控制 ⇒ git 还得回来）。一条会删东西的命令，对拼错的 flag 不许沉默。
  *
  * 三条口径写死在这里，改口径就改这一处：
  *  · **过期的就删**：超过 `logsKeepDays` 的删掉；`perf-*` 夹具目录只等 `perfKeepDays`
@@ -18,6 +22,10 @@
  *    光按天数砍挡不住"一次实验造出 1 GB"那一形；
  *  · **现场保护**：最近 `logsKeepNewest` 项在预算那一轮不许动（正在排查这一轮的东西不是垃圾），
  *    砍不动就报 leftover，不假装成功。
+ * 第四条是这一批加的：**`*.patch` 是可逆证明，不是残骸** —— `.logs/*-pending.patch` 那类"半修先存下来"
+ * 的补丁按仓内规矩本身就是"还没落地、落地了改名 `-applied`"的账，所以它**永不进删除集**，
+ * 也不计进残骸预算（和常驻现场同一本账）。例外那一半（`*-applied.patch` 照收）有自己那一臂，
+ * 免得"保护"扩成"整族都留"—— 那正是 [[feedback-dev-scratch-upper-bound]] 里那条最坏形状。
  * EPERM（Windows 上文件还被进程握着）不当失败：重试两次，剩下的一律记成 leftover 报出来，
  * 由下一次运行接着收 —— 上一版 `verify-layout` 就是在这儿抛出去把整条门禁打断的。
  */
@@ -44,6 +52,12 @@ export const BUDGET = {
   perfKeepDays: 1,
   // 被脚本引用的**常驻现场**：不是残骸，预算与删除都绕开它们（名单必须能被证伪 —— 列了却不存在就报）。
   resident: ['g102-data'],
+  // **可逆证明**：`.logs` 里的 `*.patch` 是"半修先存下来、落地了改名 `-applied`"那份账（见
+  // `feedback-dev-scratch-upper-bound` 与 `park-half-fixes-as-patch-and-record-blocked`）。
+  // 它们既不删也不计进残骸预算 —— 但例外那一半（`unprotected`）必须照收，
+  // 否则"保护"又扩成"这一族整族都留"，那正是这条上界最坏的实现形状。
+  protected: [/\.patch$/],
+  unprotected: [/-applied\.patch$/],
   backupsDir: '.notera-dev/backups',
   backupsKeep: 1,
 };
@@ -57,8 +71,13 @@ export function planPrune(entries, b = BUDGET) {
   const maxBytes = b.logsMaxMb * 1048576;
   // 常驻现场（被脚本引用的那几格）**不进残骸这一本账**：既不预算轮里砍，也不计入超预算的分子。
   const resident = (e) => (b.resident ?? []).includes(e.name);
-  const pool = entries.filter((e) => !resident(e));
-  const residentBytes = entries.filter(resident).reduce((a, e) => a + e.bytes, 0);
+  // 可逆证明走同一本账，但它的"过期那一半"由 `unprotected` 单独放行 —— 两个名单都是空的时恒不保护，
+  // 所以这一族有没有牙全靠 selfTest 那三臂（扫到 0 项 ≠ 检查过）。
+  const isProtected = (e) =>
+    (b.protected ?? []).some((re) => re.test(e.name ?? '')) &&
+    !(b.unprotected ?? []).some((re) => re.test(e.name ?? ''));
+  const pool = entries.filter((e) => !resident(e) && !isProtected(e));
+  const residentBytes = entries.filter((e) => resident(e) || isProtected(e)).reduce((a, e) => a + e.bytes, 0);
   const sorted = [...pool].sort((x, y) => x.ageDays - y.ageDays);
   const doomed = new Set();
   let bytes = pool.reduce((a, e) => a + e.bytes, 0);
@@ -157,6 +176,21 @@ export function sweep(b = BUDGET, { dryRun = false, nowMs = Date.now() } = {}) {
   return report;
 }
 
+/**
+ * 纯函数：把命令行读成一个模式，**认不出来就是 `refuse`**，绝不落到默认档。
+ * 这一格是赔出来的：`--help` 以前被读成"不是 --check"⇒ 直接删（见文件头那段）。
+ * 做成纯函数是为了能被 selfTest 打到 —— 否则"未知参数会停手"这句话本身又是一个没人验的主张。
+ */
+export function parseArgs(argv) {
+  const known = { '--check': 'check', '--self-test': 'self-test' };
+  const rest = argv.filter((a) => a !== '');
+  if (rest.length === 0) return { mode: 'sweep' };
+  if (rest.length > 1) return { mode: 'refuse', why: `只接受 0 或 1 个参数，收到 ${rest.length} 个：${rest.join(' ')}` };
+  const mode = known[rest[0]];
+  if (!mode) return { mode: 'refuse', why: `不认识的参数「${rest[0]}」` };
+  return { mode };
+}
+
 function selfTest() {
   const b = { ...BUDGET, logsKeepNewest: 2, logsKeepDays: 3, perfKeepDays: 1, logsMaxMb: 10 };
   const MB = 1048576;
@@ -200,6 +234,28 @@ function selfTest() {
         { path: 'x', name: 'x', bytes: MB, ageDays: 9 }, { path: 'y', name: 'y', bytes: MB, ageDays: 0.2 }],
       want: ['x'],
     },
+    // ↓ 这三臂是 #8 补的：**一份唯一的可逆证明被 `--help` 那次默认档删掉了**，而删之前它既没被保护、
+    //   也没任何一臂说过"`.patch` 该留"。三臂各挡一种错法：
+    //   ① 没落地的那份必须留（名单漏了 ⇒ 红）；
+    //   ② 已落地改名 `-applied` 的照收（名单写宽了、把整族都留 ⇒ 红 —— 那正是上界最坏的实现形状）；
+    //   ③ 同齡的普通残骸照旧要删（名单写歪成 `/.*/` 那种恒保护 ⇒ 红，"假豁免宽过整族"这一族的老刀）。
+    {
+      name: '可逆证明（*-pending.patch / *-batch*.patch）放了九天也不许砍，已落地的 -applied 那份照收，普通残骸不受影响',
+      in: [{ path: 'pend', name: 'parallel-caps-batch-20261013.patch', bytes: MB, ageDays: 9 },
+        { path: 'half', name: 'g86-namehint-pending.patch', bytes: MB, ageDays: 9 },
+        { path: 'done', name: 'icons62-applied.patch', bytes: MB, ageDays: 9 },
+        { path: 'junk', name: 'probe-out.log', bytes: MB, ageDays: 9 }],
+      want: ['done', 'junk'],
+    },
+    // 保护名单不许把预算算漏：可逆证明那几格记在"常驻/证明"那一本账里，
+    // 而不是被无声地从分子里减掉后连总量也不报（否则盘涨了没人看得见）。
+    {
+      name: '可逆证明不计入残骸，但要计入 residentBytes（涨的是哪一本账要说得出）',
+      in: [{ path: 'pend', name: 'x-pending.patch', bytes: 7 * MB, ageDays: 9 },
+        { path: 'junk', name: 'old.log', bytes: MB, ageDays: 9 }],
+      want: ['junk'],
+      checkResident: 7 * MB,
+    },
   ];
   let bad = 0;
   for (const c of cases) {
@@ -207,26 +263,58 @@ function selfTest() {
     // 而 `for` 循环遍历的是"从最旧开始"，于是数组字面量当期望就会因位置而假红 ——
     // 这一臂第一跑就是这么红的（要 ["p9","p10","p11","p12"]，实际 ["p12","p11","p10","p9"]，是同一批东西）。
     const norm = (a) => [...a].sort().join('|');
-    const got = planPrune(c.in, c.bp ?? b).doomed;
-    const ok = norm(got) === norm(c.want);
+    const plan = planPrune(c.in, c.bp ?? b);
+    const got = plan.doomed;
+    let ok = norm(got) === norm(c.want);
+    if (ok && c.checkResident !== undefined && plan.residentBytes !== c.checkResident) {
+      ok = false;
+      console.log(`     residentBytes 期望 ${c.checkResident}，实际 ${plan.residentBytes} ⇒ 那本账记错了地方`);
+    }
     if (!ok) bad += 1;
     console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.name} ⇒ 该删 ${JSON.stringify(c.want)}，实际 ${JSON.stringify(got)}`);
   }
-  console.log(bad === 0 ? `${cases.length} 臂全过（这条看守自己是活的）` : `${bad} 臂不符 —— 判据坏了，别看磁盘结论`);
+  // ↓ 参数那一半也要有臂：**"未知参数会停手"这句话如果没被验过，它和当初那句"用完就删"是同一类主张**。
+  // 关键那两臂是 `--help`（就是赔掉一份可逆证明的那一发）与拼错的那一发 —— 它们必须 refuse。
+  const argCases = [
+    { in: [], want: 'sweep' },
+    { in: ['--check'], want: 'check' },
+    { in: ['--self-test'], want: 'self-test' },
+    { in: ['--help'], want: 'refuse' },
+    { in: ['--chek'], want: 'refuse' },
+    { in: ['.logs'], want: 'refuse' },
+    { in: ['--check', '--self-test'], want: 'refuse' },
+  ];
+  for (const c of argCases) {
+    const got = parseArgs(c.in).mode;
+    const ok = got === c.want;
+    if (!ok) bad += 1;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} 参数 ${JSON.stringify(c.in)} ⇒ 期望 ${c.want}，实际 ${got}`);
+  }
+  const arms = cases.length + argCases.length;
+  console.log(bad === 0 ? `${arms} 臂全过（这条看守自己是活的）` : `${bad} 臂不符 —— 判据坏了，别看磁盘结论`);
   return bad === 0 ? 0 : 1;
 }
 
 // 只有被当命令跑才动手；被 import（arch-check 那条规则要的是纯函数）时不碰磁盘、不 exit。
 const isCli = (process.argv[1] ?? '').replace(/\\/g, '/').endsWith('scripts/clean-scratch.mjs');
 if (isCli) {
-  const arg = process.argv[2] ?? '';
-  if (arg === '--self-test') process.exit(selfTest());
-  const r = sweep(BUDGET, { dryRun: arg === '--check' });
-  console.log(`${arg === '--check' ? '预算检查' : '清理'}：${r.files} 项 ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份）`);
+  const args = parseArgs(process.argv.slice(2));
+  if (args.mode === 'refuse') {
+    console.error(`拒绝执行：${args.why}`);
+    console.error('  这条命令会删文件，所以对没听见的参数不许沉默。可用的只有三个：');
+    console.error('    node scripts/clean-scratch.mjs              # 清理并打印');
+    console.error('    node scripts/clean-scratch.mjs --check      # 只报不删');
+    console.error('    node scripts/clean-scratch.mjs --self-test  # 删除判据的合成序列自检');
+    process.exit(2);
+  }
+  if (args.mode === 'self-test') process.exit(selfTest());
+  const checking = args.mode === 'check';
+  const r = sweep(BUDGET, { dryRun: checking });
+  console.log(`${checking ? '预算检查' : '清理'}：${r.files} 项 ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份）`);
   console.log(`  残骸 ${r.afterMb} MB / 上界 ${BUDGET.logsMaxMb} MB ·（另有常驻现场 ${r.residentMb} MB，不计入这本账）· 总量 ${r.totalMb} MB / 上界 ${BUDGET.totalMaxMb} MB`);
   for (const l of r.leftovers) console.log(`  带不走（下次再收）：${l}`);
   for (const n of r.staleResident) console.log(`  豁免名单过期：${n} 不在盘上 —— 要么把它加回来，要么把这一格从名单里删掉`);
   if (r.overBudget) console.log(`  ⚠ 残骸砍完仍超预算（${r.afterMb} MB > ${BUDGET.logsMaxMb} MB）—— 只剩"最近 ${BUDGET.logsKeepNewest} 项"那一形，请人工看`);
   if (r.overTotal) console.log(`  ⚠ 总量超预算（${r.totalMb} MB > ${BUDGET.totalMaxMb} MB）—— 常驻现场本身在长，看 ` + BUDGET.resident.join('/') + ` 那几格`);
-  process.exit(arg === '--check' && (r.overBudget || r.overTotal || r.doomed.length > 0 || r.staleResident.length > 0) ? 1 : 0);
+  process.exit(checking && (r.overBudget || r.overTotal || r.doomed.length > 0 || r.staleResident.length > 0) ? 1 : 0);
 }
