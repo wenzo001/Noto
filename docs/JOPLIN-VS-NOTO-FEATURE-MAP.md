@@ -14,26 +14,33 @@
 
 ## 1. 你最关心的两件事，先把数字摆平
 
-### 1.1 安装包：桌面端我们已经比它小两个数量级，但 Android 是我们自己的坑
+### 1.1 安装包：桌面端我们已经比它小两个数量级，Android 那一格在 0.0.145 翻过来了
 
-| 产物 | Joplin 3.7.21 | Noto 0.0.141 | 倍数 |
-|---|---:|---:|---:|
-| Windows 安装器 | `Joplin-Setup-3.7.21.exe` **344.3 MiB** | `Noto_0.0.141_x64-setup.exe` **5.75 MiB** | 它大 **59.9×** |
-| Windows MSI | —（不发） | `..._zh-CN.msi` **7.84 MiB** | — |
-| macOS DMG | `Joplin-3.7.21.dmg` **197.1 MiB** | `Noto_0.0.141_aarch64.dmg` **6.80 MiB** | 它大 **29×** |
-| macOS universal zip | —（不发） | `Noto_0.0.141_universal.app.zip` **6.75 MiB** | — |
-| Linux AppImage | **192.1 MiB** | —（CI 不建 Linux） | — |
-| Linux deb | **155.2 MiB** | —（不发） | — |
-| **Android APK** | 31~48 MiB（Play/APK，本轮未取公开字节数核对） | `app-universal-debug.apk` **149.7 MiB** | **我们比它大** |
+| 产物 | Joplin 3.7.21 | Noto 0.0.141（改档位前） | **Noto 0.0.145（release 档，实测）** | 倍数（对我们最有利那一列） |
+|---|---:|---:|---:|---:|
+| Windows 安装器 | `Joplin-Setup-3.7.21.exe` **344.3 MiB** | `Noto_0.0.141_x64-setup.exe` **5.75 MiB** | `Noto_0.0.145_x64-setup.exe` **5.32 MiB**（5,580,477 B） | 它大 **64.7×** |
+| Windows MSI | —（不发） | `..._zh-CN.msi` **7.84 MiB** | **7.41 MiB**（7,774,208 B） | — |
+| macOS DMG | `Joplin-3.7.21.dmg` **197.1 MiB** | `Noto_0.0.141_aarch64.dmg` **6.80 MiB** | **6.38 MiB**（6,686,703 B） | 它大 **30.9×** |
+| macOS universal zip | —（不发） | `Noto_0.0.141_universal.app.zip` **6.75 MiB** | **6.33 MiB**（6,635,987 B） | — |
+| Linux AppImage | **192.1 MiB** | —（CI 不建 Linux） | — | — |
+| Linux deb | **155.2 MiB** | —（不发） | — | — |
+| **Android APK** | 31~48 MiB（Play/APK，本轮未取公开字节数核对） | `app-universal-debug.apk` **149.7 MiB** | `app-universal-release-unsigned.apk` **14.74 MiB**（15,460,569 B） | **我们比它小 2.1~3.3×** |
 
-结论要分成两句说，不能混：
+结论要分成三句说，不能混：
 
-1. **桌面端不需要"缩小"工程。** 5.75 MiB 的 Windows 安装器已经说明 Tauri 这条路走对了；
-   用户抱怨的"Electron 每个平台都上百 MB"在我们这里不成立。
-2. **Android 那一格是我们自己违反了你定的约束。** `.github/workflows/release.yml:406` 建的是
-   `tauri android build --apk --debug --target aarch64`，任务名 `:262` 明写"debug 签名"。
-   debug APK 不做 R8/资源裁剪、不 strip native 库，产物 149.7 MiB 里绝大部分是构建档位造成的，
-   不是功能造成的。这一条该修，而且修法是构建口径，不是砍功能。
+1. **桌面端不需要"缩小"工程。** 5.32 MiB 的 Windows 安装器已经说明 Tauri 这条路走对了；
+   用户抱怨的"Electron 每个平台都上百 MB"在我们这里不成立。source map 不再随包发（0.0.143）之后又省了一截。
+2. **Android 那一格以前是我们自己违反了你定的约束，0.0.145 已经修掉。** 改的是构建档位，不是砍功能：
+   `tauri android build --apk --debug` → `--apk --target aarch64`（release 档）。
+   debug 不做 R8/资源裁剪、不 strip native 库 —— **同一份代码，149.7 MiB → 14.74 MiB（10.1×）**，
+   这个差就是"档位"两个字的全部含义。代价照实记：没有 keystore ⇒ 产物**未签名** ⇒
+   Android 拒绝安装，所以"真机装得上吗"那一格（`NEEDS-OTHER-MACHINE-TESTING` C1）**仍是 BLOCKED**，
+   签名是用户的决定，我没有擅自生成 keystore 或把签名塞进 CI。
+3. **这条现在由机器守着，不再靠我读网页。** `scripts/collect-release-assets.mjs` 里那一档
+   `CEILINGS`（exe 8 / msi 11 / dmg 10 / zip 10 / apk 24 MiB）在贴进 Release **之前**逐个断，
+   而且**不在表里的新产物类型也红**（否则第一件新增产物就绕过这条门）；
+   每个包的实际字节与离上界还有多少，每次发版由那一步自己印在日志里。
+   口径与前端产物那条上界门同一条：**上界不是"不许变大"，是"变大的那一次必须被说出来，并在这里留下新预算的读数"**。
 
 ### 1.2 内存：这条有实测，且是我们强的一侧
 
@@ -159,6 +166,10 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
    这句对"加载"成立，对"进包"不成立。所以这条重量门禁忌看得见。
    修法：release 构建关 map（或 `.taurignore` 排除），并把"进包字节"和"计数口径"钉成一条判据。
    ⚠️ 未实测：关 map 后安装器省多少（要跑一次 release 构建才有数，我不写估计值）。
+   > **2026-10-18 这一格已可关掉（v0.0.145 的 CI 产物回来了）**：Windows 安装器
+   > **5.75 MiB（0.0.141，带 map）→ 5.32 MiB（0.0.145，不带 map）= 省 0.43 MiB（约 7.4%）**，
+   > MSI 7.84 → 7.41 MiB、DMG 6.80 → 6.38 MiB、app.zip 6.75 → 6.33 MiB。
+   > 注意这是**整包**差分，不是 map 单独的字节 —— 中间还跨了别的批次，别把它读成"map 恰好值 450 KB"。
 2. **Android 发的是 debug APK**（`release.yml:406`，任务名 `:262`）。
    149.7 MiB 的产物里大部分是"没做 R8/strip/按 ABI 拆分"造成的。
    修法要给 `--release`（+ 可选 `aab`）与签名决策 —— **签名归你**（release 草稿与发布一直由你按，2026-10-02 口径）。
@@ -167,6 +178,12 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
    > Android 直接拒装 ⇒ "装机试一遍"那一格回到 BLOCKED，要试机得先签名或临时改回 debug。
    > 体积的真实新数等这一遍 CI 的产物回来；**上限门禁故意留到下一批**，
    > 因为阈值只能落在"旧点 149.7 MiB 与新点"之间，现在拍就是拍脑袋。
+   > **2026-10-18 补（第一百三十八批）**：新数到了 —— **14.74 MiB（15,460,569 B），比 debug 档小 10.1×**，
+   > 所以那一行"我们比它大"整格作废（现在 31~48 MiB 的 Joplin 是我们的 2.1~3.3 倍）。
+   > 上一段说"故意留到下一批"的那条**上限门禁这批立了**：`scripts/collect-release-assets.mjs` 的
+   > `CEILINGS`（apk 24 MiB ≈ 新读数 ×1.6；exe 8 / msi 11 / dmg 10 / zip 10 MiB）在贴 Release 之前断，
+   > 六臂演练台全过（对照 = 这五个真读数、超 1 字节就红、退回 debug 档就红、新类型不在表里也红、
+   > 旧的 1 MiB 地板还在、缺一种平台包就红）。**装机那一格仍 BLOCKED**（未签名），那条不由体积数解冻。
    > 历史那份 `docs/RELEASE-RECORD-0.0.125.md` 里的 155 301 236 B 是它自己那一版的读数，不改写。
 
 ---

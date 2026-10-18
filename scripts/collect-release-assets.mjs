@@ -10,7 +10,10 @@
 // 判据都是"看得见的缺项"，不是"应该没问题"：
 //   - 裸的 `.app` 目录 ⇒ 直接红（该在 macOS job 里压成 zip，不在这里偷偷 zip）；
 //   - 五种产物缺任何一种 ⇒ 红；
-//   - 安装器类文件名里带着 `_这一版_` ⇒ 不带就是"贴了别的版本的包"（Windows 那条腿刚踩过这个坑）。
+//   - 安装器类文件名里带着 `_这一版_` ⇒ 不带就是"贴了别的版本的包"（Windows 那条腿刚踩过这个坑）；
+//   - 体积**下限**逐个断（空包 / 半截上传那种"gh 照收不误"的形状）；
+//   - 体积**上界**逐档断，而且**不在表里的新产物类型也红**（缺口 #3：用户的抱怨一是"安装包太大"，
+//     这一条守的是我们这边别把它加回去 —— 两个实测点写在下面 `CEILINGS` 那段注释里）。
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
@@ -96,6 +99,47 @@ for (const [name, f] of byName) {
   if (f.size < minBytes) failures.push(`${name} 只有 ${f.size} 字节（下限 ${minBytes}）—— 不像一份完整的产物`);
 }
 
+/**
+ * 体积**上界**（缺口 #3；用户 2026-10-18 抱怨一"每个平台的安装包太大了"说的是 Joplin，
+ * 而这条门守的是"别把它变成我们的问题"）。口径与 `scripts/check-frontend-dist.mjs` 同一条：
+ * **上界的作用不是"不许变大"，是"变大的那一次必须被说出来，并在这里留下新预算的读数"**。
+ * 每一档都记着它自己的实测读数（2026-10-18，v0.0.145 那批真产物，`gh release view` 的 `assets[].size`），
+ * 余量倍数就写在旁边 —— 没有读数的那个数就是凭空拍的，凭空拍的阈值既不指方向也守不住。
+ *
+ * 两个数值得留在这段注释里，因为它们解释了为什么 APK 那一档最宽：
+ *  · Android 从 debug 档换到 release 档：**156,465,300 B → 15,460,569 B（10.1×）** ——
+ *    上一批那 149 MiB 不是"包坏了"，是档位（debug 不裁剪、不压缩、留 mini-debug-info）；
+ *  · 用户真正会装的那一档（Windows `*-setup.exe`）今天是 **5,580,477 B**，
+ *    同一份对照表里 Joplin 3.7.21 是 ~93 MiB ⇒ **体积不是我们的缺陷，往后把它加上去才是**。
+ */
+const MB = 1024 * 1024;
+const CEILINGS = [
+  { label: 'Windows NSIS 安装器', pick: /-setup\.exe$/i, maxBytes: 8 * MB, reading: 5580477 },
+  { label: 'Windows MSI', pick: /_x64.*\.msi$/i, maxBytes: 11 * MB, reading: 7774208 },
+  { label: 'macOS 磁盘镜像', pick: /\.dmg$/i, maxBytes: 10 * MB, reading: 6686703 },
+  { label: 'macOS app 包（zip）', pick: /\.app\.zip$/i, maxBytes: 10 * MB, reading: 6635987 },
+  { label: 'Android APK', pick: /\.apk$/i, maxBytes: 24 * MB, reading: 15460569 },
+];
+const ceilingHits = new Set();
+for (const [name, f] of byName) {
+  const hit = CEILINGS.filter((c) => c.pick.test(name));
+  for (const c of hit) ceilingHits.add(name);
+  for (const c of hit) {
+    if (f.size > c.maxBytes) {
+      failures.push(
+        `${c.label} 的 ${name} 是 ${f.size} 字节，超过上界 ${c.maxBytes}（预算建立时的读数是 ${c.reading}）` +
+          ` —— 包在变大。真是有意的，就把这一档的上界与旁边那个读数一起改大，并写进 commit 与 CHANGELOG，别默认放过`,
+      );
+    }
+  }
+}
+// 没有对应档位的新产物类型 ⇒ 红。少了这一格，"上界"对第一个不在表里的产物类型就是**静默不检查**
+// （与"扫到 0 项 ≠ 检查过"同一族：名单漏一档不会让门变红，只会让那一档没人看）。
+const unbounded = [...byName.keys()].filter((n) => !ceilingHits.has(n) && n !== 'SHA256SUMS.txt');
+for (const n of unbounded) {
+  failures.push(`${n} 不在体积上界表里（现有档位：${CEILINGS.map((c) => c.label).join('、')}）—— 新增产物类型要先给它立一档，不许让它绕过这条门`);
+}
+
 // 五种交付物：§4 的"三平台包"＋ §5 的"构建产物随版本走"。
 const required = [
   { label: 'Windows MSI', pick: (n) => /_x64.*\.msi$/i.test(n), versioned: true },
@@ -137,4 +181,11 @@ for (const [name, f] of [...byName.entries()].sort((a, b) => (a[0] < b[0] ? -1 :
 // 清单自己不进清单（它是算完别人之后才写的）；格式跟 `sha256sum` 一致（两个空格），`sha256sum -c` 能直接吃。
 writeFileSync(join(out, 'SHA256SUMS.txt'), `${report.join('\n')}\n`, 'utf8');
 console.log(report.join('\n'));
+// 把"这一版的每个包多大、离上界还有多少"打在日志里 —— 阈值本身留在上面那张表，
+// 而**当前读数**归这一步每次自己印（第一百十五批从 CI 步骤名里摘掉的就是"把一次实测抄成长期标签"）。
+const mb = (n) => (n / MB).toFixed(2);
+for (const [name, f] of [...byName.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+  const c = CEILINGS.find((x) => x.pick.test(name));
+  console.log(`  体积：${name} = ${mb(f.size)} MiB${c ? ` / 上界 ${mb(c.maxBytes)} MiB（预算读数 ${mb(c.reading)} MiB）` : '（清单文件，不设上界）'}`);
+}
 console.log(`collect-release-assets: ${report.length} 个产物已摊平进 ${out}（SHA256SUMS.txt 一并生成）`);

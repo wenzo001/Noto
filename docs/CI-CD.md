@@ -554,8 +554,13 @@ npm run dist -- --android             # 出 APK（需 ANDROID_HOME + NDK + JDK 1
 >   收拢那一步交给 `scripts/collect-release-assets.mjs`：把 Artifacts **递归摊平**成一批 regular file、
 >   生成与 `sha256sum -c` 兼容的 `SHA256SUMS.txt`（两空格分隔，见 §产物表），再断五种交付物齐备
 >   （MSI / NSIS / .dmg / **.app.zip** / APK）且安装器类文件名里含 `_<这一版>_`。
->   它会红的五种形状（本机 14/14 变异测试）：缺任一平台、贴了别的版本的包、还有裸的 `.app` 目录、
->   同名不同字节的产物撞车、产物小得不像包（默认下限 1 MiB）。
+>   它会红的形状（六种缺项 + 上界，由 `scripts/verify-release-ceilings.mjs` 那六臂每次验它真的会红，
+>   并由 `arch-check` 的 `ci:release-ceilings-have-teeth` 每批次复跑）：缺任一平台、贴了别的版本的包、还有裸的 `.app` 目录、
+>   同名不同字节的产物撞车、产物小得不像包（默认下限 1 MiB）、**产物超了自己那一档的上界**
+>   （exe 8 / msi 11 / dmg 10 / app.zip 10 / apk 24 MiB，2026-10-18 按 v0.0.145 那批真读数 ×1.4~1.6 立的），
+>   以及**出现了不在上界表里的新产物类型**（否则第一件新增产物就静默绕过这条门）。
+>   上界的口径与 `check-frontend-dist` 同一条：不是"不许变大"，是"变大的那一次必须被说出来，
+>   并把新预算的读数一起改掉"；每个包的实际字节由这一步每次自己印在日志里，文档不钉它。
 >   跑完再用 `gh release view --json assets` 把**服务端真实的附件清单**打出来 —— §52 要的是
 >   "Release 上有用户能下的包"，不是"gh 命令返回 0"。
 >   macOS 那条腿因此多一步 `ditto -c -k --keepParent` 把 `Notera.app` 压成 `Notera_<v>_universal.app.zip`

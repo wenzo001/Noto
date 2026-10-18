@@ -1202,6 +1202,22 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     problems, problems.join('\n    '));
 }
 
+/**
+ * 安装包的上界必须**真的会红**（缺口 #3；用户抱怨一"每个平台的安装包太大"在这一侧的看守）。
+ * 为什么 arch-check 要替它跑：上界那条门住在 `collect-release-assets` 里，而那一步只在
+ * **发版**时执行 —— 平时没人碰它，所以它的失效形状（正则落空、比较写反、新产物类型不在表里）
+ * 会一路绿到下一次贴 Release 才现形，而那时已经是一个贴给用户的包了。这里每个批次替它跑一遍六臂。
+ * 做法抄 `hygiene:scratch-budget-guarded`：判据自己带合成现场，台面只跑它并认退出码。
+ */
+{
+  const { spawnSync } = await import('node:child_process');
+  const problems = [];
+  const probe = spawnSync(process.execPath, [join(ROOT, 'scripts', 'verify-release-ceilings.mjs')], { encoding: 'utf8', cwd: ROOT });
+  if (probe.status !== 0) problems.push(`verify-release-ceilings 退出码 ${probe.status}\n    ${((probe.stdout ?? '') + (probe.stderr ?? '')).split('\n').slice(-8).join('\n    ')}`);
+  check('ci:release-ceilings-have-teeth', 'CI-CD §产物表 / #3（安装包上界要每次都被验一次它真的会红，表外新类型不许绕过）',
+    problems, problems.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;

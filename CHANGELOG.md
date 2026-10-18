@@ -49,6 +49,50 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 体积（2026-10-18 第一百三十八批：**#3 收口** —— v0.0.145 的真产物读数回来了，Android 那一格从"我们比它大"翻成"我们比它小 2.1~3.3×"，上限门禁就此能立；只动工装与文档 ⇒ 不升版本）
+- **上一批留的那句"故意留到下一批"是这一批**：`release.yml` 的 Android 档位换成 release 之后，
+  CI 的产物今天回来了（`gh release view v0.0.145 --json assets`，draft）：
+  `app-universal-release-unsigned.apk` **15,460,569 B = 14.74 MiB**，同批另四件
+  setup.exe **5,580,477**、msi **7,774,208**、dmg **6,686,703**、app.zip **6,635,987**。
+  **档位差 = 149.7 MiB → 14.74 MiB（10.1×）** —— 上一本 149 MiB 里绝大部分从来不是功能，是 `--debug`。
+- **于是表格里那一格翻了**：`docs/JOPLIN-VS-NOTO-FEATURE-MAP.md` 原来写 Android "**我们比它大**"，
+  现在 Joplin 的 31~48 MiB 是我们的 **2.1~3.3 倍**。这一份文档里"我们的问题"两条也一起结掉：
+  ① map 随包那一格补上了**真实节省读数**（setup.exe 5.75 → 5.32 MiB；上一批这里写的是"⚠️ 未实测，不写估计值"，
+  现在有数了 —— 但那是**整包**跨批差分，不许读成"map 恰好值 450 KB"）；② Android debug 那格改成"已修 + 代价"。
+- **上限门禁立了**（`scripts/collect-release-assets.mjs` 的 `CEILINGS`：exe 8 / msi 11 / dmg 10 / app.zip 10 / apk 24 MiB，
+  全部 = 今天这五个读数 ×1.4~1.6）。口径抄 `check-frontend-dist` 那条已经说清的：
+  **上界不是"不许变大"，是"变大的那一次必须被说出来，并把新预算的读数一起改掉"**。
+  位置选在**贴进 Release 之前**而不是贴完之后 —— 用户下载到的东西要在这里被拦住，而不是在这里被发现。
+- **一条不给新产物留暗格**：不在 `CEILINGS` 里的产物类型（`SHA256SUMS.txt` 除外）**直接红**。
+  少了这一格，"上界"对第一件新增产物就是**静默不检查**（与"扫到 0 项 ≠ 检查过"同族，
+  [[enumerate-each-gate-leg-with-its-own-mutation]]）—— 现在加 Linux tar 或按 ABI 拆的 APK 都必须先立项、先给数。
+- **证人（做成了常驻的，不是一次性探针）**：六臂台落在 `scripts/verify-release-ceilings.mjs`
+  —— 因为"这六臂本机跑过并全过"这句话如果只活在一个被删掉的 `.logs` 探针里，下一个改上界的人就**复跑不了它**，
+  那与 `docs/CI-CD.md` 里那句"本机 14/14"是同一类含糊证人。现场用 `truncate` 合成稀疏文件、写进系统临时目录
+  （不占 `.logs` 的预算：**工装造的现场由工装自己收尾**）。
+  C1 对照 = **今天这五个真读数必须全绿**；C2 setup.exe 超上界 **1 字节** ⇒ 红并点名那一档；
+  C3 APK 退回 debug 的 156,465,300 B ⇒ 红；C4 表外新类型 ⇒ 红；
+  **C5 旧的 1 MiB 地板还得有牙**（空包 500 B ⇒ 红 —— 加新判据不许把旧的拆掉，这一臂是专门防我自己的）；
+  C6 缺一种平台包 ⇒ 红。六臂齐 ⇒ `CEIL_EXIT=0`。
+  再由 `arch-check` 新腿 **`ci:release-ceilings-have-teeth`** 每个批次替它跑一遍 —— 理由：那条上界门住在
+  `collect-release-assets`，而那一步**只在发版时执行**，平时没人碰它，它的失效形状会一路绿到下一个贴给用户的包。
+  这条腿自己也要有牙，所以另下一刀：把 exe 那档上界 8 MiB 改成 4 MiB（今天的真包 5.32 MiB 会被自己的门拦住）
+  ⇒ 台面 **47/48 只这一条红**，撤刀 ⇒ **48/48**（对照臂跑在最前面也跑在最后面，见 [[mutation-harness-must-prove-it-can-see-red]]）。
+  `node --check` 过；**未动产品与界面** ⇒ 不升版本、不跑整跑（执行者数过：这个脚本只被 `release.yml` 的 publish job 调）。
+- **我自己在这条新腿上撞的一次**（形状旧、现场新）：`spawnSync` 在 `arch-check` 里是**块内动态 import**
+  （`const { spawnSync } = await import('node:child_process')` 写在上面那个块里），我照抄用法却写在另一个块 ⇒
+  `ReferenceError: spawnSync is not defined`，整条 arch-check **崩**而不是红。
+  两条口径：新加代码块要用别的块里的东西，**先 grep 那个名字住在哪一层**；而崩掉的台面比红的台面更糟 ——
+  红会指名是哪条腿，崩只留一个 stack，所以每条这样的腿都该自己带 `problems.push(...)` 而不是让异常逃出去。
+- **仍 BLOCKED 的那格不由体积数解冻**：APK 是**未签名**的（没有 keystore），Android 直接拒装 ⇒
+  `NEEDS-OTHER-MACHINE-TESTING` 的 **C1 照旧 BLOCKED**，签名与发布是用户的决定（2026-10-02 口径），
+  我没有擅自生成 keystore、也没把签名塞进 CI。
+- **v0.0.145 的远程状态记在这里**：`release.yml` 对 `866f66b` **success**（六件产物 + `SHA256SUMS.txt` 已在 draft 上）、
+  `audit.yml` 对 tag 与分支两条 push 均 **success**；`ci.yml` 那一条对 `866f66b` 是 **cancelled**
+  —— 被本批之前的 `daaeb0d` 推送取消（它的 concurrency 组按 ref 且 `cancel-in-progress: true`），
+  **所以"CI 整条绿"这句此刻只对 `daaeb0d` 及之后的 tip 成立**，不许写成对 `866f66b` 成立。
+
+
 ### 工装（2026-10-18 第一百三十七批：#8 关掉 —— `clean-scratch` 对没听见的参数不再沉默，可逆证明从此不算残骸；只动工装 ⇒ 不升版本）
 - **赔掉的东西先说清**：上一批我敲 `node scripts/clean-scratch.mjs --help` 想看用法，而这条命令的参数读法是
   "不是 `--check` 就删" ⇒ 它按默认档直接开删，13 项当场消失，其中 **`.logs/parallel-caps-batch-20261013.patch`
