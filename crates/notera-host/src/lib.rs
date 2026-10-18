@@ -323,6 +323,8 @@ struct Inner {
     seq_applied: AtomicU64,
     syncing: AtomicBool,
     dirty_ticks: AtomicU64,
+    /// 用户按「停」的那一位，与引擎 `EngineConfig.cancel` 是同一枚（clone 共享）。
+    cancel: notera_sync::CancelToken,
     /// 后台同步监督循环是否已经开起来（`enable_background_sync` 幂等的依据）。
     sync_supervisor: AtomicBool,
 }
@@ -381,6 +383,7 @@ impl App {
                 seq_applied: AtomicU64::new(0),
                 syncing: AtomicBool::new(false),
                 dirty_ticks: AtomicU64::new(0),
+                cancel: notera_sync::CancelToken::default(),
                 sync_supervisor: AtomicBool::new(false),
             }),
         };
@@ -2160,6 +2163,9 @@ impl App {
         if self.inner.syncing.swap(true, Ordering::SeqCst) {
             return None;
         }
+        // 每一轮开头清一次「停」：上一轮按下的那一位不许把这轮也一起停掉
+        // （不清的形态是"按一次停两轮"，而用户看到的第二轮回执会是莫名其妙的"已停止"）。
+        self.inner.cancel.reset();
         self.set_sync_public(Badge::Syncing);
         // §6.3：带上轮的 etag 才可能拿到 304（空轮 1 请求 0 字节正文）
         let etag = self.manifest_etag();
@@ -2178,6 +2184,16 @@ impl App {
         Some(st)
     }
 
+    /// 用户按「停」。返回 `true` = 此刻确实有一轮在跑，那位的循环会看见它；
+    /// `false` = 现在没有轮次（命令的回执不许说"已停止这一轮"这种没发生的事）。
+    /// 按下去之后**不立刻改徽标**：徽标由那一轮自己收尾时改成 `sync.cancelled`，
+    /// 这样"停了"这句话是引擎报的，不是界面猜的（同一件事只有一个说的人）。
+    pub fn request_sync_cancel(&self) -> bool {
+        let running = self.inner.syncing.load(Ordering::SeqCst);
+        self.inner.cancel.request();
+        running
+    }
+
     /// §11.4 的开关：**只在别的保护缺位时**才花这两次请求。
     /// * 写入策略 S3（条件写与不覆盖式 MOVE 都没有）→ 记录写全靠复验，让路有意义；
     /// * 探不到强 ETag → 清单 CAS 形同虚设，公告可能互相覆盖，同样要让路。
@@ -2185,6 +2201,7 @@ impl App {
     fn engine_config(&self) -> EngineConfig {
         EngineConfig {
             lease: self.lease_policy(),
+            cancel: self.inner.cancel.clone(),
             ..EngineConfig::default()
         }
     }
@@ -3478,6 +3495,14 @@ impl App {
                     // 纯拉的那一侧本来就没有待推的东西。徽标必须说实话。
                     v.badge = Badge::Syncing;
                     v.in_flight = true;
+                }
+                notera_sync::RoundOutcome::Cancelled => {
+                    // 用户按了「停」：这一轮**不再在跑**，所以不许留在 Syncing（那是"还在动"的假话，
+                    // 静止那一格绝不转圈），也不许落进下面的"已同步"（活确实没干完）。
+                    // 落"没跟上"那一格 + 一句"已停止这一轮，改动还在队列里"，并且可重试。
+                    v.badge = Badge::Offline;
+                    v.message_key = Some("sync.cancelled".into());
+                    v.retryable = true;
                 }
                 _ if yielded => {
                     // §11.4：本轮让路了。徽标留在"离线/待重试"，别报成已同步 ——
@@ -4899,6 +4924,47 @@ mod tests {
             dto.retryable,
             "这一类拒绝是可重试的（对面抬号或本机改动重推）"
         );
+    }
+
+    /// 取消（任务 #4）折到界面上的那一格：停了的一轮**既不是"已同步"也不是"还在跑"**，
+    /// 而且不许把这一轮记成一次成功（`last_success_at` 那一句"上一次：…"要是真的）。
+    #[test]
+    fn a_cancelled_round_is_folded_to_a_stop_not_to_synced() {
+        let app = boot("cancelled-fold");
+        let st = notera_sync::RoundStats {
+            requests: 4,
+            bytes_up: 80,
+            bytes_down: 120,
+            pushed: 1,
+            pulled: 0,
+            conflicts: 0,
+            rejections: 0,
+            last_rejection: None,
+            cas_retries: 0,
+            outcome: notera_sync::RoundOutcome::Cancelled,
+        };
+        app.apply_round_stats(&st, false);
+        let dto = app.sync_status().expect("读状态");
+        assert_ne!(dto.badge, "synced", "被用户停掉的一轮不许报已同步：{dto:?}");
+        assert_ne!(dto.badge, "syncing", "停了就是停了，不许留着转圈（静止那一格绝不转）");
+        assert_eq!(dto.message_key.as_deref(), Some("sync.cancelled"));
+        assert!(dto.retryable, "停了就是还能再来一轮");
+        assert!(
+            dto.last_success_at.is_none(),
+            "这一轮没成功，'上一次：…'那句不能因此被写出来：{dto:?}"
+        );
+    }
+
+    /// 没有轮次在跑的时候按「停」：回执必须是 `false`，而且**什么都不许改**。
+    /// 钉的是"界面拿到 false 还能说'已停止'"那一形 —— 那句话描述的是没发生过的事。
+    #[test]
+    fn cancelling_when_no_round_is_running_answers_false_and_changes_nothing() {
+        let app = boot("cancel-no-round");
+        let before = app.sync_status().expect("读状态");
+        assert!(!app.request_sync_cancel(), "此刻没有轮次，回执不许说'停下了'");
+        let after = app.sync_status().expect("再读一次");
+        assert_eq!(after.badge, before.badge, "一次空的按停不许动徽标");
+        assert_eq!(after.message_key, before.message_key, "更不许给它编一句'已停止'");
     }
 
     fn keys(v: &serde_json::Value) -> Vec<String> {

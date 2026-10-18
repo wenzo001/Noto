@@ -20,6 +20,7 @@ use manifest::{EntryRef, Manifest, ManifestError};
 use plan::{Action, ConflictKind, Decision, LocalView, Plan, RemoteView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -373,6 +374,10 @@ pub enum RoundOutcome {
     NoOp,
     Converged,
     Partial,
+    /// 用户按了「停」：这一轮是**主动停下**的，不是失败，也不是"没做完所以说不清"。
+    /// 已经落地的那几件照旧算数，没做的那几件照旧挂在 dirty 上等下一轮 ——
+    /// 而索引**不许**记成已应用（见 `run_round` 末尾那道闸门）。
+    Cancelled,
     Failed,
 }
 
@@ -405,6 +410,32 @@ pub enum SyncEvent {
     },
 }
 
+/// 用户按「停」的那一位。引擎只**读**它；写的人是 host（命令 `sync_cancel`）。
+///
+/// 为什么不做成"把 `run_round` 的 future 丢掉"：丢掉 future 只是不再 poll 它，
+/// 已经发出去的 PUT 照样落在服务器上，而这一轮的**收尾**（把索引 seq 记成"已应用"）
+/// 就永远没人做 —— 那正是 `notera-host/tests/late_device.rs` 钉住的那一格形状
+/// （半轮落了账 ⇒ 下一轮清单拿 304 直接判"无事可做" ⇒ 还没落地的那些实体永远没人管）。
+/// 所以取消必须是**循环自己看见并停下来**，并且停下来时和"预算花完"走同一条收尾闸门。
+#[derive(Clone, Debug, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    /// 按下去。幂等：再按一次还是同一位。
+    pub fn request(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    /// 每轮开始前由 host 清一次：上一轮按下的「停」不许把这轮也一起停掉。
+    pub fn reset(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub max_cas_retries: u8,
@@ -415,6 +446,9 @@ pub struct EngineConfig {
     /// （写入策略 S3，或探不到强 ETag ⇒ 清单 CAS 不可信）。
     /// 有 S1/S2 且强 ETag 时服务器自己就拦并发写，开租约只是每轮多两个请求。
     pub lease: LeasePolicy,
+    /// 用户按「停」的那一位（见 [`CancelToken`]）。默认是一枚没人按过的位，
+    /// 所以**所有既有调用方与测试一行都不用改**，取消是"host 愿意接才有"的能力。
+    pub cancel: CancelToken,
 }
 
 /// 租约策略。默认关：它只在保护缺位时才有意义。
@@ -435,6 +469,7 @@ impl Default for EngineConfig {
             pull_concurrency: 8,
             bootstrap_batch: 500,
             lease: LeasePolicy::Off,
+            cancel: CancelToken::default(),
         }
     }
 }
@@ -524,6 +559,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         // 本轮是否被请求预算**截断**过：截断意味着还有活没干完（下载的半路上），
         // 与"条目 404 / 单个请求出错"要分开记 —— 见下面 seq 落账那道的判据。
         let mut capped = false;
+        let mut cancelled = false;
         // 本轮提交出去的清单序号（纯拉的一侧没有）。收尾记 `seq_applied` 时它优先于读到的
         // 那个 seq —— 本机自己刚公告了一版，落账要落在新的那一版上。
         let mut committed_seq: Option<u64> = None;
@@ -668,6 +704,12 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     let mut held = self.local.cached_segment_hashes();
                     let before = held.clone();
                     for name in m.segments_needed_for(&held) {
+                        if self.cfg.cancel.is_requested() {
+                            cancelled = true;
+                            // 与"预算花完"同一格：基线只读了一半，视图不许落账
+                            view_complete = false;
+                            break;
+                        }
                         if st.requests >= self.cfg.round_request_cap {
                             capped = true;
                             // 基线没读全就断了预算：这一轮的视图是半份的
@@ -786,6 +828,10 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         let lmap: BTreeMap<(String, String), &LocalView> =
             locals.iter().map(|l| (l.key(), l)).collect();
         for d in plan.pushes() {
+            if self.cfg.cancel.is_requested() {
+                cancelled = true;
+                break;
+            }
             if st.requests >= self.cfg.round_request_cap {
                 capped = true;
                 st.outcome = RoundOutcome::Partial;
@@ -873,6 +919,10 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             remotes.iter().map(|r| (r.key(), r)).collect();
         notera_core::crash_point("before_apply");
         for d in plan.pulls() {
+            if self.cfg.cancel.is_requested() {
+                cancelled = true;
+                break;
+            }
             if st.requests >= self.cfg.round_request_cap {
                 capped = true;
                 st.outcome = RoundOutcome::Partial;
@@ -949,6 +999,10 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         // ⑤ 墓碑与删除应用（不产生新写入的分支）
         let mut tombstone_ops = Vec::new();
         for d in &plan.decisions {
+            if self.cfg.cancel.is_requested() {
+                cancelled = true;
+                break;
+            }
             match &d.action {
                 Action::ApplyRemotePurge => {
                     // 永久删除必须走**它自己那条 op**，不能借 `Tombstone` 上的一个 bool 传下去：
@@ -1209,8 +1263,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
         // 实测：260 条笔记的库，第二台设备停在 196 条。见 `notera-host/tests/late_device.rs`。
         // 注意判据是 `capped` 而不是 `outcome != Partial`：条目 404 也会给 Partial，
         // 那种"远端说有、记录却没有"的实体不该让整轮永远追不平（§10 走 missing 修复）。
+        // `cancelled` 与它并列，是**同一个洞的另一半形状**：用户中途按停 ⇒ 正文只落了一半，
+        // 这时把 seq 记成"已应用"，下一轮清单一个 304 就判无事可做，没落地的那些永远没人管
+        // （`late_device.rs` 量的就是截断那一半，测试里两半各钉一发）。
         if let Some(seq) = committed_seq.or_else(|| manifest.as_ref().map(|m| m.seq)) {
-            if !capped {
+            if !capped && !cancelled {
                 let _ = self.local.apply(vec![ApplyOp::SetRemote {
                     kind: "seq".into(),
                     id: "applied".into(),
@@ -1220,6 +1277,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             }
         }
 
+        if cancelled {
+            // 覆盖 Partial：用户要读到的事实是"我把这一轮停了"，不是"这一轮没做完"——
+            // 后者会诱导人去查网络，而该做的动作只是再按一次同步。
+            st.outcome = RoundOutcome::Cancelled;
+        }
         if st.outcome == RoundOutcome::NoOp {
             st.outcome = if st.pushed + st.pulled > 0 {
                 RoundOutcome::Converged

@@ -250,6 +250,13 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
                     eprintln!("本轮失败：见 sync_status / verify 日志");
                     EXIT_FAIL
                 }
+                // CLI 这一侧今天没人按停（取消位属于界面上那个 App），但这一支必须自己说清立场：
+                // 退出码的契约是"0 ⇒ 这一轮真的做完了"，被停在一半就是没做完 ⇒ 与 `Partial` 同档；
+                // 话要说两句分开，脚本作者才分得清"停的"和"失败的"。
+                notera_sync::RoundOutcome::Cancelled => {
+                    eprintln!("本轮被停止：改动还在队列里，退出码按『没做完』算");
+                    EXIT_FAIL
+                }
             }
         }
 

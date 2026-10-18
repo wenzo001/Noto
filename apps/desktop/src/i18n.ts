@@ -202,6 +202,10 @@ const MESSAGES: Record<MessageKey, string> = {
   'settings.eraseDone': '已清除全部数据，请重启应用',
   'settings.eraseDoneDetail': '已清空 {tables} 张表的数据，回收附件约 {kb} KB。请重启应用。',
   'sync.retry': '重试',
+  // 「停」这一格：按钮说的是"停下这一轮"，不是"关掉同步"（后者是设置里那一格的话）。
+  'sync.cancel': '停止这一轮',
+  // 停成之后那一句不在这里加：`sync.cancelled` 早就注册过（下面那一格，随 `RemoteError::Cancelled`），
+  // 而 `hygiene:rust-message-keys-registered` 那条门管的正是"核心报出的键必须有文案"这一条边。
   // §4.3「已同步 · 上一次：{时间}」。没拿到时间时这一句**根本不出现**（不写"刚刚"，那是编的）。
   'sync.lastSuccess': '上一次：{time}',
   // §6 第 4 格「同步详情」里剩下的两位（核心一直在发 `pendingOps` / `openConflicts`，

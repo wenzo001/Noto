@@ -258,6 +258,25 @@ export const useSyncStore = defineStore('sync', () => {
     await refreshStatus();
   }
 
+  /**
+   * 用户按「停」。这里**只发请求，不宣布结果**：真正停下来的是核心那一轮自己
+   * （它在每一件事之间读那一枚位），停成之后由它收尾时把 `sync.cancelled` 报上来。
+   * 回执 `true` = 按下这一刻确实有一轮在跑；`false` = 没有轮次（点了个空）。
+   * 界面拿到 `false` 不许说"已停止"——那是没发生过的事，所以只重问一次状态。
+   */
+  async function cancelRound(): Promise<boolean> {
+    try {
+      const res = await callCommand<{ running?: boolean }>(Commands.syncCancel, {});
+      const running = res?.running === true;
+      if (!running) await refreshStatus();
+      return running;
+    } catch {
+      // 问不到 = 这一位没送到核心。徽标不许因此停下：转圈还在，用户会再按一次或等它跑完。
+      await refreshStatus();
+      return false;
+    }
+  }
+
   function applySignal(signal: SyncSignal): void {
     state.value = foldSyncEvent(state.value, signal, Date.now());
     /**
@@ -408,5 +427,6 @@ export const useSyncStore = defineStore('sync', () => {
     markNoAccount,
     noteSavedLocally,
     syncNow,
+    cancelRound,
   };
 });

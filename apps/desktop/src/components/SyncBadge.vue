@@ -70,6 +70,17 @@ watch(
       <span v-if="sync.percent !== null" class="syncbar__progress">{{ t('sync.progress', { done: sync.percent, total: 100 }) }}</span>
     </button>
     <p v-if="sync.lastSuccessLine" class="syncbar__when" data-testid="sync-last-success">{{ sync.lastSuccessLine }}</p>
+    <!-- 「停」只在真的转着那一格出现：静止的时候没有轮次可停，画一颗按钮就是骗一次点击（§4.9）。
+         按下去不改变徽标 —— 停成没停成由核心那一轮自己报（`sync.cancelled`）。 -->
+    <button
+      v-if="sync.shownBadge === 'syncing'"
+      type="button"
+      class="syncbar__action"
+      data-testid="sync-cancel"
+      @click="sync.cancelRound()"
+    >
+      {{ t('sync.cancel') }}
+    </button>
     <button v-if="sync.showRetry" type="button" class="syncbar__action" data-testid="sync-retry" @click="sync.syncNow()">
       {{ t('sync.retry') }}
     </button>

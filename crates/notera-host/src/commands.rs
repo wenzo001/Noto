@@ -1006,6 +1006,13 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             app.request_sync();
             j(serde_json::Value::Null)
         }
+        // 「停」不进 READ_ONLY_REFUSED：它不写库，只是让在跑的那一轮自己停下来。
+        // 把"停下"和"开始"用同一道闸门拦，等于"库读不了的时候连刹车都不许踩"。
+        // 回执是**布尔**：`true` = 此刻确实有一轮在跑、它会看见这一位；
+        // `false` = 现在没有轮次。界面据此决定说什么 —— 没有轮次的时候说"已停止"是假话。
+        // 回执是**一个具名字段**而不是裸布尔：这一桥的 `unwrap` 只保证对象形状，
+        // 而 `running` 这个名字本身就是文档 —— "按下这一刻有没有一轮真的在跑"。
+        "sync_cancel" => j(serde_json::json!({ "running": app.request_sync_cancel() })),
         "sync_status" => j(app.sync_status()?),
         // §4.3 的"人工确认"就是这一发：把**这一版**清单记成本机已接受，然后要走一轮就走。
         // 没有停下过的东西没什么可确认的 —— 那时它是空操作，不是一门假开关。

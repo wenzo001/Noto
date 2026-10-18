@@ -35,6 +35,10 @@ struct FakeRemote {
     fail_publish: Arc<AtomicBool>,
     /// 读别人的租约直接报错（模拟列目录能力坏掉 / 离线）
     fail_holders: Arc<AtomicBool>,
+    /// 「按停」这一位，与 `EngineConfig.cancel` 共享同一枚（测试用它做"跑到第 N 次请求时用户按了停"）
+    cancel: CancelToken,
+    /// 第几次远端调用之后把 `cancel` 按下去；0 = 永不（绝大多数测试）
+    cancel_after: Arc<AtomicU32>,
 }
 
 #[async_trait]
@@ -152,7 +156,13 @@ impl RemotePort for FakeRemote {
 
 impl FakeRemote {
     fn tick(&self) -> Result<(), RemoteError> {
-        self.requests.fetch_add(1, Ordering::SeqCst);
+        let n = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
+        // 「用户在这一轮跑到第 after 次远端调用时按了停」——取消是**外部**发生的事，
+        // 所以这一位由端口按下，测试只在事后读结果。0 = 永不按下。
+        let after = self.cancel_after.load(Ordering::SeqCst);
+        if after > 0 && n >= after {
+            self.cancel.request();
+        }
         if self.deny_auth.load(Ordering::SeqCst) {
             return Err(RemoteError::Auth);
         }
@@ -368,6 +378,105 @@ async fn run_with(
     cfg: EngineConfig,
 ) -> (RoundStats, Vec<SyncEvent>) {
     SyncEngine::new(l, r, cfg).run_round(etag).await
+}
+
+/// 取消（任务 #4 第一件）。三条各钉一件事，缺一条就留一个洞：
+///  ① 停下来 ⇒ `outcome = Cancelled`，而且作为**事件**报出去（界面读的是事件流折叠的徽标）；
+///  ② 不许虚报 ⇒ 只有真落到服务器上的那几件才算 `pushed`；
+///  ③ 不许落账 ⇒ 索引 `seq` 一律不记"已应用"。③ 是三条里最贵的：记了之后下一轮清单一个
+///     304 就判"无事可做"，没推上去的那几件**永远没人管** —— 与 `round_request_cap` 截断
+///     是同一个洞的两半形状（`notera-host/tests/late_device.rs` 钉过前一半）。
+#[tokio::test]
+async fn a_cancel_pressed_before_the_loops_stops_the_round_and_claims_nothing() {
+    let l = FakeLocal::default();
+    dirty_local(&l, "p1", 3, "aaaa");
+    dirty_local(&l, "p2", 4, "bbbb");
+    let cancel = CancelToken::default();
+    let r = FakeRemote::default();
+    r.seed(base_manifest());
+    cancel.request(); // 本轮一开始就已经被按停
+    let cfg = EngineConfig {
+        cancel: cancel.clone(),
+        ..EngineConfig::default()
+    };
+    let (st, evs) = run_with(l.clone(), r.clone(), None, cfg).await;
+    assert_eq!(st.outcome, RoundOutcome::Cancelled, "按停的这一轮要如实报停：{st:?}");
+    assert_eq!(st.pushed, 0, "按停之后一件都不许再动");
+    assert!(r.records.lock().unwrap().is_empty(), "一件都不许上行");
+    assert!(
+        evs.contains(&SyncEvent::Completed(RoundOutcome::Cancelled)),
+        "取消必须是发出去的事件，不能只藏在 stats 里：{evs:?}"
+    );
+    assert!(
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::SetRemote { kind, .. } if kind == "seq")),
+        "被停的这一轮不许把索引记成已应用"
+    );
+}
+
+#[tokio::test]
+async fn a_cancel_pressed_mid_round_keeps_what_landed_and_stops_the_rest() {
+    let l = FakeLocal::default();
+    for (id, rev, h) in [("p1", 3u64, "aaaa"), ("p2", 4, "bbbb"), ("p3", 5, "cccc")] {
+        dirty_local(&l, id, rev, h);
+    }
+    let cancel = CancelToken::default();
+    let r = FakeRemote {
+        cancel: cancel.clone(),
+        cancel_after: Arc::new(AtomicU32::new(3)),
+        ..Default::default()
+    };
+    r.seed(base_manifest());
+    let cfg = EngineConfig {
+        cancel,
+        ..EngineConfig::default()
+    };
+    let (st, _evs) = run_with(l.clone(), r.clone(), None, cfg).await;
+    assert_eq!(st.outcome, RoundOutcome::Cancelled, "{st:?}");
+    assert!(
+        st.pushed < 3,
+        "按停之后剩下的那几件必须没做：pushed={}",
+        st.pushed
+    );
+    assert_eq!(
+        st.pushed,
+        r.records.lock().unwrap().len(),
+        "虚报：算成功的件数 ≠ 服务器上真有的件数"
+    );
+    assert!(
+        !l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::SetRemote { kind, .. } if kind == "seq")),
+        "半轮停了也不许落 seq 账"
+    );
+}
+
+/// 对照：同一份现场**没人按停** ⇒ 三件全上去、索引落账。
+/// 少了这一发，上面两条的"pushed < 3"与"没有 SetRemote"可能只是夹具本身跑不动。
+#[tokio::test]
+async fn the_same_round_without_a_cancel_pushes_everything_and_books_the_seq() {
+    let l = FakeLocal::default();
+    for (id, rev, h) in [("p1", 3u64, "aaaa"), ("p2", 4, "bbbb"), ("p3", 5, "cccc")] {
+        dirty_local(&l, id, rev, h);
+    }
+    let r = FakeRemote::default();
+    r.seed(base_manifest());
+    let (st, _evs) = run(l.clone(), r.clone(), None).await;
+    assert_eq!(st.pushed, 3, "对照必须真的把三件都推上去：{st:?}");
+    assert_eq!(r.records.lock().unwrap().len(), 3);
+    assert!(
+        l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|o| matches!(o, ApplyOp::SetRemote { kind, .. } if kind == "seq")),
+        "正常收敛的这一轮就该落 seq 账"
+    );
 }
 
 /// §11.4 的开关。FakeLocal 的 now() 固定在 2026-09-25T00:00:00Z，
