@@ -92,3 +92,8 @@ apps/mobile/src-tauri/gen/
 aoci.txt
 aoci.code.txt
 aoci.meta.txt
+
+# 外部参照源码（Joplin 浅克隆，只读查阅用）。它是参照物不是依赖：没有任何构建步骤
+# 读它，所以一次记录都不该留。409 MB 躺在工作树里还会把 `git status` 弄脏，
+# 而 `tag-release.mjs` 要求工作树干净 —— 不挡这一条就发不了版。
+/.vendor/
