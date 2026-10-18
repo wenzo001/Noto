@@ -259,7 +259,7 @@ jobs:
           if-no-files-found: error
 
   android:
-    name: Android（.apk，debug 签名；无 secrets）
+    name: Android（.apk，release 档；无 keystore ⇒ 未签名）
     needs: meta
     runs-on: ubuntu-22.04
     timeout-minutes: 90
@@ -399,11 +399,18 @@ jobs:
           grep -q "patch-rc=0" /tmp/diag/patch.txt || { echo "补丁一次都没钉上（见上面 patch-rc）"; exit 1; }
           if grep -E "patch-rc=[1-9]" /tmp/diag/patch.txt; then echo "有文件没钉上（上面那条 patch-rc 非 0）"; exit 1; fi
 
-      - name: 出 APK（debug 签名 = Android SDK 自带的 debug keystore，不需要 secrets）
+      # **档位从 debug 换到 release 的理由与代价，两边都要写在脸上**：
+      # 理由 —— debug APK 实测 156 465 300 B（v0.0.143；v0.0.141 是 156 982 868 B，同量级），
+      # 比我们自己的 Windows 安装器（5 579 270 B）大 **28 倍**，而那些字节大部分是
+      # 没 strip 的 Rust 调试符号与没按 ABI 拆分的通用包，**不是功能**。
+      # 代价 —— 没有 keystore 时 gradle 的 release 产出是**未签名** APK，Android 直接拒装
+      # ⇒ "装上真机试一遍"那一格从本版本起回到 BLOCKED，要试机必须先签名（或临时把这里改回 --debug）。
+      # 用户 2026-10-18 拍的是"先改成 release 出未签名产物"：先把体积数拿到，签名决策另拍。
+      - name: 出 APK（release 档；无 keystore ⇒ 未签名，装不上真机是预期行为）
         working-directory: apps/mobile
         run: |
           set -euo pipefail
-          "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --apk --debug --target aarch64 2>&1 | tee /tmp/apk.log
+          "$GITHUB_WORKSPACE/apps/desktop/node_modules/.bin/tauri" android build --apk --target aarch64 2>&1 | tee /tmp/apk.log
 
       # §4 那句"确保各平台包可正常安装、启动和进行基础功能验证"在 Android 这一腿上，
       # 不依赖设备能读出来的部分（CI-CD.md L6 承诺的结构校验）。**读不到就红，不许静默跳过**：
@@ -490,7 +497,7 @@ jobs:
             echo
             echo "本 Release 由 tag \`v$v\` 的推送自动构建（\`.github/workflows/release.yml\`）。"
             echo
-            echo "**产物状态**：Windows 安装包由 GNU 工具链产出（本机与 CI 同一条口径）；macOS 包**未经代码签名与公证**，首次打开需要在系统设置里手动允许；Android 的 APK 由 debug keystore 签名（无发布 secrets），未经 Play 上架验证。"
+            echo "**产物状态**：Windows 安装包由 GNU 工具链产出（本机与 CI 同一条口径）；macOS 包**未经代码签名与公证**，首次打开需要在系统设置里手动允许；Android 的 APK 是 **release 档未签名**产物（CI 里没有 keystore）：体积按 release 口径出，但 **Android 会直接拒装**，要装机验证必须先签名。"
             echo
             echo "### CHANGELOG 里对应这一版的那一条"
             echo

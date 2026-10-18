@@ -461,7 +461,7 @@ npm run dist -- --android             # 出 APK（需 ANDROID_HOME + NDK + JDK 1
 | Windows x64 | `nsis,msi` | **必须钉 `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu`**（见下） |
 | macOS | `dmg,app` | 未签名未公证，首次打开需在系统设置里手动允许 |
 | Linux | `deb` | CI 未验过；本机第一次出可能还要装系统依赖 |
-| Android | `.apk`（debug 签名） | 走 `--android`；需 NDK + JDK 17，debug keystore 无需证书 |
+| Android | `.apk`（release 档，**无 keystore ⇒ 未签名**） | 走 `--android`；需 NDK + JDK 17。2026-10-18 起档位从 debug 换到 release（debug APK 实测 156 465 300 B，比我们自己的 Windows 安装器大 28 倍）。**未签名 ⇒ Android 拒装**，要装机验证必须先签名 |
 
 **不做跨平台打包**：macOS 的 `.dmg` 需要 hdiutil、Android 的 `.apk` 需要 NDK+JDK，
 在 Windows 上跑 `--bundles dmg` 得到的不是 dmg。⇒ 另两个平台请推 tag 走 CI。
