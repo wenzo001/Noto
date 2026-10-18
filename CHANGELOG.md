@@ -49,6 +49,34 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 决策与设计（2026-10-18 第一百二十九批：四格拍板落档 + ADR-0022 标签设计，**未动产品 ⇒ 版本号不升**）
+- **用户拍了四格**（记录已同步进 `docs/JOPLIN-VS-NOTO-FEATURE-MAP.md` §6）：**标签进 1.0**（明确接受协议改动）、
+  **待办只要 checklist 块**（笔记不做成任务）、**上面这些落完再发 1.0.0**（发版线停在 0.0.x）、
+  **回收站改成 30 天自动清理**。第四格**推翻** 2026-10-06 那句"永不自动清理"
+  （`docs/design/Noto-界面设计规范.v2.md:440,453`）——被作废的旧口径要在落地那一批指名删掉，不许两说并存。
+- **新 ADR-0022（标签）**：核心决定是**链接不进出同步协议** —— `tags` 是新 kind，
+  但笔记↔标签的多对多**嵌在笔记记录 payload 里**，沿用 `note_attachments` 那条已验证的形状
+  （那张表不是 EntityKind，链接在 apply 时从笔记文档本地重导，`host/src/lib.rs:6204`）。
+  拒绝的方案与理由都是从 Joplin 的源码伤疤里读的：它把 `note_tags` 做成独立同步项
+  （`models/BaseItem.ts:75-83`），于是 `JoplinDatabase.ts:60-70` 至今没有 `UNIQUE(note_id,tag_id)`、
+  `Tag.ts:83-91` 那句注释自己写着"…Fixes #3958"（链接先到、项还没下载就崩）、
+  导出处写着"In some cases a NoteTag can still exist, while the Tag does not"（孤儿链接）、
+  两台设备同名标签**没有任何合并逻辑**、一个功能里四套相等关系、层级标签加了又回滚（`JoplinDatabase.ts:814-822`）。
+- **这条是本批最要紧的发现，而且与标签无关也成立**：ADR-0022 D7 定了一条**发布顺序约束**。
+  设计取证指出、我逐行读实：`crates/notera-host/src/lib.rs:3937-3941` 是
+  `match kind.as_str() { "f" => UpsertFolder, _ => UpsertNote }`，`:3973` 只对 `kind == "n"` 采纳，
+  `:3990/4000/4010/4019` 在 `EntityKind::from_tag()` 返回 `None` 时把 `SetRemote`/`MarkSynced`/`Tombstone`/`Purge`
+  **无错误丢掉**，`crates/notera-store/src/apply.rs:503-507,551-555` 是 `if kind == Note {"notes"} else {"folders"}`。
+  ⇒ 先放 `tag` 记录上线、后补守卫，任何停在 0.0.141 的设备会把标签记录**当笔记写进 `notes`**：
+  无编译错、无失败测试、无日志，用户看见一篇打不开的假笔记。所以次序是
+  **① 未知 kind 改具名拒绝（先上、单独一版）→ ② 抬 `PROTOCOL`/`min_protocol` → ③ 才加 kind 与迁移**。
+  第①刀必须在**还没有 tag 的版本**上先拿到"改前静默写进 `notes`"的读数，否则它没有"本来会坏"的证人。
+- **改口落档**：`SPEC-AMENDMENTS.md` 新增 **A12**，并在 **A1** 那一格顶部指名"被 A12 推翻、颜色那半格继续有效"。
+  A12 的状态行写的是**已拍板、尚未落地**：此刻 `negativePromises.spec.ts:722-843` 那五面"没有 tag"的禁令
+  **仍在全绿生效** —— 谁看见"标签已经能用"那是假的。落地那一批要同时做完三件事（加固、协议版本、负面承诺翻正面重下刀）缺一不算完成。
+- 本批只动文档：`docs/ADR/0022-tags-as-syncable-entity.md`（新）、`docs/design/SPEC-AMENDMENTS.md`（A12 + A1 标注）、
+  `docs/JOPLIN-VS-NOTO-FEATURE-MAP.md`（§6 记四格拍板与 A12/ADR 指针）。
+
 ### 参照（2026-10-18 第一百二十八批：Joplin **源码**入盘 + 功能对照清单，**只出文档不改产品 ⇒ 版本号不升**）
 - **这一批补的是 ADR-0019 欠的那半条腿**：那份 ADR 当年只能读官方规范页，源码目录在本机不可达，
   凡涉及实现细节处都写了 `[未核实]`。现在 `.vendor/joplin` 是 **3.7.21** 的浅克隆，逐条能读到 `file:line`。
