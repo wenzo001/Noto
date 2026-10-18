@@ -236,9 +236,33 @@ an_unknown_purged_kind_is_replanned_every_round_but_costs_no_requests`，读数�
 0010 用 `PRAGMA defer_foreign_keys = ON`（事务结束自动复位）；这三张表都不是任何表的 `REFERENCES` 目标
 （仓内 grep 过），所以不存在 `ALTER TABLE RENAME` 顺带改写别人 FK 定义的问题。
 
+**再补三条（同批第二次试装，把 store 那一半接通之后量到的；代码仍停在原子墙前）**
+
+6. **标签链接有一条**已验证可搭的便车 —— 不必给 `notes` 加列，也不必动富文本 schema：
+   `note_wire`（`syncml.rs:1720`）本来就把 `folder_id / pinned / color` 作为**顶层同步键塞进 payload**，
+   并且注释写死了理由："richtext 的 `Document` 只认 `v`/`content`，归一时丢弃未知顶层键，
+   所以 `sha256(canonical(payload)) == notes.content_hash` 仍然成立"。
+   ⇒ `tag_ids: [id]` 就是这一族的第四个键：**rev 会推进（脏集按 `rev <> sync_rev` 算），content_hash 不变** ——
+   这正是"改置顶/改颜色会不会传出去"那条既有行为，而 `crates/notera-host/tests/note_color.rs`、
+   `folder_color.rs` 已经在证它。**落地那批仍要补一台对面那台的证人**（"只改标签集合，第二台同步后要看得见"），
+   因为便车成立不等于它对标签也成立 —— 这一条不许靠类推（见 §"根因要复现出载荷才落笔"那一族）。
+7. **穷尽匹配的真实断点比手抄名单少，也更集中**：接通 store 之后 `cargo check --workspace --all-targets`
+   的读数是 **notera-store 6 处、notera-host 7 处、notera-crypto / notera-webdav / notera-sync 各 0 处**。
+   后三个 crate 一处都不红 —— 它们用的是 `_ =>` / `if let` 通配，也就是**最危险的那三个恰恰不会告诉你**。
+   ⇒ 判据不能只靠"编译器会提醒"，必须有那条 `every_entity_kind_routes_to_its_own_table`
+   （四个 kind 各自要落到自己的表；`mark_synced` 那处 `if Note {notes} else {folders}` 就是这一族最坏的实例：
+   加第五种实体时它会**静默把新实体的确认点写进 `folders`**，症状是"每轮重传、界面上只是同步一直转"）。
+8. **`Edit` 结构体是元数据写入的唯一收口**（`set_note_pinned` / `set_note_color` 都是
+   `load_cur → assert_editable → Edit{字段} → commit_edit` 那四步，`store.rs:501-536`）。
+   `set_note_tags` 应该走同一条，而不是新写一套"标签版编辑" —— 两套编辑迟早分叉成
+   "改标签不顶 rev"或"改标签绕过只读拒绝"。
+
 **顺序没变**：这一批仍然是 D7 的"第三刀"（迁移 + kind + 命令面 + 界面 + 文档**必须一批内落完**），
 因为 `negativePromises.spec.ts` 那五面禁令禁的就是 `tags` 表名/列名/DTO 名 ——
 只把迁移放进去会让那条门红，只翻门不放迁移则是把禁令删了却没兑现正面承诺。两种都不可交。
+**已量过的可行性**：把 store 那一半（`rows::table_of` 收口 + 六处穷尽匹配 + 0010 + 视图第三支）接通之后，
+`cargo check -p notera-store --all-targets` 干净、`cargo test -p notera-store` **14 个测试二进制全绿**
+（含跑过 0010 的全部迁移测试）⇒ 剩下的量集中在 notera-host 的 7 处 + 标签 CRUD + 命令面 + 前端那五面翻正。
 
 ## 拒绝的方案
 

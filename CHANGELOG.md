@@ -49,6 +49,38 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 标签（2026-10-18 第一百四十批：第二次试装 —— **notera-store 那一半接通并全绿**，又量出三条；仍停在同一道原子墙前 ⇒ 只动 ADR 与台账，不升版本）
+- **做了什么**：把 `git apply` 回来的现场往前推了一整块：`rows::table_of` 收成**唯一**的 kind→表名权威，
+  `apply_delete` / `apply_purge` / `set_remote_rev_tx` / `remote_index_replace`(加 bump_tag) /
+  `dirty_entities`(加 tag 支) / `synced_heads`(加 tag 支) / `remote_moved_entities`(加 tags) 全部就位，
+  `v_dirty_entities` 补第三支 UNION。
+  **读数**：`cargo check -p notera-store --all-targets` 干净、`cargo test -p notera-store` **14 个测试二进制全绿**
+  （这一句是有分量的：0010 已经真跑过 —— 三张 CHECK 表被重建、视图被替换，既有迁移/脏集/outbox 测试都没受影响）。
+- **当场拆掉一颗真的雷**：`syncml.rs` 的 `mark_synced` 今天是 `if kind == Note {"notes"} else {"folders"}` ——
+  第五种实体会**静默把它的确认点写进 `folders`**：编得过、不红，症状是"这一路的 `sync_rev` 永远不动 ⇒ 每轮重传"，
+  用户看到的只是"同步一直在转"。这类形状是编译器**不会**告诉你的那类（见下第 ⑦ 条）。
+- **三条新量到的，逐条进 ADR §落地前置订正**：
+  ⑥ **标签链接有已验证的便车**：`note_wire`（`syncml.rs:1720`）本来就把 `folder_id / pinned / color`
+  作为**顶层同步键**塞进 payload，且注释写死"`Document` 只认 `v`/`content`，未知顶层键归一时丢弃 ⇒
+  `sha256(canonical(payload)) == notes.content_hash` 仍成立"。`tag_ids` 就是这一族的第四个键：
+  **rev 会推进（脏集按 `rev <> sync_rev` 算）、content_hash 不变** —— 与"改置顶/改颜色"同一条已验证的路。
+  但仍要在落地那批补一台对面那台的证人（便车成立 ≠ 它对标签也成立；这是 [[record-root-cause-only-after-reproducing-the-payload]] 那条纪律）。
+  ⑦ **穷尽断点的真实分布**：store 6 处、host 7 处、**crypto / webdav / sync 各 0 处**。
+  后三个 crate 用的是 `_ =>` / `if let` 通配 ⇒ **最危险的三个 crate 恰恰不会红**。
+  ⇒ 只靠"编译器会提醒"不够，要一条 `every_entity_kind_routes_to_its_own_table` 的判据。
+  ⑧ **`Edit` 是元数据写入的唯一收口**（`set_note_pinned`/`set_note_color` 都是
+  `load_cur → assert_editable → Edit{字段} → commit_edit` 四步，`store.rs:501-536`）
+  ⇒ `set_note_tags` 走同一条，不另写"标签版编辑"（两套编辑迟早分叉成"改标签不顶 rev"或"绕过只读拒绝"）。
+- **仍然不能拆**：0010 一放进去就建 `tags` 表，`negativePromises` 那五面禁令立刻红；先翻门再放迁移则是删禁令不兑现承诺。
+  现场刷新进同一份受保护快照 `.logs/tags-batch-20261018-pending.patch`（**11 个文件 / +454 行**，
+  `git apply --check` 复验过能贴回），落地那批从"只剩 host 7 处 + CRUD + 命令面 + 五面翻正"起步。
+  ⚠ 这一批我又犯了台账里记过 24 次的那条老错，这是**第 25 次**，而且是一种新变体：
+  一次 `Edit` 的 `old_string` 跨了两条语句，把中间的 `let head: Option<(i64, i64)> = tx` 那一行吞了 ——
+  这次是**编译当场抓到的**（`.query_row` 前面没了主语），不是靠 grep 下一条标题抓到的。
+  所以补一条口径：**跨语句的锚，new_string 要把每一条该活下来的行原样重出**；改完立刻 `cargo check` 是最便宜的网。
+- **收盘状态**：`git status` 空、`arch-check 48/48`，主干与第一百三十九批相同（未动产品 ⇒ 不升版本）。
+
+
 ### 标签（2026-10-18 第一百三十九批：**试装了一次，五条设计错被抓出来并改口**；只动 ADR 与台账 ⇒ 不升版本）
 - **做了什么**：按 ADR-0022 的施工图真装 #1 标签 —— 落到 `notera-core`（`EntityKind::Tag` + `ALL` +
   `canonical.rs`）与 `migrations/0010_tags.sql` + 执行器注册 + 测试 helper，**停在这里**。
