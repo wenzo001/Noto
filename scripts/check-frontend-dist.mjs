@@ -22,11 +22,20 @@ const arg = (name, fallback) => {
 };
 const root = argv.find((a) => !a.startsWith('--'));
 const minBytes = Number(arg('--min-bytes', 40 * 1024));
-// 上界只管**要进包的那几类**（`.js` / `.css` / `.html`），**不含 `.map`**：
-// sourcemap 是本机调试用的，生产壳里不加载，把它算进来等于让"要不要出 map"这种构建开关
-// 去影响一条产品体积门禁（本机实测 dist 2 199 157 B 里有 1 807 573 B 是 `.map`）。
-// 2026-10-12 在 0.0.125 这棵树上实测：进包的三类合计 **386 233 B**（JS 4 个 / CSS 1 个），
-// 取 512 KiB 作上界 = 当前值之上约 1.33 倍，够日常改动、涨到"一次加了很多东西"就会红。
+// 上界的口径在 2026-10-18 改过一次。从前它**排除 `.map`**，理由是「sourcemap 是本机调试用的，
+// 生产壳里不加载」—— 那句对「加载」成立、对「进包」不成立：`frontendDist: "../dist"` 是整目录嵌进
+// 二进制的（盘上没有 `.taurignore`、也没有排除项），所以 map 躺着没人读，也一样进安装器
+// （本机实测：dist 2 199 157 B 里 **1 807 573 B 是 `.map`**，单个 index-*.js.map 1 632 844 B）。
+// 现在 `build.sourcemap = false`（`apps/desktop/vite.config.ts`），这条上界改成算**全部字节**、
+// 一个扩展名都不排除 ⇒ "谁把 map 打开"由门禁当场拦，不再靠注释提醒。
+// **本机差分（2026-10-18，同一棵 0.0.142 树，只改这一处开关）**：
+// 关 map 前 dist = 2 199 157 B（含 4 份 `.map` 共 1 807 573 B）→ 关 map 后 dist = **408 835 B / 7 个文件**
+// （JS 356 872 + CSS 49 567 + 其余 2 396），少 **1 790 322 B（-81.4%）**，那些字节以前是**随安装器发给每个用户**的。
+// 上界仍取 512 KiB = 当前值之上约 1.28 倍：够日常改动，涨到"一次加了很多东西"就红。
+// **刀与对照（2026-10-18 实测）**：往 dist 的 `assets/` 里塞一份 **2 431 579 B** 的 `.map`（base64 撑出来的），
+// 同一份变异跑两版脚本 —— 改后这版 **FAIL**（`进包合计 2 840 414 … 其中 .map 2 431 579`，exit 1），
+// 而 `git show HEAD:` 取出的改前那版 **全过**（它那句 `.map 不计` 就是瞎的地方，exit 0）。
+// ⇒ 这条门禁新增的力气全在"不再按扩展名排除"这一句上，不是把数字改小了。
 // 变了就显式改这一行，并把新读数写进 commit 与 CHANGELOG —— 那正是这条门禁要的"说出来"。
 const maxBytes = Number(arg('--max-bytes', 512 * 1024));
 if (!root) {
@@ -64,17 +73,22 @@ if (js.length === 0) failures.push('dist 里一个 .js 都没有 —— 打开�
 const css = files.filter((f) => f.path.endsWith('.css'));
 if (total < minBytes) failures.push(`dist 总共 ${total} 字节，小于下限 ${minBytes}，像是一次坏掉的构建`);
 
-// 上界只算**会被加载的那三类**（.map 不算，理由见文件头）。逐类分开报，
-// 这样红的时候能直接看出是 JS 涨了还是 CSS 涨了，而不是只看到一个总数。
-const shipped = files.filter((f) => /\.(js|css|html)$/.test(f.path));
-const shippedBytes = shipped.reduce((s, f) => s + f.size, 0);
-const shippedJs = shipped.filter((f) => f.path.endsWith('.js')).reduce((s, f) => s + f.size, 0);
-const shippedCss = shipped.filter((f) => f.path.endsWith('.css')).reduce((s, f) => s + f.size, 0);
+// 上界算的是**dist 里的每一个字节**，不再按扩展名排除任何东西。逐类仍分开报，
+// 这样红的时候直接看得是 JS 涨了还是 CSS 涨了，而不是只看到一个总数。
+// 从前它排除 `.map`，那句理由（"生产壳里不加载"）对「加载」成立、对「进包」不成立：
+// `tauri.conf.json` 的 `frontendDist: "../dist"` 整目录嵌进二进制，盘上没有 `.taurignore` 也没有排除项
+// —— `.map` 就算运行时没人读，也照样躺在安装器里。现在谁把 `build.sourcemap` 改回 true 这条就当场红。
+const breakdown = (re) =>
+  files.filter((f) => re.test(f.path)).reduce((s, f) => s + f.size, 0);
+const shippedBytes = total;
+const shippedJs = breakdown(/\.[cm]?js$/);
+const shippedCss = breakdown(/\.css$/);
+const mapBytes = breakdown(/\.map$/);
 if (shippedBytes > maxBytes) {
   failures.push(
-    `进包的那三类合计 ${shippedBytes} 字节（JS ${shippedJs} + CSS ${shippedCss}），超过上界 ${maxBytes} ` +
-      `—— 包在变大（缺口 G61 这条门禁就是为它立的）。真是有意加的，就把 --max-bytes 与这条注释里的读数一起改大，` +
-      `并把新数字写进 commit 与 CHANGELOG，别默认放过`,
+    `进包合计 ${shippedBytes} 字节（JS ${shippedJs} + CSS ${shippedCss} + 其余 ${shippedBytes - shippedJs - shippedCss}；其中 .map ${mapBytes}），` +
+      `超过上界 ${maxBytes} —— 包在变大（缺口 G61 这条门禁就是为它立的）。` +
+      `真是有意加的，就把 --max-bytes 与这条注释里的读数一起改大，并把新数字写进 commit 与 CHANGELOG，别默认放过`,
   );
 }
 
@@ -92,5 +106,5 @@ if (failures.length > 0) {
 }
 console.log(
   `check-frontend-dist: 全过（${files.length} 个文件 / ${total} 字节 / JS ${js.length} 个 / CSS ${css.length} 个）` +
-    `；进包三类 ${shippedBytes} / 上界 ${maxBytes} 字节（JS ${shippedJs} + CSS ${shippedCss}；.map 不计）`,
+    `；进包合计 ${shippedBytes} / 上界 ${maxBytes} 字节（JS ${shippedJs} + CSS ${shippedCss} + 其余 ${shippedBytes - shippedJs - shippedCss}；.map ${mapBytes}，一律计入）`,
 );
