@@ -1018,6 +1018,75 @@ async fn an_unknown_kind_reaches_the_local_and_its_rejection_is_counted() {
     );
 }
 
+/// 把第一百三十批留下的那句**假说**量成读数：一台还不认识 `tag` 的设备（旧版本就是这样），
+/// 清单里那颗陌生条目会不会**每轮被重新计划**。
+///
+/// 两件事必须分开量，混在一起就会得到"要么没事、要么炸了"这种假结论：
+/// ① **重计划**：P13 每轮都再发一次 `Purge{kind:"g"}` 吗？（会 —— 因为本机那一行永远建不起来，
+///    `decide(None, Some(purged))` 每轮都是 P13，与 `sync_remote_index` 有没有记住它无关）
+/// ② **代价**：它每轮多花请求吗？（墓碑这一族不取记录 ⇒ 不多花，`requests` 两轮一样）
+///
+/// 这一格只管"墓碑/永久删"这半边。"活条目被拉"那半边**这里量不出来**：
+/// `FakeRemote.fetch_record` 不按路径构造走，陌生 kind 在它那里是 `Ok(None)` → 走 §10 的
+/// `MissingRemote`，不是真实适配器那句 `kind_dir` 的 `Err(BadKind)`。
+/// 那一半要用 `crates/notera-webdav/tests/engine_over_webdav.rs`（真 `WebDavRemote`）去量，
+/// 已登记成待办，不在这里用假remote的读数冒充真适配器的行为。
+#[tokio::test]
+async fn an_unknown_purged_kind_is_replanned_every_round_but_costs_no_requests() {
+    let l = FakeLocal::default();
+    l.report_unknown_kinds.store(true, Ordering::SeqCst);
+    let r = FakeRemote::default();
+    let mut m = base_manifest();
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![EntryRef {
+            i: "g-1".into(),
+            t: "g".into(),
+            r: 1,
+            h: "gggggggggggg".into(),
+            s: 10,
+            d: None,
+            p: 1,
+        }],
+    };
+    m.refresh_checksum();
+    r.seed(m);
+
+    let count_g_purges = |l: &FakeLocal| -> usize {
+        l.applied
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|o| matches!(o, ApplyOp::Purge { kind, .. } if kind == "g"))
+            .count()
+    };
+
+    let (st1, _) = run(l.clone(), r.clone(), None).await;
+    let after1 = count_g_purges(&l);
+    let (st2, _) = run(l.clone(), r.clone(), None).await;
+    let after2 = count_g_purges(&l);
+
+    assert_eq!(after1, 1, "第一轮就该发一条陌生 kind 的 Purge");
+    assert_eq!(
+        after2, 2,
+        "假说证实：陌生 kind 的墓碑**每轮重新计划**（本机永远建不起那一行，P13 每轮都成立）"
+    );
+    assert_eq!(st1.rejections, 1, "每轮各拒一次，读数 {st1:?}");
+    assert_eq!(
+        st2.rejections, 1,
+        "第二遍也是每轮一次，不会累积成两次，读数 {st2:?}"
+    );
+    assert_eq!(
+        st1.requests, 1,
+        "每一轮的请求数要钉住具体值，不是只钉「两轮相等」—— 相等但都是 40 就是网络空转了，读数 {st1:?}"
+    );
+    assert_eq!(
+        st2.requests, st1.requests,
+        "②代价这一半要的是「不多花请求」：墓碑不取记录，两轮请求数必须一样（{st1:?} vs {st2:?}）"
+    );
+}
+
 /// G22 的定位探针（引擎侧那一半）：本机这一行是**干净**的（`rev == sync_rev`，已经软删过），
 /// 而远端视图说这一条 `purged=1` —— 引擎必须给出"永久删除"那条**独立的**落库 op（`Purge`），
 /// 不能停在软删上。这一格今天真红的就是它：另一台设备上那条"永久删除"的笔记留在回收站里可恢复，
