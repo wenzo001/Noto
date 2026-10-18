@@ -948,6 +948,46 @@ impl Store {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
+    /// §2.4 回收站到期：返回**可以被彻底清除**的那批笔记 id（`deleted_at` 早于 `cutoff`）。
+    ///
+    /// 这条比用户手动「永久删除」更严，多一条 `rev = sync_rev`：
+    /// **删除这个事实还没传给服务器就销毁本机，等于替用户把"唯一一份删除记录"扔掉** ——
+    /// 手动那一格是用户在知情下按的，自动那一格没有人在场。
+    /// 不满足就留在候选集里等下一轮（那一行照常走删除传播队列，追平之后下一轮就是候选）。
+    ///
+    /// `purged_at IS NULL` 是把已经销毁过、只欠传播墓碑的那些排除掉：它们不需要再销毁一次，
+    /// 而重复调 `purge_note` 会把 `purged_at` 的时间戳刷成当轮，把"什么时候没的"这条事实冲掉。
+    ///
+    /// `limit` 与 GC 同一套理由（§48 G4）：一轮最多这么多条，避免"用户三年没开过这台设备"
+    /// 那种库在第一轮里把写锁占满。按 `id` 稳定排序，而被清掉的行会**立刻**离开候选集
+    /// （`purged_at` 落上），所以取前 `limit` 条不会饿死后面的行。
+    pub fn trash_expiry_candidates(
+        &self,
+        cutoff: &str,
+        limit: usize,
+    ) -> Result<Vec<EntityId>, StoreError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT id FROM notes
+              WHERE deleted_at IS NOT NULL AND purged_at IS NULL
+                AND deleted_at < ?1 AND rev = sync_rev
+              ORDER BY id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![cutoff, limit as i64], |r| {
+            let s: String = r.get(0)?;
+            // 库内 id 不是合法 UUID 时借道 rusqlite 的错误把业务错误带出去（rows.rs 同一条路）。
+            EntityId::parse(&s).map_err(|e| {
+                rows::into_sql(StoreError::Constraint(format!(
+                    "回收站候选里的 id 不是合法 UUID: {e}"
+                )))
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     /// 把点名的行**隔离**（账上那一步）：`local_state='missing'` + `deleted_at=now`，
     /// 并关掉它们还挂着的附件待办 —— 全部在**一个写事务**里。
     ///

@@ -322,6 +322,14 @@ idle
 | 回收站 | `deleted_at=T` | `deleted_at=T` | `d=T` |
 | 永久删除 | 行删除 + `tombstones(purged=1)` | `purged:true, payload=null` | `p=1` |
 
+**"永久删除"这一态现在有两个发起者**（2026-10-18 A13 之前只有一个）：用户点那颗按钮，或回收站里那一行
+**满 30 天到期**由应用自己发起（`App::expire_trash_notes`，挂在附件那一轮、排在 GC 之前）。
+协议层看不出区别 —— 两者走的是同一条 `ApplyOp::Purge` → `purged:true` 公告，这正是这一格要的形状：
+**自动发起的那一发不许有自己的协议**。区别只在准入：自动那一侧多一道 `rev = sync_rev`（删除已经传上去）的闸，
+因为这一格没有人在场签核。证人见 `crates/notera-host/tests/trash_expiry.rs`（含"对面那台同步之后不该再看见它"那一臂）。
+另记一条与 P11 的关系：P11 承认"本地在删除后又被编辑（`updated_at > deleted_at`）"是真实形状，
+所以到期判据**必须读 `deleted_at`**（删除那一刻）而不是 `updated_at`（最近被碰）—— 读后者会让 P11 那一类行永远到不了期。
+
 「远端记录 = 墓碑公告」这一格现在有直接证据：`TEST-PLAN` 的 SY-DEL-02 在永久删除传播之后**读服务器盘上那个记录文件本身**，
 断它 `purged=true`、`payload=null`、正文读不到（此前只有"引擎 PUT 出去的那份公告"那条单测在钉，服务器上的文件没人打开过）。
 **已量到的一格（2026-09-29，量具 `sync_once.rs::probe_purge_and_remote_attachment_blobs`，`#[ignore]`）**：一条**带附件**的笔记

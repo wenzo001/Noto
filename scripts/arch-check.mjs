@@ -1150,6 +1150,58 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     `这些文件躺在 target/ 根下，不是 cargo 的产物：\n    ${strays.slice(0, 12).join('\n    ')}`);
 }
 
+/**
+ * 回收站到期必须**真的挂在那一轮里**（2026-10-18 用户拍板"改成 30 天自动清理"）。
+ *
+ * 为什么要一条静态判据：那四条行为判据全走 `expire_trash_notes_with(cutoff, cap)`，
+ * 到期线与上界由调用方给 ⇒ **没有任何一条测试经过 `run_attachment_round` 里那一发接线**。
+ * "写在产品里、只在产品里生效"的调用边，证人只能是静态的（ARCHITECTURE-MAP §8 那一族）。
+ *
+ * 顺序也是判据，不是排版：到期销毁必须排在 `reclaim_unreferenced_blobs` **之前** ——
+ * 排后面等于"回收站清了、那些附件的字节还要再占一轮盘"，用户看到的是自动清理没效果。
+ */
+{
+  const problems = [];
+  const body = sliceTo(read(join(ROOT, 'crates/notera-host/src/lib.rs')), 'pub async fn run_attachment_round', '\n    }\n');
+  if (body === null) {
+    problems.push('run_attachment_round 这一段没切到（签名或缩进改了？）—— 这条比对正在空转');
+  } else {
+    const sweep = body.indexOf('expire_trash_notes(');
+    const gc = body.indexOf('reclaim_unreferenced_blobs(');
+    if (sweep < 0) problems.push('回收站到期没挂在附件这一轮里 ⇒ "30 天自动清理"今天等于没装');
+    if (gc < 0) problems.push('GC 那一发不在这一轮里 ⇒ 顺序判据失去主语（这一轮被拆了？）');
+    if (sweep >= 0 && gc >= 0 && sweep > gc) {
+      problems.push('到期销毁排在 GC 之后 ⇒ 这一轮清出来的附件引用要等下一轮才释放');
+    }
+  }
+  check('edge:trash-expiry-wired-in-round', 'SPEC-AMENDMENTS A13 + §2.4（自动销毁要挂在真入口，并排在 GC 前）',
+    problems, problems.join('\n    '));
+}
+
+/**
+ * 「30 天内可以恢复」那句文案里的天数，必须等于核心那个常量。
+ * 现场是这句文案自己：它以前写"随时可以恢复"，而 2026-10-18 起回收站会到期 —— 不改文案就等于
+ * 屏幕上继续对用户承诺一件产品不再做的事。改了文案之后，新的风险变成**两处各抄一个数**：
+ * 哪天核心把 30 改成 60 而文案没跟上，那句话又开始撒谎，而且没有任何判据会红。
+ * 正解是把天数由核心发给界面（`quarantinedUntil` 那一族的做法），那要新增一条命令与 DTO 字段；
+ * 迁走之前先钉"两处同源"，这条判据本身就是迁走那天的证人。
+ */
+{
+  const problems = [];
+  const rust = sliceTo(read(join(ROOT, 'crates/notera-host/src/lib.rs')), 'pub const TRASH_TTL_DAYS: i64 = ', ';');
+  const i18nLine = read(join(ROOT, 'apps/desktop/src/i18n.ts'))
+    .split('\n')
+    .find((l) => l.includes("'state.movedToTrash'")) ?? '';
+  const ui = /(\d+)\s*天内可以恢复/.exec(i18nLine);
+  if (rust === null) problems.push('TRASH_TTL_DAYS 那一行没切到（常量改名或换行写法变了？）—— 这条比对在空转');
+  if (!ui) problems.push('移入回收站那句文案里不再出现"N 天内可以恢复"这个形状 ⇒ 天数不再由这句话承载，这条判据要显式处理（删掉或改成读核心下发的那个数），不许留着空转');
+  if (rust !== null && ui && Number(rust.trim()) !== Number(ui[1])) {
+    problems.push(`界面写「${ui[1]} 天内可以恢复」，核心 TRASH_TTL_DAYS = ${rust.trim()} ⇒ 屏幕上那句话在对用户撒谎`);
+  }
+  check('edge:trash-ttl-copy-matches-core', 'SPEC-AMENDMENTS A13（保留期只有一个权威，文案不许自己抄一个数）',
+    problems, problems.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;

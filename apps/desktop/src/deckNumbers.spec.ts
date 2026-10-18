@@ -49,7 +49,7 @@ describe('设计稿点名的四个数（G136）', () => {
     const { calls, timers } = recordingTimers();
     toasts.setTimers(timers as never);
 
-    const made = toasts.pushText('已移到「最近删除」，随时可以恢复。');
+    const made = toasts.pushText('已移到「最近删除」，30 天内可以恢复。');
     expect(calls).toHaveLength(1);
     expect(calls[0].ms).toBe(4500);
 

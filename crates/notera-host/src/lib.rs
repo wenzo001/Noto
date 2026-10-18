@@ -1007,6 +1007,27 @@ impl App {
     /// 与账本上那句"最早哪天可释放"必须算同一段时间，两处各写一个 30 就是两本账。
     pub const QUARANTINE_GRACE_DAYS: i64 = 30;
 
+    /// 回收站的保留期（天）。用户 2026-10-18 拍板"改成 30 天自动清理"，它**推翻** 2026-10-06
+    /// 设计规范里"最近删除永不自动清理"那句（改口记在 `docs/design/SPEC-AMENDMENTS.md` A13）。
+    /// 取 30 是与隔离区宽限期同一把尺 —— 两件事都是"给用户一个反悔的窗口"，
+    /// 一个数在两处各写一遍就是两本账（上面那条注释同一理由）。
+    pub const TRASH_TTL_DAYS: i64 = 30;
+
+    /// `now` 往前推 `days` 天；**算不出来就返回一个远古的 cutoff**。
+    ///
+    /// 方向是"不删"：时间源读不出来时 `deleted_at < cutoff` 恒不成立 ⇒ 整步销毁空转，
+    /// 最坏是磁盘多占一段，而不是在判据不成立时清掉用户的东西。
+    /// 抽成纯函数是为了让这一格能被单测打到 —— 隔离区那侧以前只能靠读代码相信它，
+    /// 因为"时间源坏掉"这个现场在没有假时钟的集成测试里造不出来。
+    pub fn cutoff_after(now: &str, days: i64) -> String {
+        match notera_core::Timestamp::parse(now).and_then(|t| t.as_millis()) {
+            Some(ms) => notera_core::Timestamp::from_millis(ms - days * 86_400_000)
+                .as_str()
+                .to_string(),
+            None => "0000-01-01T00:00:00.000Z".to_string(),
+        }
+    }
+
     /// 版本列表一次最多回多少行。保留窗口是"最近 200 行 + `rev ≥ sync_rev` 的永不删"
     /// （DATA-MODEL §4.4），所以一篇长期不同步的笔记**可以超过 200 行** —— 这一格必须有上限，
     /// 而且截断了要说出来（`truncated`），不许悄悄把前面那些版本变没。
@@ -2878,13 +2899,69 @@ impl App {
     /// 30 天这个数不是抠出来的：它要盖住"用户清空回收站 → 过一阵才发现要找回那张图"的实际
     /// 尺度，又不至于让一个纯本机的目录无限涨。测试不依赖它（cutoff 由调用方给）。
     fn quarantine_cutoff(&self) -> String {
-        let ms = notera_core::Timestamp::parse(&self.inner.store.now())
-            .and_then(|t| t.as_millis())
-            .map(|v| v - Self::QUARANTINE_GRACE_DAYS * 86_400_000);
-        match ms {
-            Some(v) => notera_core::Timestamp::from_millis(v).as_str().to_string(),
-            None => "0000-01-01T00:00:00.000Z".to_string(),
+        Self::cutoff_after(&self.inner.store.now(), Self::QUARANTINE_GRACE_DAYS)
+    }
+
+    /// 回收站到期线：与隔离区同一把尺、同一个失败方向（算不出来 ⇒ 远古 ⇒ 一条都不清）。
+    fn trash_cutoff(&self) -> String {
+        Self::cutoff_after(&self.inner.store.now(), Self::TRASH_TTL_DAYS)
+    }
+
+    /// §2.4 回收站到期：**就像用户自己按了「永久删除」那样**清掉过期那批，
+    /// 销毁事实交给既有的传播路径（`purge_note` 写 `purged=1` 墓碑 + outbox 的 purge op），
+    /// 释放出来的附件字节随后由 §8 那条 GC 接管（隔离 → 宽限期 → 销毁）。
+    ///
+    /// 三条边界，少一条就变成"自动功能替用户做了一个他不知道的决定"：
+    /// ① 只清**删除已经传给服务器**的行（候选 SQL 里的 `rev = sync_rev`）——
+    ///    手动那一格是用户知情下按的，自动这一格没有人在场；
+    /// ② 一轮最多 `cap` 条（§48 G4 那把写锁的论证与 GC 同一条：三年没开过的库不该在第一轮占满锁）；
+    /// ③ 时间源读不出来 ⇒ 一条都不清（见 [`Self::cutoff_after`]）。
+    ///
+    /// **文件夹不在这一批里**，理由不是"来不及做"：本产品的文件夹删除**不级联删笔记**（ADR-0006），
+    /// 而"回收站里的文件夹"这一格连界面入口都还没有 —— 先不做等于不装懂。
+    ///
+    /// 返回这一轮实际清掉的条数（失败的那些留给下一轮，且每条都留了一行 warn）。
+    /// 与 §8 的 GC 同一套做法：**cutoff 由调用方给**，测试因此不依赖墙上时钟
+    /// （`Clock` 那个抽象今天没有消费者，见 CHANGELOG 同批登记的那格）。
+    pub fn expire_trash_notes(&self, cap: usize) -> usize {
+        let cutoff = self.trash_cutoff();
+        self.expire_trash_notes_with(&cutoff, cap)
+    }
+
+    /// 见 [`Self::expire_trash_notes`]（把到期线显式传进来的那一版，测试与将来的
+    /// "用户自己设保留期"都从这里走）。
+    pub fn expire_trash_notes_with(&self, cutoff: &str, cap: usize) -> usize {
+        if cap == 0 {
+            return 0;
         }
+        let ids = match self.inner.store.trash_expiry_candidates(cutoff, cap) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(%e, "回收站到期候选没读回来：本轮一条都不清");
+                return 0;
+            }
+        };
+        if ids.is_empty() {
+            return 0;
+        }
+        let mut done = Vec::new();
+        for id in &ids {
+            // 与手动那一格走同一条 store 路径：墓碑、outbox、附件引用一起结。
+            // 在这里另写一套"自动版销毁"，两套实现迟早分叉成"自动删的和手动删的不一样"。
+            match self.inner.store.purge_note(id) {
+                Ok(()) => done.push(id.to_string()),
+                Err(e) => {
+                    tracing::warn!(%e, id = %id, "这一条到期清理没落成：留给下一轮，不静默吞掉")
+                }
+            }
+        }
+        let purged = done.len();
+        if purged > 0 {
+            // 清出来的墓碑要尽快传出去（否则对面还以为那篇在回收站里躺着）。
+            self.inner.dirty_ticks.fetch_add(1, Ordering::SeqCst);
+            self.emit(BusEvent::NotesChanged { ids: done });
+        }
+        purged
     }
 
     /// §13 附件轮：与文本轮次**解耦**的独立传输。单轮预算 ≤4 个文件 / ≤64 MiB，
@@ -2915,6 +2992,12 @@ impl App {
         const GC_CAP: usize = 200;
         // 先体检再挑活：降级出来的行要在**这一轮**就被下载队列看见
         self.sweep_lost_local_blobs(SWEEP_CAP);
+        // §2.4 回收站到期放在 GC 回收**之前**：清掉一篇笔记会顺手解掉它的附件引用，
+        // 于是这些字节同一轮就能被 §8 那步认成零引用并挪进隔离区，而不是等下一轮
+        // （等一轮 = 20 秒，但一轮一轮地等就成了"销毁链路比创建链路慢"的那种系统）。
+        // 上界与 GC 同一个量级，理由同 §48 G4：不把常驻循环那一格变成一段长写锁。
+        const TRASH_CAP: usize = 200;
+        self.expire_trash_notes(TRASH_CAP);
         // §8 GC：体检之后回收（挪进隔离区），再销毁过了宽限期的那批。
         // 都在"挑活"之前做，于是这一轮挑出来的活已经是回收之后的账。
         self.reclaim_unreferenced_blobs(GC_CAP);

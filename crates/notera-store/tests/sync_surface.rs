@@ -1022,3 +1022,68 @@ fn remote_index_also_observes_remote_heads_for_rev_allocation() {
     };
     store.remote_index_replace(acct, &[att]).unwrap();
 }
+
+/// 回收站到期候选读的是**哪一列**。这一格是被变异台下出来的：把 `deleted_at < cutoff` 改成
+/// `updated_at < cutoff` 之后，`crates/notera-host/tests/trash_expiry.rs` 四条全绿 ——
+/// 因为删除这一动作会把 `deleted_at` 与 `updated_at` 一起写成"现在"，两列在回收站行的整个生命期里
+/// 几乎重合，所以那几臂分不出读的是哪一列（"扫到 0 项 ≠ 检查过"的另一形：**红不了 ≠ 判据在守着**）。
+///
+/// 于是这里直接把两列拉开差值造现场。这个现场**不是人为的**：SYNC-PROTOCOL 的 P11 就承认
+/// "本地在删除后又被编辑（`updated_at > deleted_at`）"是真实形状（冲突那条路径会走到），
+/// 所以"到期读哪一列"是一个会真的分叉的问题，不是一个纸上的问题。
+/// 两个方向都要钉，因为它们错起来是相反的两种用户后果：
+/// ① 躺了 40 天、期间被碰过 ⇒ **仍要清**（读 `updated_at` 会永远不清，回收站只涨不消）；
+/// ② 只删了 1 天、但 `updated_at` 很久远 ⇒ **不许清**（读 `updated_at` 会提前销毁，反悔窗口被吃掉）。
+#[test]
+fn trash_expiry_candidates_key_on_the_deletion_not_on_the_last_touch() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let n = create(&store, &folder, "到期看删除那一刻");
+    store
+        .mark_synced(EntityKind::Note, &n.id, n.rev, "sha256:x")
+        .unwrap();
+    store.delete_note(&n.id).unwrap();
+    let trashed = store.get_note(&n.id).unwrap().unwrap();
+    store
+        .mark_synced(EntityKind::Note, &trashed.id, trashed.rev, "sha256:y")
+        .unwrap();
+
+    // 现场成立：删除已确认 + 在回收站里 ⇒ 到期线放到"现在"之后就该认到这一行。
+    let always = "2999-01-01T00:00:00.000Z";
+    assert_eq!(
+        store.trash_expiry_candidates(always, 10).unwrap(),
+        vec![trashed.id.clone()],
+        "候选集基础形状就不成立：后面两臂的分歧没有意义"
+    );
+
+    // 下面两臂共用这条到期线，而两列被故意摆在它的**两侧** —— 这正是"读哪一列"唯一的证人。
+    let cutoff = "2026-10-01T00:00:00.000Z";
+
+    let retouch = |deleted_at: &str, updated_at: &str| {
+        let conn = rusqlite::Connection::open(fx.db_file()).unwrap();
+        conn.execute(
+            "UPDATE notes SET deleted_at = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![trashed.id.to_string(), deleted_at, updated_at],
+        )
+        .unwrap();
+    };
+
+    // ① 删了 40 天，行后来又被动过 ⇒ 到期判据认删除那一刻，仍要清。
+    retouch("2026-09-01T00:00:00.000Z", "2026-10-15T00:00:00.000Z");
+    assert_eq!(
+        store.trash_expiry_candidates(cutoff, 10).unwrap(),
+        vec![trashed.id.clone()],
+        "读的是 updated_at ⇒ 被碰过的回收站行永远清不掉"
+    );
+
+    // ② 删了 1 天，但 updated_at 在到期线之外 ⇒ 反悔窗口还没走完，一条都不许清。
+    retouch("2026-10-17T00:00:00.000Z", "2026-01-01T00:00:00.000Z");
+    assert!(
+        store
+            .trash_expiry_candidates(cutoff, 10)
+            .unwrap()
+            .is_empty(),
+        "读的是 updated_at ⇒ 刚删一天的行被当成早就到期，自动销毁吃掉用户的反悔窗口"
+    );
+}
