@@ -500,10 +500,17 @@ impl Store {
                 "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
             ));
         }
-        let table = if kind == EntityKind::Note {
-            "notes"
-        } else {
-            "folders"
+        // 穷尽匹配（ADR-0022 D7 ①）：以前是 `if kind == Note {…} else {folders}` ——
+        // 加第四个实体变体会**静默落进 folders** 那张表。附件在上面那条早退里已经拒过一次，
+        // 这里再钉一次，为的是让"下一个变体"必须改到这一行才编译得过（编译就是判据）。
+        let table = match kind {
+            EntityKind::Note => "notes",
+            EntityKind::Folder => "folders",
+            EntityKind::Attachment => {
+                return Err(StoreError::Constraint(
+                    "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+                ))
+            }
         };
         let head: Option<(i64, i64)> = tx
             .query_row(
@@ -548,17 +555,34 @@ impl Store {
                 "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
             ));
         }
-        let table = if kind == EntityKind::Note {
-            "notes"
-        } else {
-            "folders"
+        // 穷尽匹配（ADR-0022 D7 ①）：以前是 `if kind == Note {…} else {folders}` ——
+        // 加第四个实体变体会**静默落进 folders** 那张表。附件在上面那条早退里已经拒过一次，
+        // 这里再钉一次，为的是让"下一个变体"必须改到这一行才编译得过（编译就是判据）。
+        let table = match kind {
+            EntityKind::Note => "notes",
+            EntityKind::Folder => "folders",
+            EntityKind::Attachment => {
+                return Err(StoreError::Constraint(
+                    "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+                ))
+            }
         };
         let head: Option<(i64, i64, Option<String>)> = tx
             .query_row(
-                &if kind == EntityKind::Note {
-                    "SELECT rev, sync_rev, title FROM notes WHERE id = ?1".to_string()
-                } else {
-                    "SELECT rev, sync_rev, name FROM folders WHERE id = ?1".to_string()
+                &match kind {
+                    EntityKind::Note => {
+                        "SELECT rev, sync_rev, title FROM notes WHERE id = ?1".to_string()
+                    }
+                    EntityKind::Folder => {
+                        "SELECT rev, sync_rev, name FROM folders WHERE id = ?1".to_string()
+                    }
+                    // 上面那条 `table` 的匹配已经把附件拒了；这一臂存在的唯一理由是**穷尽**：
+                    // 少一臂就编译不过，而不是少一臂就静默用 folders 那一句去查 notes 的列。
+                    EntityKind::Attachment => {
+                        return Err(StoreError::Constraint(
+                            "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+                        ))
+                    }
                 },
                 [id.as_str()],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),

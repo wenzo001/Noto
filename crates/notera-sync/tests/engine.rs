@@ -196,6 +196,11 @@ struct FakeLocal {
     /// 注入用：让本机对**远端删除的落库**（`Tombstone` 软删 / `Purge` 永久删）拒收。
     /// 引擎里那一处以前是 `let _ =`，这条判据钉的就是"拒绝到底有没有去处"（ADR-0021 D3 的最后一格）。
     reject_tombstones: Arc<AtomicBool>,
+    /// 注入用：让本机按 host 的 `kind_slot` 同一规矩**逐条具名拒收**认不出的类型标记，
+    /// 并把条数与原因写在 `ApplyReport.rejected/reason` 上。
+    /// 这一格存在的唯一理由：`rejected` 自被造出来起**零读者**（ADR-0022 D7 ①），
+    /// 没有读者的那个数不算账 —— 所以这里要能造出"落库拒了但整批没失败"的形状给引擎读。
+    report_unknown_kinds: Arc<AtomicBool>,
     /// §4.3 / G87：宿主这一侧要不要把这一轮挡下来。
     hold: Arc<AtomicBool>,
 }
@@ -253,6 +258,23 @@ impl LocalPort for FakeLocal {
                 "注入：本机不接受这条删除（那一行在删除之后又被编辑过）".into(),
             ));
         }
+        // 与 host `kind_slot` 同一规矩的模拟：认不出的标记 ⇒ **逐条**具名拒收，同批其余照旧落库。
+        // 注意这里返回的是 `Ok` —— 这一格要造的正是"批里一条被拒、整批没失败"的形状，
+        // 因为引擎从前只在 `Err` 那条路上记账。
+        let unknown: Vec<String> = if self.report_unknown_kinds.load(Ordering::SeqCst) {
+            ops.iter()
+                .filter_map(|o| match o {
+                    ApplyOp::Purge { kind, id } | ApplyOp::Tombstone { kind, id, .. }
+                        if !matches!(kind.as_str(), "n" | "f" | "a") =>
+                    {
+                        Some(format!("未知的实体类型标记: {kind}（{id}）"))
+                    }
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         for o in &ops {
             // 引擎提交成功后写回缓存清单，下一轮 304 才有的可回落
             if let ApplyOp::StoreManifest { wire, etag, .. } = o {
@@ -262,8 +284,9 @@ impl LocalPort for FakeLocal {
         }
         self.applied.lock().unwrap().extend(ops);
         Ok(ApplyReport {
-            applied: n,
-            rejected: 0,
+            applied: n - unknown.len(),
+            rejected: unknown.len(),
+            reason: unknown.last().cloned(),
         })
     }
     fn record_conflict(
@@ -935,6 +958,63 @@ async fn a_rejected_remote_delete_is_counted_and_not_claimed_as_applied() {
             .iter()
             .any(|o| matches!(o, ApplyOp::Tombstone { .. })),
         "被拒收的删除不许算作已经落进本机"
+    );
+}
+
+/// ADR-0022 D7 ① 的引擎侧两格，缺一不可：
+/// ① **可达性**：清单里一枚我还不认识的类型、且 `p`（永久删）已置位 ⇒ 引擎真的会把
+///    `Purge{kind:"g"}` 交到落库这一边。墓碑这一族**不取记录**，所以 fetch 前那道
+///    `kind_dir` 门（`notera-webdav/src/path.rs:181-189`）拦不住它 —— 落库这一侧必须自己表态。
+///    没有这一格，"host 把陌生标记具名拒收"就是一条永远不会被走到的分支。
+/// ② **读者**：落库在 `Ok` 里报的 `rejected/reason` 必须折进本轮读数。
+///    `.rejected` 自被造出来起**零读者**（`grep -rn "\.rejected" crates/` 只命中构造处），
+///    而引擎三条 apply 边从前只判 `Err` —— 于是"整批失败"有痕迹、"批里这一条我读不懂"没有痕迹。
+#[tokio::test]
+async fn an_unknown_kind_reaches_the_local_and_its_rejection_is_counted() {
+    let l = FakeLocal::default();
+    l.report_unknown_kinds.store(true, Ordering::SeqCst);
+    let r = FakeRemote::default();
+    let mut m = base_manifest();
+    m.window = Window {
+        since_seq: 1,
+        complete: true,
+        entries: vec![EntryRef {
+            i: "g-1".into(),
+            t: "g".into(),
+            r: 1,
+            h: "gggggggggggg".into(),
+            s: 10,
+            d: None,
+            p: 1,
+        }],
+    };
+    m.refresh_checksum();
+    r.seed(m);
+
+    let (st, _evs) = run(l.clone(), r, None).await;
+
+    let got = l.applied.lock().unwrap().clone();
+    assert!(
+        got
+            .iter()
+            .any(|o| matches!(o, ApplyOp::Purge { kind, .. } if kind == "g")),
+        "①：陌生 kind 的永久删除必须真的到达落库这一边，实际 {got:?}"
+    );
+    assert_eq!(
+        st.rejections, 1,
+        "②：落库在 Ok 里报的具名拒收必须数得出来（从前它零读者），读数 {st:?}"
+    );
+    assert!(
+        st.last_rejection
+            .as_deref()
+            .unwrap_or_default()
+            .contains("未知的实体类型标记: g"),
+        "②：原因要点名那一枚标记本身，不然拒收了也查不到是什么：{:?}",
+        st.last_rejection
+    );
+    assert_eq!(
+        st.pulled, 0,
+        "②：被拒的那一条不许同时被算成已拉下来（一台不知道少了一格的形状）"
     );
 }
 

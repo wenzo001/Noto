@@ -282,6 +282,7 @@ impl LocalPort for Device {
         Ok(ApplyReport {
             applied: n,
             rejected: 0,
+            reason: None,
         })
     }
     fn record_conflict(

@@ -236,7 +236,32 @@ pub enum ApplyOp {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ApplyReport {
     pub applied: usize,
+    /// **具名拒收**的条数：这一条我读不懂，我没写、也没假装写过（ADR-0022 D7 ①）。
+    ///
+    /// 它**不等于**存储层的 `skipped`。`skipped` 是"合法的无事可做"（幂等重放、
+    /// "本地已经比远端新"，`notera-store/src/apply.rs:325,523`），把它当拒收报，
+    /// 每一轮正常重放都会红一次。从前 host 那一行 `rejected: rep.skipped` 就是这么写的，
+    /// 而 `.rejected` 当时**没有任何读者**，所以这句谎从没被读到过。
     pub rejected: usize,
+    /// 最后一条具名原因。引擎折进 `RoundStats.last_rejection`，与 `Err` 那条路同一个去处。
+    pub reason: Option<String>,
+}
+
+/// 把一次 apply 里**单条被具名拒收**的账折进本轮读数（ADR-0022 D7 ①）。
+///
+/// 为什么要有这个函数：`ApplyReport.rejected` 从被造出来那天起**零消费者**
+/// （2026-10-18 `grep -rn "\.rejected" crates/` 只命中构造处），而引擎三条 apply 边
+/// 只判 `Err` —— 于是"整批失败"有痕迹、"批里这一条我读不懂"没有痕迹，
+/// 两台设备都不知道少了一格。折叠必须在三个调用点都做，漏一个就是又一处静默。
+fn fold_rejections(st: &mut RoundStats, rep: &ApplyReport) {
+    if rep.rejected == 0 {
+        return;
+    }
+    st.rejections += rep.rejected;
+    // 只在真带原因时覆盖：一条都没有的原因不许把上一格攒下的那句抹掉。
+    if let Some(r) = rep.reason.clone() {
+        st.last_rejection = Some(r);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -896,6 +921,7 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                             if rep.applied == 1 {
                                 st.pulled += 1;
                             }
+                            fold_rejections(&mut st, &rep);
                         }
                         Err(e) => {
                             st.rejections += 1;
@@ -992,10 +1018,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                     wire,
                                 }]) {
                                     Ok(rep) => {
-                                        if rep.applied == 1 {
-                                            st.pulled += 1;
-                                        }
+                                    if rep.applied == 1 {
+                                        st.pulled += 1;
                                     }
+                                    fold_rejections(&mut st, &rep);
+                                }
                                     Err(e) => {
                                         st.rejections += 1;
                                         st.last_rejection = Some(e.to_string());
@@ -1032,9 +1059,14 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             // 这里以前是 `let _ =`，等于把"远端说删了、本机拒收、于是两台都不知道"这一整类
             // 形状藏在看不见的地方。判据是引擎那侧的注入测试
             // `a_rejected_remote_delete_is_counted_and_not_claimed_as_applied`。
-            if let Err(e) = self.local.apply(tombstone_ops) {
-                st.rejections += 1;
-                st.last_rejection = Some(e.to_string());
+            match self.local.apply(tombstone_ops) {
+                // 整批失败之外的另一种形状：批里**单条**被具名拒收（认不出的类型标记）。
+                // 从前那一格算出来了无人读，"远端说删了、本机读不懂、两台都不知道"就藏在这里。
+                Ok(rep) => fold_rejections(&mut st, &rep),
+                Err(e) => {
+                    st.rejections += 1;
+                    st.last_rejection = Some(e.to_string());
+                }
             }
         }
 

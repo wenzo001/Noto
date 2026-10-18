@@ -3712,6 +3712,53 @@ pub enum BootError {
 /// 而不是散落到同步逻辑各处。
 pub struct HostLocalPort(App);
 
+/// ADR-0022 D7 ①：落库前对"类型标记"的分类必须是**全函数**，三种去处各有名字。
+///
+/// 词汇表与 `notera_webdav::path::kind_dir`（`crates/notera-webdav/src/path.rs:181-189`，
+/// 那是 fetch 之前的一道门）**同一份**，再加两枚账本记号（引擎在 `notera-sync/src/lib.rs:1130,1182`
+/// 发的 `manifest`/`seq` —— 它们**不是**实体，把认不出就当拒收会每轮假红）。
+enum KindSlot {
+    Entity(EntityKind),
+    /// 有意不走这一张表：附件按 sha256 寻址自有那条边，`manifest`/`seq` 只是账本记号
+    NotAnEntity(&'static str),
+    /// 认不出来 ⇒ **具名拒收**：不写、不猜、不静默丢
+    Unknown,
+}
+
+fn kind_slot(kind: &str) -> KindSlot {
+    match kind {
+        "n" | "note" => KindSlot::Entity(EntityKind::Note),
+        "f" | "folder" => KindSlot::Entity(EntityKind::Folder),
+        "a" | "attachment" | "attachments" => KindSlot::NotAnEntity(
+            "附件以 sha256 寻址，走 Store::set_attachment_states（notera-store/src/apply.rs:497-499 原话）",
+        ),
+        "seq" => KindSlot::NotAnEntity("清单进度记号，不是实体"),
+        "manifest" => KindSlot::NotAnEntity("清单索引记号，不是实体"),
+        _ => KindSlot::Unknown,
+    }
+}
+
+/// `kind_slot` 与 id 校验收成一条边：
+/// `Ok(Some(..))` = 实体且 id 读得懂；`Ok(None)` = **有意的**非实体（不写这张表，也不算拒收）；
+/// `Err(原因)` = 要具名拒收的那两种。
+///
+/// 为什么 id 失败也算拒收：以前这四个消费点是
+/// `if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id))` —— 没有 else，
+/// 于是"清单给了个我读不懂的 id"与"清单给了个我还不认识的类型"都丢得零痕迹，
+/// 而同一个文件里上传边（`envelope_wire`）早就写着"未知的实体类型标记"那一句。
+fn slot_entity(kind: &str, id: &str) -> Result<Option<(EntityKind, EntityId)>, String> {
+    match kind_slot(kind) {
+        KindSlot::Entity(k) => match EntityId::parse(id) {
+            Ok(i) => Ok(Some((k, i))),
+            Err(e) => Err(format!("{kind}/{id}: 清单给的 id 不是 UUID（{e}）")),
+        },
+        KindSlot::NotAnEntity(_) => Ok(None),
+        KindSlot::Unknown => Err(format!(
+            "未知的实体类型标记: {kind}（{id}）—— 不当笔记写、也不静默丢掉"
+        )),
+    }
+}
+
 impl LocalPort for HostLocalPort {
     fn account_id(&self) -> String {
         self.0.config().active_account.unwrap_or_default()
@@ -3929,25 +3976,66 @@ impl LocalPort for HostLocalPort {
 
     fn apply(&self, ops: Vec<ApplyOp>) -> Result<notera_sync::ApplyReport, LocalError> {
         let mut mapped = Vec::new();
+        // ADR-0022 D7 ①：这一格从前只填 `applied`，`rejected` 拿的是存储层的 `skipped`
+        // （那是"合法的无事可做"：幂等重放、本地已比远端新），而 `rejected` 在 2026-10-18 实测
+        // **零消费者**。两件事一起改：语义改回"具名拒收"，消费者由引擎的折叠那一格补上。
+        let mut rejected = 0usize;
+        let mut reason: Option<String> = None;
         for o in ops {
             match o {
                 ApplyOp::Upsert { kind, id, wire } => {
                     let env: serde_json::Value = serde_json::from_slice(&wire).map_err(|e| {
                         LocalError::Storage(format!("远端记录 {kind}/{id} 不是合法 JSON: {e}"))
                     })?;
-                    match kind.as_str() {
-                        "f" => mapped.push(StoreApplyOp::UpsertFolder { env }),
-                        _ => mapped.push(StoreApplyOp::UpsertNote { env }),
+                    match kind_slot(&kind) {
+                        KindSlot::Entity(EntityKind::Folder) => {
+                            mapped.push(StoreApplyOp::UpsertFolder { env })
+                        }
+                        KindSlot::Entity(EntityKind::Note) => {
+                            mapped.push(StoreApplyOp::UpsertNote { env })
+                        }
+                        // `kind_slot` 从不产这一臂（附件归在 NotAnEntity 里），它存在的唯一理由是
+                        // **穷尽**：以后谁把词汇表改成 `Entity(Attachment)`，必须在这里表态。
+                        KindSlot::Entity(EntityKind::Attachment) => {
+                            rejected += 1;
+                            reason = Some(format!("{kind}/{id}: 附件不走 upsert 这一边"));
+                            tracing::warn!(kind = %kind, id = %id, "附件以 upsert 落库：具名拒收");
+                        }
+                        // 附件与那两枚记号没有"upsert 成一条实体"这条路；到这儿说明清单与记录
+                        // 已经对不上（fetch 前 `kind_dir` 本该先挡住）。以前是 `_ => UpsertNote`：
+                        // 任何陌生的 `t` 都会被写成一篇笔记。
+                        KindSlot::NotAnEntity(why) => {
+                            rejected += 1;
+                            reason = Some(format!("{kind}/{id}: {why}，不许以 upsert 落库"));
+                            tracing::warn!(kind = %kind, id = %id, "这条 upsert 不走落库这一边：具名拒收");
+                        }
+                        KindSlot::Unknown => {
+                            rejected += 1;
+                            reason = Some(format!("未知的实体类型标记: {kind}（{id}）—— 不当笔记写、也不静默丢掉"));
+                            tracing::warn!(kind = %kind, id = %id, "认不出的类型标记：具名拒收");
+                        }
                     }
                 }
                 ApplyOp::ConflictPayload { kind, id, wire } => {
                     // 只把服务器那一版的原始字节登记到冲突行上，**不碰任何笔记**：
                     // P11 保留哪一边由用户决定（CONFLICT-RESOLUTION §5.1.1）。
                     // 命中 0 行是合法的（冲突刚被裁决掉），这里不报错也不补建行。
-                    let entity = if kind == "f" {
-                        notera_core::EntityKind::Folder
-                    } else {
-                        notera_core::EntityKind::Note
+                    let entity = match kind_slot(&kind) {
+                        KindSlot::Entity(k) => k,
+                        KindSlot::NotAnEntity(why) => {
+                            rejected += 1;
+                            reason = Some(format!("{kind}/{id}: {why}，冲突载荷不挂到这一张表"));
+                            tracing::warn!(kind = %kind, id = %id, "冲突载荷的类型标记认不出：具名拒收");
+                            continue;
+                        }
+                        KindSlot::Unknown => {
+                            rejected += 1;
+                            reason = Some(format!(
+                                "未知的实体类型标记: {kind}（{id}）—— 冲突载荷不许默认成笔记"
+                            ));
+                            tracing::warn!(kind = %kind, id = %id, "认不出的类型标记：具名拒收");
+                            continue;
+                        }
                     };
                     let ok = match notera_core::EntityId::parse(&id) {
                         Ok(eid) => self
@@ -3970,8 +4058,23 @@ impl LocalPort for HostLocalPort {
                     let env: serde_json::Value = serde_json::from_slice(&wire).map_err(|e| {
                         LocalError::Storage(format!("冲突记录 {kind}/{id} 不是合法 JSON: {e}"))
                     })?;
-                    if kind == "n" {
-                        mapped.push(StoreApplyOp::AdoptConflict { env });
+                    match kind_slot(&kind) {
+                        KindSlot::Entity(EntityKind::Note) => {
+                            mapped.push(StoreApplyOp::AdoptConflict { env })
+                        }
+                        // 文件夹没有"正文"可采纳（上面那句注释说的就是这一格）。
+                        // 以前它是 `if kind == "n"` 的 else：静默。现在是显式一条臂 + 一句 debug。
+                        KindSlot::Entity(EntityKind::Folder) => {
+                            tracing::debug!(kind = %kind, id = %id, "文件夹没有可采纳的正文，跳过这一条");
+                        }
+                        KindSlot::Entity(EntityKind::Attachment) | KindSlot::NotAnEntity(_) => {}
+                        KindSlot::Unknown => {
+                            rejected += 1;
+                            reason = Some(format!(
+                                "未知的实体类型标记: {kind}（{id}）—— 采纳对面那一版不许默认成笔记"
+                            ));
+                            tracing::warn!(kind = %kind, id = %id, "认不出的类型标记：具名拒收");
+                        }
                     }
                 }
                 ApplyOp::SetRemote {
@@ -3987,18 +4090,35 @@ impl LocalPort for HostLocalPort {
                     if kind == "seq" && id == "applied" {
                         self.0.set_seq_applied(rev);
                     }
-                    if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
-                        mapped.push(StoreApplyOp::SetRemote {
+                    match slot_entity(&kind, &id) {
+                        Ok(Some((k, i))) => mapped.push(StoreApplyOp::SetRemote {
                             kind: k,
                             id: i,
                             rev: Rev(rev),
                             hash12,
-                        });
+                        }),
+                        // 那两枚账本记号与附件：有意的不写这张表（`seq` 已在上面那条臂结清）
+                        Ok(None) => {}
+                        Err(m) => {
+                            rejected += 1;
+                            reason = Some(m);
+                            tracing::warn!(kind = %kind, id = %id, "SetRemote 落不进这张表：具名拒收");
+                        }
                     }
                 }
                 ApplyOp::MarkSynced { kind, id, rev } => {
-                    if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
-                        let _ = self.0.store().mark_synced(k, &i, Rev(rev), "");
+                    match slot_entity(&kind, &id) {
+                        // `mark_synced` 自己的错误仍然 `let _`：那是存储层的一条独立口径，
+                        // 与这一刀的"类型标记"不是一格，混在同一个 commit 里改会摊平归因。
+                        Ok(Some((k, i))) => {
+                            let _ = self.0.store().mark_synced(k, &i, Rev(rev), "");
+                        }
+                        Ok(None) => {}
+                        Err(m) => {
+                            rejected += 1;
+                            reason = Some(m);
+                            tracing::warn!(kind = %kind, id = %id, "MarkSynced 落不进这张表：具名拒收");
+                        }
                     }
                 }
                 ApplyOp::Tombstone {
@@ -4007,17 +4127,32 @@ impl LocalPort for HostLocalPort {
                     rev,
                     deleted_at: _,
                 } => {
-                    if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
-                        mapped.push(StoreApplyOp::Tombstone {
+                    // 这一格是**真的可达**：墓碑不取记录，所以 `kind_dir` 那道 fetch 前的门拦不住它。
+                    // 清单里一条 `t` 是我还不认识的类型、`p` 已置位 → 引擎按 P13 发 Purge/Tombstone，
+                    // 而以前这里是 `if let` 无 else：对端的删除被丢掉且零痕迹，两台都不知道少了一格。
+                    match slot_entity(&kind, &id) {
+                        Ok(Some((k, i))) => mapped.push(StoreApplyOp::Tombstone {
                             kind: k,
                             id: i,
                             rev: Rev(rev),
-                        });
+                        }),
+                        Ok(None) => {}
+                        Err(m) => {
+                            rejected += 1;
+                            reason = Some(m);
+                            tracing::warn!(kind = %kind, id = %id, "对面那条删除落不进这张表：具名拒收");
+                        }
                     }
                 }
                 ApplyOp::Purge { kind, id } => {
-                    if let (Some(k), Ok(i)) = (EntityKind::from_tag(&kind), EntityId::parse(&id)) {
-                        mapped.push(StoreApplyOp::Purge { kind: k, id: i });
+                    match slot_entity(&kind, &id) {
+                        Ok(Some((k, i))) => mapped.push(StoreApplyOp::Purge { kind: k, id: i }),
+                        Ok(None) => {}
+                        Err(m) => {
+                            rejected += 1;
+                            reason = Some(m);
+                            tracing::warn!(kind = %kind, id = %id, "对面那条永久删除落不进这张表：具名拒收");
+                        }
                     }
                 }
                 ApplyOp::StoreManifest { wire, etag, seq: _ } => {
@@ -4036,9 +4171,16 @@ impl LocalPort for HostLocalPort {
             .store()
             .apply_remote(&mapped)
             .map_err(|e| LocalError::Storage(e.to_string()))?;
+        // `skipped` 从前被塞进 `rejected`：那是"合法的无事可做"（幂等重放、本地已比远端新，
+        // `notera-store/src/apply.rs:325,523`），报成拒收会让每一轮正常重放都假红一次。
+        // 现在这一格只装上面那几种**具名**拒收，并且第一次有了读者（引擎的 `fold_rejections`）。
+        if rejected > 0 {
+            tracing::warn!(rejected, reason = ?reason, "本轮有被具名拒收的落库请求");
+        }
         Ok(notera_sync::ApplyReport {
             applied: rep.applied,
-            rejected: rep.skipped,
+            rejected,
+            reason,
         })
     }
     /// 引擎已经判完"这是冲突"，这里只做**记账字段**的翻译（不含任何判定）。
@@ -5809,6 +5951,155 @@ mod tests {
         assert_eq!(
             open[0].note_title, "对端已永久删除",
             "笔记行已不存在时要用墓碑快照，卡片不许空白"
+        );
+    }
+
+    /// ADR-0022 D7 ①：读侧的镜像腿。上传边早就写着"认不出的类型标记绝不能被当成笔记上传"，
+    /// 而落库这侧从前是 `if let` 无 else —— 同一个规矩在同一个文件里只有半条。
+    ///
+    /// 四格各带一把刀（刀与读数见 CHANGELOG 同批）：
+    /// ① 陌生 `t` 的 Purge ⇒ `rejected == 1` 且原因里**点名那一枚标记**；
+    /// ② 账本记号（`seq`/`manifest`）⇒ `rejected == 0` —— 它们有意的不走这张表，
+    ///    把它们报成拒收就是"每一轮正常同步都假红一次"；
+    /// ③ 合法那条腿照旧落库，且**同批里一条被拒不连坐**（这是选"逐条拒收"而不是"整批 Err"的理由）；
+    /// ④ 清单给了个读不懂的 id ⇒ 也具名（从前它与①同形：丢得零痕迹）。
+    #[test]
+    fn unknown_entity_kind_is_rejected_by_name_not_dropped() {
+        let app = boot("kind-unknown");
+        let p = app.local_port();
+        let folder = app.list_folders().unwrap().remove(0);
+
+        // ① 陌生标记：墓碑不取记录，所以 fetch 前那道 `kind_dir` 门拦不住它 —— 这一格是真可达的
+        let rep = p
+            .apply(vec![ApplyOp::Purge {
+                kind: "g".into(),
+                id: folder.id.clone(),
+            }])
+            .expect("单条被具名拒收不许把整批判死");
+        assert_eq!(rep.rejected, 1, "①：认不出的类型标记必须数得出来");
+        let reason = rep.reason.clone().unwrap_or_default();
+        assert!(
+            reason.contains("未知的实体类型标记: g"),
+            "①：原因里必须点名那一枚标记，实际 {reason}"
+        );
+        assert!(
+            app.list_folders().unwrap().iter().any(|f| f.id == folder.id),
+            "①：拒收不许顺手把合法的那一行删掉"
+        );
+
+        // ② 账本记号：合法的不走这张表，但**不算拒收**
+        let rep = p
+            .apply(vec![
+                ApplyOp::SetRemote {
+                    kind: "seq".into(),
+                    id: "applied".into(),
+                    rev: 7,
+                    hash12: String::new(),
+                },
+                ApplyOp::SetRemote {
+                    kind: "manifest".into(),
+                    id: "index".into(),
+                    rev: 7,
+                    hash12: "abcdef000000".into(),
+                },
+            ])
+            .expect("记号必须被接受");
+        assert_eq!(
+            rep.rejected, 0,
+            "②：seq/manifest 是记号不是拒收，报出来就是每轮假红"
+        );
+
+        // ③ 合法那条腿照旧落库，且与一条被拒的同一批 ⇒ 不连坐
+        let note = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("对面的")).unwrap();
+        // 先把它变成**已确认**的一行（`rev == sync_rev`）：本机有未确认修改时，
+        // 存储层本来就该拒绝对面的永久删除并交给冲突解决（I1/I3）—— 第一次跑这格就是那样红的，
+        // 红得对，是我那夹具没把"已经同步过"这一前置做出来。前置要写成动作，不是写成注释。
+        let nid = EntityId::parse(&note.id).unwrap();
+        app.store()
+            .mark_synced(EntityKind::Note, &nid, Rev(1), "")
+            .expect("把这一行标成已确认（对面的永久删除才该被采纳）");
+        let rep = p
+            .apply(vec![
+                ApplyOp::Purge {
+                    kind: "g".into(),
+                    id: note.id.clone(),
+                },
+                ApplyOp::Purge {
+                    kind: "n".into(),
+                    id: note.id.clone(),
+                },
+            ])
+            .expect("同批一条被拒不许让整批失败");
+        assert_eq!(rep.rejected, 1, "③：同批只拒那一条陌生的");
+        assert_eq!(rep.applied, 1, "③：合法那条必须照旧落地");
+        let still_there = app
+            .store()
+            .list_notes(&notera_store::NoteQuery::all())
+            .unwrap()
+            .iter()
+            .any(|n| n.id.as_str() == note.id.as_str());
+        assert!(
+            !still_there,
+            "③：合法那条的永久删除真的落了库（拒收只作用于陌生那一枚标记）"
+        );
+
+        // ④ 读不懂的 id：以前与①同形（`if let` 的 else 不存在）
+        let rep = p
+            .apply(vec![ApplyOp::Purge {
+                kind: "n".into(),
+                id: "这不是一个 UUID".into(),
+            }])
+            .expect("坏 id 要具名拒收，不是把整批判死");
+        assert_eq!(rep.rejected, 1, "④：坏 id 也必须数得出来");
+        assert!(
+            rep.reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("不是 UUID"),
+            "④：原因要说清是 id 读不懂，实际 {:?}",
+            rep.reason
+        );
+    }
+
+    /// ⑤ **合法的无事可做 ≠ 拒收**。从前 host 那行是 `rejected: rep.skipped`，
+    /// 而 `skipped` 装的是"幂等重放"与"本地已经比远端新"（`notera-store/src/apply.rs:325,523`）——
+    /// 那种东西一旦有人读，每一轮正常同步都会假红一次。这一格就是那把刀的靶子。
+    #[test]
+    fn a_legitimate_skip_is_not_reported_as_a_rejection() {
+        let app = boot("kind-skip");
+        let p = app.local_port();
+        let folder = app.list_folders().unwrap().remove(0);
+        let note = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("本机更新")).unwrap();
+        let nid = EntityId::parse(&note.id).unwrap();
+        app.store()
+            .mark_synced(EntityKind::Note, &nid, Rev(1), "")
+            .expect("把确认点抬到 rev 1");
+
+        // 造出"已确认"的那一行（`rev == sync_rev == 1`）⇒ 远端 rev 0 的**删除**走进
+        // `notera-store/src/apply.rs:523` 那一支：幂等跳过，不是拒收。
+        // 第一版这里用的是 `SetRemote`，而那条路上没有 `skipped` 这一支 ⇒ K3 下刀照样绿；
+        // 一条不会红的判据不算判据，所以改到真分支上。
+        let rep = p
+            .apply(vec![ApplyOp::Tombstone {
+                kind: "n".into(),
+                id: note.id.clone(),
+                rev: 0,
+                deleted_at: Some("2026-10-18T00:00:00.000Z".into()),
+            }])
+            .expect("合法的跳过不是错误");
+        assert_eq!(
+            rep.rejected, 0,
+            "⑤：幂等跳过不许报成拒收（那正是从前 `rejected: rep.skipped` 的形状），读数 {rep:?}"
+        );
+        assert_eq!(rep.applied, 0, "⑤：跳过也不许算写进去了什么，读数 {rep:?}");
+        let rows = app
+            .store()
+            .list_notes(&notera_store::NoteQuery::all())
+            .unwrap();
+        assert!(
+            rows.iter()
+                .any(|n| n.id.as_str() == note.id.as_str() && n.deleted_at.is_none()),
+            "⑤：这一支的本意是「本机更新，不动它」—— 不许顺手把它送进回收站"
         );
     }
 
