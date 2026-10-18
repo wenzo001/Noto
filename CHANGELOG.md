@@ -49,6 +49,36 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 订正（2026-10-18 第一百二十九批订正：ADR-0022 那条"发布顺序约束"是我反推出来的，撤回）
+- **撤回的主张**：上一格写着"先放 `tag` 记录上线、后补守卫 ⇒ 任何停在 0.0.141 的设备会把标签记录
+  **当笔记写进 `notes`**，无编译错、无失败测试、无日志，用户看见一篇打不开的假笔记"，并据此定了一条
+  "① 先堵再 ② 抬 `min_protocol` 再 ③ 加 kind"的硬次序。**那句不成立。**
+- **它是怎么错的**：我从 `crates/notera-host/src/lib.rs:3937-3941` 那一行
+  `match kind.as_str() { "f" => UpsertFolder, _ => UpsertNote }` **反推**出一个载荷形状，就把它写成了结论 ——
+  而这正是本仓库 §"根因要复现出载荷才落笔"明令禁的样子：那个载荷我一次都没造出来跑过。
+  写完后按纪律回头逐行复核，读到的是**三道具名拒绝，任何一处 `_ =>` 之前就把路挡了**：
+  ① `crates/notera-webdav/src/path.rs:181-189` `kind_dir()` 只认 `n|f|a|note|folder|attachment(s)`，
+  陌生 kind **在 fetch 之前**就 `Err(PathError::BadKind)`，记录根本取不回来；
+  ② `crates/notera-store/src/apply.rs:22,53-58` `MAX_PROTOCOL = 1`，信封 `protocol` 高于它就 `不写库`（原话）；
+  ③ `apply.rs:64-69` 信封 `kind` 与目标表不符 ⇒ `StoreError::Rejected`。
+  再加一层：`crates/notera-crypto/src/envelope.rs:64-65` 的 `Envelope.kind` 是**类型化** `EntityKind` 的 serde，
+  陌生 variant 连反序列化都过不去。⇒ **旧设备不会把标签写成假笔记**，那条次序因此撤掉。
+- **别把真欠的两格一起丢掉**（这是撤回时最容易犯的第二次错）：
+  ① `SetRemote`/`MarkSynced`/`Tombstone`/`Purge` 四处（`notera-host/src/lib.rs:3990/4000/4010/4019`）确实是
+  `if let (Some(k), Ok(i)) = …` **没有 else** ⇒ 陌生 kind 在这里丢得**零痕迹**（不计 `st.rejections`、无 `last_rejection`）。
+  而**同一个文件**的上传边（`:3900-3903`，原话"认不出的类型标记：绝不当成笔记上传"）与下行
+  （`notera-sync/src/lib.rs:890-894` + ADR-0021 D3"本地 apply 的拒绝不许没有去处"）早就各有具名口径。
+  ⇒ 这一刀仍然要做，但它的正当性来自"**同一份文件里两处不一致**"，不来自数据损坏，**不再是发版阻塞**。
+  ② 旧设备 `SetRemote` 零痕迹丢弃会不会让它**每轮重新计划同一条陌生条目**（潜在空转）——
+  这一格现在**只是假说**，落地那一批要造出载荷实测才许写进文档。
+- **前向门槛改用既有机制**（比原方案精确）：tag 记录写 `protocol = 2` + `MAX_PROTOCOL` 抬到 2 ⇒
+  旧客户端只在 tag 那一条上具名失败，**笔记与文件夹照旧同步**；原方案的"抬 `min_protocol`"会把整台旧设备
+  挡在门外，那是为了一个并不存在的损坏风险付出的真代价。
+- 改动只在文档：`docs/ADR/0022-tags-as-syncable-entity.md`（§背景 那一格标了撤回 + D7 整节重写，顶部留订正框）、
+  `docs/design/SPEC-AMENDMENTS.md` A12（"为什么顺序不可反"整段换成订正后的两格 + 三道拒绝的 `file:line`；
+  "三件事"那格的 ①② 按新口径改）。`_ => UpsertNote` 这一行**今天仍然在那儿** ——
+  订正撤掉的是"它会让旧设备写坏库"这句主张，不是那处口径不一致本身。
+
 ### 决策与设计（2026-10-18 第一百二十九批：四格拍板落档 + ADR-0022 标签设计，**未动产品 ⇒ 版本号不升**）
 - **用户拍了四格**（记录已同步进 `docs/JOPLIN-VS-NOTO-FEATURE-MAP.md` §6）：**标签进 1.0**（明确接受协议改动）、
   **待办只要 checklist 块**（笔记不做成任务）、**上面这些落完再发 1.0.0**（发版线停在 0.0.x）、
@@ -63,6 +93,10 @@
   导出处写着"In some cases a NoteTag can still exist, while the Tag does not"（孤儿链接）、
   两台设备同名标签**没有任何合并逻辑**、一个功能里四套相等关系、层级标签加了又回滚（`JoplinDatabase.ts:814-822`）。
 - **这条是本批最要紧的发现，而且与标签无关也成立**：ADR-0022 D7 定了一条**发布顺序约束**。
+  （⚠️ **本格的"会把标签记录当笔记写进 `notes`"与"次序不可反"已于同日撤回**，
+  见本文件顶部「第一百二十九批订正」那一格 —— 三道具名拒绝在 `_ =>` 之前就把路挡了，那句是反推的载荷。
+  真欠的"四处 `if let` 无 else 零痕迹丢弃"仍在，只是性质从"数据损坏"改成"同一文件两处口径不一致"。
+  **下面按原文保留，不改写历史。**）
   设计取证指出、我逐行读实：`crates/notera-host/src/lib.rs:3937-3941` 是
   `match kind.as_str() { "f" => UpsertFolder, _ => UpsertNote }`，`:3973` 只对 `kind == "n"` 采纳，
   `:3990/4000/4010/4019` 在 `EntityKind::from_tag()` 返回 `None` 时把 `SetRemote`/`MarkSynced`/`Tombstone`/`Purge`

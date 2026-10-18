@@ -27,7 +27,11 @@
      `:3973` 只对 `kind == "n"` 采纳冲突，`:3990/4000/4010/4019` 在 `EntityKind::from_tag()` 返回 `None` 时
      把 `SetRemote`/`MarkSynced`/`Tombstone`/`Purge` **无错误地丢掉**，
      `crates/notera-store/src/apply.rs:503-507,551-562` 是 `if kind == Note {"notes"} else {"folders"}`。
-     ⇒ 一个陌生的 `tag` 记录在旧版本客户端上会被**当成笔记写进 `notes` 表**：没有编译错、没有失败测试、没有日志。
+     ⇒ **陌生 kind 在 `SetRemote`/`MarkSynced`/`Tombstone`/`Purge` 四处被丢掉时零痕迹**
+     （既不计 `st.rejections` 也没有原因）。
+     ⚠️ 本节最初据此写过"旧客户端会把 tag 记录当笔记写进 `notes`、用户看见一篇打不开的假笔记"——
+     **那句已于同日复核时撤回**，理由与三道真正挡住它的具名拒绝见 **D7 顶部的订正框**：
+     那一版是从 `_ => UpsertNote` 这一行**反推**出的载荷形状，而我从没造出那个载荷跑过。
 
 ## 决策
 
@@ -76,21 +80,45 @@ A1 那句"归类的唯一入口是单值颜色"要改成"归类的**视觉**入�
 **按颜色检索仍然不做**（A1 未拍板那半格不变，它撞 v2 规范 §3.3"没有筛选器/没有分面"）——
 本次只开标签这一族。
 
-### D7 **发布顺序约束**：先堵静默降级，再放新 kind 上线
-这条是本 ADR 最要紧的一段。0.0.141 已经在用户手里，它的代码就是 §背景 里那些 `_ => UpsertNote`。
-**如果先发带 `tag` 的版本、后补守卫，那么任何一台还停在旧版的设备拉到 tag 记录时，
-会把它当笔记写进自己的 `notes` 表**——写进去的还是一行带 JSON 载荷的假笔记，用户会看见一篇打不开的笔记。
-所以次序必须是：
+### D7 前向门槛用**既有的 `protocol` 机制**；加固那一刀照做，但它不是发版阻塞
 
-1. **第一刀（先上，单独一个版本）**：把上述每一处静默降级改成**具名拒绝**——
-   未知 kind ⇒ 不写、不吞、进 `readOnlyReason`/同步报告，消息键进 i18n；`apply.rs` 那两处
-   `else {"folders"}` 改成穷尽匹配；`:3990` 一族 `if let` 丢掉的地方改成显式 `match` 带错误分支。
-   这一刀**还没有任何新 kind**，所以它对现网是纯加固；它的判据要能证"改前静默成功、改后具名失败"。
-2. **第二刀**：升 `PROTOCOL`（`crates/notera-sync/src/manifest.rs:9` 的 `PROTOCOL: u16 = 1`，
-   对外即 `SYNC_PROTOCOL_VERSION`，`notera-sync/src/lib.rs:26`）与 `protocol.json` 的 `min_protocol`
-   （协商与根不匹配的门在 `crates/notera-host/src/lib.rs:2336-2437`），
-   使**旧版被门槛挡在外面**，而不是让它读到一个它会把类型读错的记录。
-   `min_protocol` 抬起来意味着旧版本连不上——这是有意的破坏性变更，正是"1.0.0 之前必须做完协议改动"的理由。
+> **订正（写完后逐行复核时推翻，2026-10-18 当日）**：本 D7 最初写的是"0.0.141 那版代码会把 tag 记录
+> **当成笔记写进 `notes`**，所以必须先堵再放"。那句**不成立**，而且它正是本仓库明令禁止的那种写法 ——
+> 从 `_ => UpsertNote` 这一行**反推**出一个没复现过的载荷形状，就把它当结论落笔了。
+> 复核时读到的是三道**具名拒绝**，它们在任何一处 `_ =>` 之前就把路挡了：
+> ① `crates/notera-webdav/src/path.rs:181-189` `kind_dir()` 只认 `n|f|a|note|folder|attachment(s)`，
+> 其它一律 `Err(PathError::BadKind)` —— **fetch 之前就拒**，陌生 kind 连记录都取不回来；
+> ② `crates/notera-store/src/apply.rs:53-58` `protocol > MAX_PROTOCOL(=1)` ⇒ `不写库`（原话），
+> 这条就是为"新版写、旧版读"准备的前向门槛；
+> ③ `crates/notera-store/src/apply.rs:64-69` 信封 `kind` 与目标表不符 ⇒ `StoreError::Rejected`。
+> 还有一层在下面：`Envelope.kind` 是**类型化** `EntityKind` 的 serde（`crates/notera-crypto/src/envelope.rs:64-65`），
+> 陌生 variant 连反序列化都过不去。⇒ **旧设备不会把标签写成假笔记。** `_ => UpsertNote` 那一行
+> 靠的是①③兜住，这是**运气不是设计**，所以加固那一刀仍然要做，但它的性质变了（见下）。
+
+**这一刀真正欠的东西**，不是数据损坏，是**同一份文件里两处口径不一致**：
+下行早已定死"本地 apply 的拒绝不许没有去处"（`crates/notera-sync/src/lib.rs:890-894` 那段注释 + ADR-0021 D3），
+上传边也早就具名拒了（`crates/notera-host/src/lib.rs:3900-3903`，原话"认不出的类型标记：绝不当成笔记上传"）；
+唯独 `SetRemote`/`MarkSynced`/`Tombstone`/`Purge` 这四处是 `if let (Some(k), Ok(i)) = …` **没有 else**
+（`crates/notera-host/src/lib.rs:3990 / 4000 / 4010 / 4019`）—— 陌生 kind 在这里被丢掉时
+**既不计入 `st.rejections`、也没有 `last_rejection` 原因**。⇒ 修它是把"靠运气的那条"改成"与同文件另两条同一口径"。
+
+**还有一格必须复现才许写结论**：旧客户端对未知 kind 的 `SetRemote` 静默丢，意味着它的
+`sync_remote_index` 那一行永远记不上，于是**每轮都可能重新计划同一条陌生条目**（潜在空转，不是损坏）。
+这一格现在只是**假说**，落地那一批要造出载荷实测（`crates/notera-host/tests/` 里加一台"停在旧协议"的设备），
+复现不出来就不许写进文档。
+
+次序因此改为（并且比原来更省）：
+
+1. **加固那一刀（先上，单独一版）**：上述四处 `if let` 改成显式 `match`，陌生 kind ⇒ 计入拒收 +
+   留下可读原因（消息键进 i18n）；`apply.rs:503-507,551-555` 那两处 `if kind == Note {…} else {folders}`
+   改成穷尽匹配（今天它靠调用方保证，改穷尽之后加第四个变体就不会静默落进 `folders`）。
+   判据要证"改前静默丢弃且零痕迹 → 改后具名拒收且进报告"，两版读数都留下。
+   **这一刀没有任何新 kind，对现网是纯加固。**
+2. **前向门槛 = 用已有的 `protocol` 字段**：tag 记录写 `protocol = 2`，本仓库 `MAX_PROTOCOL` 抬到 2，
+   `manifest.rs:9` 的 `PROTOCOL: u16 = 1` 与 `protocol.json` 的 `min_protocol`
+   （协商与根不匹配的门在 `crates/notera-host/src/lib.rs:2336-2437`）随之定档。
+   ⇒ 停在 0.0.141 的客户端遇到 tag 记录时**在②处具名失败**（"不写库"），而笔记/文件夹照旧同步 ——
+   这比"整台设备抬 `min_protocol` 挡在门外"精确得多，也是原方案（抬 `min_protocol`）被撤下的理由。
 3. **第三刀起**：迁移 `0010_tags.sql`、`EntityKind::Tag`、命令面、界面、文档。
 
 三张表被 `CHECK` 锁住了 kind 词汇表，SQLite 没有 `DROP CONSTRAINT` ⇒ 需要**重建表式迁移**：
