@@ -46,6 +46,23 @@ const ECOSYSTEM = 'crates.io';
  * 加一条就要在台账里同步一格，否则这里不该有它。
  */
 const WAIVERS = {
+  // 2026-10-18（第一百二十六批）三条 zbus 家族：RUSTSEC-2026-0370 / 0371 / 0372
+  // （`zvariant@5.15.0`、`zvariant_derive@5.15.0`、`zbus_names@4.3.4`）。
+  // 三条在 OSV 里都**只有 `introduced`、没有 `fixed` 事件** ⇒ 上游没有可升的版本，"升级"这条路不存在。
+  // 它们只挂在 Linux 那半张图上，证据是当场按 target 反查的 cargo tree：
+  //   `cargo tree -p notera-desktop --target x86_64-pc-windows-gnu -i zvariant` ⇒ `nothing to print`
+  //   `--target aarch64-linux-android` 同理 ⇒ `nothing to print`
+  //   `--target x86_64-unknown-linux-gnu` ⇒ `tauri-plugin-notification → notify-rust → zbus → zvariant`（在的）
+  // 本轮产出的三件产物是 Windows（nsis+msi）/ macOS（dmg+app）/ Android（apk），**都不含这条链**。
+  // 回看时机：真要出 Linux 产物之前（与 glib 同一格），或这三条通告上游出现 `fixed` 版本时。
+  'zvariant@5.15.0':
+    'RUSTSEC-2026-0370（Linux/D-Bus 那半张图：tauri-plugin-notification → notify-rust → zbus → zvariant）；' +
+    'OSV 里**没有 fixed 事件** ⇒ 无版本可升，且不进本轮任何产物。回看时机：出 Linux 产物之前，或上游给出修复版本。',
+  'zvariant_derive@5.15.0':
+    'RUSTSEC-2026-0372，与 zvariant@5.15.0 同一条链（proc-macro 那一半），同样**无 fixed 版本**、同样不进产物。' +
+    '回看时机同上。',
+  'zbus_names@4.3.4':
+    'RUSTSEC-2026-0371，Linux/D-Bus 那半张图的第三条，同样**无 fixed 版本**、不进本轮产物。回看时机同上。',
   'glib@0.18.5':
     'RUSTSEC-2024-0429（`glib::VariantStrIter` 的 `Iterator` impl 不安全）来自 **Linux/gtk 那半张依赖图**' +
     '（tauri → gtk → glib），修在 0.20.0，要上游抬版本才动得了；本轮不产出 Linux 产物，这半张图不进二进制。' +

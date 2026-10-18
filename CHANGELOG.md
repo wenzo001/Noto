@@ -49,6 +49,30 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 修掉的静默错误 + 依赖（2026-10-18 第一百二十六批：CI 审计那一步的真名单、#98 的前提是错的）
+- **先订正我自己两条不实的话**（上一条那一格按原文留着不涂改，以本条为准）：
+  ① **#98 从前写"zip 整条 2.x/3.x 都被作者 yank"—— 不实**。当场查 crates.io：`zip 2.4.2 yanked=false`，
+     9.0.0–9.0.5 也都 `yanked=false`。真因是三条**漏洞通告** `RUSTSEC-2026-0367/0368/0369`，
+     OSV 给的是 `introduced 0.0.0-0 → fixed 9.0.0` ⇒ **升到 9.0.5 是真修**（那半句结论没白做，但理由完全换了）。
+  ② 我上一条还写"CI 红的那一步就是 zip" —— **也不完整**。把上一次红 run 的日志原文捞出来才是真名单：
+     `FAIL · 6 条命中的漏洞（不在豁免表里）` 覆盖**四个包**：zip 三条 +
+     `zvariant@5.15.0 → 0370`、`zvariant_derive@5.15.0 → 0372`、`zbus_names@4.3.4 → 0371`。
+     也就是说**只升 zip 那一步照样会红** —— 这个是我在打 tag 之前抓到的，不是 CI 教我。
+- **三条 zbus 家族为什么只能豁免（两条理由都是当场拿的读数，不是推断）**：
+  ① OSV 里这三条**只有 `introduced`、没有 `fixed` 事件** ⇒ 上游没有可升的版本，"升级"这条路不存在；
+  ② 它们只在 Linux/D-Bus 那半张图上 —— `cargo tree -p notera-desktop --target x86_64-pc-windows-gnu -i zvariant`
+    与 `--target aarch64-linux-android` 都返回 **`nothing to print`**，只有 `--target x86_64-unknown-linux-gnu` 里才有那条链
+    （`tauri-plugin-notification → notify-rust → zbus → zvariant`）⇒ 本轮三件产物（Windows / macOS / Android）都不含它。
+- **改了什么**：豁免按本仓库的既有规矩**三处同一格**一起加 —— `scripts/audit-rust-deps.mjs` 的 `WAIVERS`（键 `zvariant@5.15.0` /
+  `zvariant_derive@5.15.0` / `zbus_names@4.3.4`，各写理由与回看时机）、`.cargo/audit.toml` 的 `advisories.ignore`（三条 ID）、
+  `deny.toml` 的 `[advisories] ignore`（三条 ID + reason），台账 `PRODUCTION-READINESS.md` §7 加第 4 格。
+  **`--deny warnings` 一个字节都没放宽**，也没有把判据改成"扫到就当没有"：这是把已判定、不在我们这一层的依赖登记，
+  与表里已有的 `glib@0.18.5` 同形（回看时机 = 真要出 Linux 产物之前）。
+- ⚠ **本机证明不了这一步**：审计脚本要连 `api.osv.dev`，而这台机器上 **node 的连接 10s 超时、curl 同一个端点 2.9s 返回 200**
+  —— 所以 `node scripts/audit-rust-deps.mjs` 在本地必然崩在 fetch 上，**"本地跑过了"这句话不许说**；
+  豁免到底让第 19 步落绿没有，只有远程那一次 run 算数（推完就去读步骤表，不写"应该绿了"）。
+- 版本：本批只动豁免名单与文档（不碰产品代码）⇒ **不升版本**，仍是上一条的 **0.0.141**。
+
 ### 修复与依赖（2026-10-18 第一百二十五批：#98 关掉 —— zip 2 → 9，产品依赖变更 0.0.141）
 - **为什么这次非修不可**：远程 CI 已经红在唯一一步上（run 39092577635 的步骤表：1–18 全 `success`，
   第 19 步「Rust 依赖漏洞审计 · 全量（阻断）」`failure`），而那一条就是挂了两周的 **zip**（`zip 2.4.2` 整条 2.x/3.x 被作者 yank）。

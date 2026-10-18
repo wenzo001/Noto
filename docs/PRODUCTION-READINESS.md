@@ -291,6 +291,14 @@ vite 还是 5173 上的旧实例、`e2e-data` 的 sqlite 被残留进程握着�
      回看时机 = 真要出 Linux 产物之前。
   3. `proc-macro-error@1.0.4` → `RUSTSEC-2024-0370`（unmaintained，**无修复版本**）：**豁免**。
      它是构建期宏，不进产物；回看时机 = 上游给出修复版本或它的引用方升走它。
+  4. `zvariant@5.15.0` → `RUSTSEC-2026-0370`、`zvariant_derive@5.15.0` → `RUSTSEC-2026-0372`、
+     `zbus_names@4.3.4` → `RUSTSEC-2026-0371`：**豁免**（2026-10-18 第一百二十六批）。两条理由分开写清：
+     ① 这三条在 OSV 里**只有 `introduced`、没有 `fixed` 事件** ⇒ 没有"升上去就干净"这条路（与 glib 不同，glib 是修在 0.20.0 但要上游抬）；
+     ② 它们只在 **Linux/D-Bus 那半张图**（`tauri-plugin-notification → notify-rust → zbus → zvariant`），
+     当场按 target 反查过：`cargo tree -p notera-desktop --target x86_64-pc-windows-gnu -i zvariant` 与
+     `--target aarch64-linux-android` 都是 **`nothing to print`**，只有 `--target x86_64-unknown-linux-gnu` 里在 ⇒
+     本轮三件产物（Windows nsis+msi / macOS dmg+app / Android apk）都不含这条链。
+     回看时机 = 真要出 Linux 产物之前，或这三条出现 `fixed` 版本时。三处名单同一格（脚本 `WAIVERS`、`.cargo/audit.toml`、`deny.toml`）。
   **2026-10-10 增补**：上面还在用的两条豁免（glib、proc-macro-error）现在同时被两个原生工具消费 ——
   `cargo-audit audit --deny warnings`（`.cargo/audit.toml` 的 `ignore`）与 `cargo-deny check`（`deny.toml` 的
   `advisories.ignore`），三处（含本文件）写的是同一格豁免（G109 关闭，见 CHANGELOG 2026-10-10 第四批）。

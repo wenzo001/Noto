@@ -11,4 +11,10 @@ ignore = [
     # glib 0.18.5：unsound（VariantStrIter 的 Iterator impl），来自 Linux/gtk 那半张图，修在 0.20.0，
     # 要上游抬版本才动得了；本轮不产出 Linux 产物。
     "RUSTSEC-2024-0429",
+    # 2026-10-18：zbus 家族三条（zvariant / zvariant_derive / zbus_names）。OSV 里只有 introduced、
+    # 没有 fixed ⇒ 上游无修复版本可升；且按 target 反查 cargo tree，Windows 与 Android 的产物图里
+    # `nothing to print`（只在 x86_64-unknown-linux-gnu 里存在）。与 WAIVERS、deny.toml 同一格。
+    "RUSTSEC-2026-0370",
+    "RUSTSEC-2026-0371",
+    "RUSTSEC-2026-0372",
 ]

@@ -34,6 +34,10 @@ multiple-versions = "warn"
 
 [advisories]
 ignore = [
+  # 2026-10-18 第一百二十六批：zbus 家族三条，与 scripts/audit-rust-deps.mjs 的 WAIVERS、.cargo/audit.toml 同一格。
+  { id = "RUSTSEC-2026-0370", reason = "zvariant@5.15.0：OSV 里只有 introduced、没有 fixed（上游无修复版本可升）；只在 Linux 那半张图（tauri-plugin-notification → notify-rust → zbus → zvariant），按 cargo tree --target x86_64-pc-windows-gnu / aarch64-linux-android 反查都是 nothing to print ⇒ 不进本轮任何产物。回看时机：出 Linux 产物之前，或上游出现 fixed。" },
+  { id = "RUSTSEC-2026-0371", reason = "zbus_names@4.3.4：同上，Linux/D-Bus 那半张图的第三条，无 fixed 版本、不进产物。" },
+  { id = "RUSTSEC-2026-0372", reason = "zvariant_derive@5.15.0：同上，那条链的 proc-macro 那一半，无 fixed 版本、不进产物。" },
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error 是 unmaintained 通告（没有'修于哪个版本'，也没有可利用的缺陷），由构建期宏（glib-macros，tauri 的 Linux 那半张图）带进来、不进产物。与 scripts/audit-rust-deps.mjs 的 WAIVERS['proc-macro-error@1.0.4'] 同一格；回看时机同它：等那条父依赖链不再要它。" },
 ]
 
