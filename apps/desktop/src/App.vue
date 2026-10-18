@@ -132,7 +132,10 @@ function onGlobalKeydown(event: KeyboardEvent): void {
       newNote();
       return;
     }
-    if (key === 'k' || (key === 'f' && !event.shiftKey)) {
+    // 表里那一行（`SHORTCUTS` 的 `search`）只写 `Ctrl+K` —— 从前这里还偷偷认一发裸 `Ctrl+F` 走同一个动作，
+    // 于是屏幕上、键位表里、原生菜单上都只说 K，真按 F 却有反应：用户学到的是第三套（D21 拍定"应用内那张表是唯一权威"）。
+    // `Ctrl+Shift+F`（插入附件）是表里另一行，归它自己那一支管。
+    if (key === 'k') {
       event.preventDefault();
       focusSearch();
       return;
