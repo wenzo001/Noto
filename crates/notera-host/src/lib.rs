@@ -4011,7 +4011,9 @@ impl LocalPort for HostLocalPort {
                         }
                         KindSlot::Unknown => {
                             rejected += 1;
-                            reason = Some(format!("未知的实体类型标记: {kind}（{id}）—— 不当笔记写、也不静默丢掉"));
+                            reason = Some(format!(
+                                "未知的实体类型标记: {kind}（{id}）—— 不当笔记写、也不静默丢掉"
+                            ));
                             tracing::warn!(kind = %kind, id = %id, "认不出的类型标记：具名拒收");
                         }
                     }
@@ -4144,17 +4146,15 @@ impl LocalPort for HostLocalPort {
                         }
                     }
                 }
-                ApplyOp::Purge { kind, id } => {
-                    match slot_entity(&kind, &id) {
-                        Ok(Some((k, i))) => mapped.push(StoreApplyOp::Purge { kind: k, id: i }),
-                        Ok(None) => {}
-                        Err(m) => {
-                            rejected += 1;
-                            reason = Some(m);
-                            tracing::warn!(kind = %kind, id = %id, "对面那条永久删除落不进这张表：具名拒收");
-                        }
+                ApplyOp::Purge { kind, id } => match slot_entity(&kind, &id) {
+                    Ok(Some((k, i))) => mapped.push(StoreApplyOp::Purge { kind: k, id: i }),
+                    Ok(None) => {}
+                    Err(m) => {
+                        rejected += 1;
+                        reason = Some(m);
+                        tracing::warn!(kind = %kind, id = %id, "对面那条永久删除落不进这张表：具名拒收");
                     }
-                }
+                },
                 ApplyOp::StoreManifest { wire, etag, seq: _ } => {
                     self.0.set_manifest_cache(wire);
                     self.0.set_manifest_etag(etag);
@@ -5983,7 +5983,10 @@ mod tests {
             "①：原因里必须点名那一枚标记，实际 {reason}"
         );
         assert!(
-            app.list_folders().unwrap().iter().any(|f| f.id == folder.id),
+            app.list_folders()
+                .unwrap()
+                .iter()
+                .any(|f| f.id == folder.id),
             "①：拒收不许顺手把合法的那一行删掉"
         );
 
@@ -6010,7 +6013,9 @@ mod tests {
         );
 
         // ③ 合法那条腿照旧落库，且与一条被拒的同一批 ⇒ 不连坐
-        let note = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("对面的")).unwrap();
+        let note = app
+            .create_note(&EntityId::parse(&folder.id).unwrap(), doc("对面的"))
+            .unwrap();
         // 先把它变成**已确认**的一行（`rev == sync_rev`）：本机有未确认修改时，
         // 存储层本来就该拒绝对面的永久删除并交给冲突解决（I1/I3）—— 第一次跑这格就是那样红的，
         // 红得对，是我那夹具没把"已经同步过"这一前置做出来。前置要写成动作，不是写成注释。
@@ -6069,7 +6074,9 @@ mod tests {
         let app = boot("kind-skip");
         let p = app.local_port();
         let folder = app.list_folders().unwrap().remove(0);
-        let note = app.create_note(&EntityId::parse(&folder.id).unwrap(), doc("本机更新")).unwrap();
+        let note = app
+            .create_note(&EntityId::parse(&folder.id).unwrap(), doc("本机更新"))
+            .unwrap();
         let nid = EntityId::parse(&note.id).unwrap();
         app.store()
             .mark_synced(EntityKind::Note, &nid, Rev(1), "")

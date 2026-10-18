@@ -995,8 +995,7 @@ async fn an_unknown_kind_reaches_the_local_and_its_rejection_is_counted() {
 
     let got = l.applied.lock().unwrap().clone();
     assert!(
-        got
-            .iter()
+        got.iter()
             .any(|o| matches!(o, ApplyOp::Purge { kind, .. } if kind == "g")),
         "①：陌生 kind 的永久删除必须真的到达落库这一边，实际 {got:?}"
     );

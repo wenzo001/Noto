@@ -1018,11 +1018,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                     wire,
                                 }]) {
                                     Ok(rep) => {
-                                    if rep.applied == 1 {
-                                        st.pulled += 1;
+                                        if rep.applied == 1 {
+                                            st.pulled += 1;
+                                        }
+                                        fold_rejections(&mut st, &rep);
                                     }
-                                    fold_rejections(&mut st, &rep);
-                                }
                                     Err(e) => {
                                         st.rejections += 1;
                                         st.last_rejection = Some(e.to_string());
