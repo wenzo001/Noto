@@ -49,6 +49,48 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 标签（2026-10-18 第一百三十九批：**试装了一次，五条设计错被抓出来并改口**；只动 ADR 与台账 ⇒ 不升版本）
+- **做了什么**：按 ADR-0022 的施工图真装 #1 标签 —— 落到 `notera-core`（`EntityKind::Tag` + `ALL` +
+  `canonical.rs`）与 `migrations/0010_tags.sql` + 执行器注册 + 测试 helper，**停在这里**。
+- **为什么停（这一条是本批的结论，不是借口）**：0010 一放进去就建 `tags`/`note_tags` 两张表，
+  而 `negativePromises.spec.ts` 那五面禁令禁的**正是这些表名/列名/DTO 名** ⇒ 台面立刻红；
+  反过来先翻门再放迁移，则是"把禁令删了却没兑现正面承诺"。两种都不可交 ⇒ 这一批只能是一批。
+  代码现场存 `.logs/tags-batch-20261018-pending.patch`，**写清楚它是半成品**：
+  `git apply` 之后编不过（Tag 的下游 ~15 处穷尽匹配还没接），它是"当时那棵树"的快照，不是待落地补丁；
+  `git apply --check` 只证明这快照还能贴回去。**这一格正是第一百三十七批那条保护规则的第一个真实用户**
+  （`*.patch` 从此不算残骸 —— 上一批我就是这样赔掉过唯一那份可逆证明，这次没有）。
+- **量到的五条设计错，逐条改进 ADR**（全文 `docs/ADR/0022-tags-as-syncable-entity.md` §落地前置订正）：
+  ① **D3 那句 `NFC` 做不到它自己点名的"全角/半角归一"** —— 全角→半角、`ﬁ`→`fi`、`²`→`2` 是**兼容性**映射，
+  只有 NFKC 折。实测：`ＦＵＬＬ→"full"`、`ﬁle→"file"`、`²→"2"`、`Ⅳ→"iv"`。
+  并且小写本身会去归一化（`İ→"i"+U+0307`）⇒ **NFKC 要做两遍**，为的是 `canonical(canonical(x))==canonical(x)`
+  这个 `UNIQUE` 唯一能依赖的不动点性质。仍然不是 casefold（`"Straße" ≠ "STRASSE"`，实测），
+  注释里不许说成 casefold —— 那条不等的测试本身留在 patch 里当证人。
+  ② **`sync_remote_index` 在 0007 被加过一列 `deleted_at`**，而 0010 要重建这张表 ⇒ 手写 CREATE 漏它就是丢数据。
+  **更要紧的是"这条错抓不到"**：全新库与 v9 升级库会**同样地缺那一列**，ADR 原计划的"终态逐字节对撞"照样绿。
+  ⇒ 证人换成"同一张表迁移前后列集合相等 + 行内容逐字节相等 + 点名那一列还在"。
+  ③ outbox 是 `AUTOINCREMENT` ⇒ DROP+RENAME 之后必须证明**序列接得上**（新插入 id > 旧最大值），
+  否则第一条新 outbox 就撞 `UNIQUE` 或盖掉刚迁过来的旧行。
+  ④ **`v_dirty_entities` 有零个 Rust 消费者**（`grep -rn v_dirty_entities crates/ --include=*.rs` = 0），
+  `0005_views.sql` 那句"诊断/verify 用"是主张不是事实 ⇒ 与新登记的 `FakeClock` 同一族，处置单独一批。
+  ⑤ 测试里那个"造真正的 v_k 库"的 helper **手抄了 5 个迁移文件名** ⇒ 所谓"从 v9 老库升上来"这一格
+  **从来没存在过**（加了 0010 也照样只跑到 5）。改成从盘上扫目录，并补一条
+  `every_migration_file_on_disk_is_registered`（盘上文件数 ≠ 注册的版本号就红）。
+- **两条实现层，记下来省得下批再撞**（都本机红过一次才知道）：
+  `icu_normalizer` 要 `default-features=false + ["compiled_data"]` —— 默认特性多拉 `utf8_iter`/`utf16_iter`
+  两个 optional 依赖（`cargo build --offline` 直接红："no matching package named `utf16_iter` found"），
+  而 `idna_adapter` 锁进来的就是这一档 ⇒ `Cargo.lock` 实测 **只 +1 行、零新包**；
+  类型名不是 `Normalizer`（这个 crate 里没这个名字），是 `ComposingNormalizerBorrowed::new_nfkc()`，
+  方法是 `normalize(&str) -> Cow<str>`，**不返回 Result**（我一开始按 `normalize_to_string` 写，两处都错）。
+  还有一条：执行器把每条迁移包在**一个事务**里 ⇒ `PRAGMA foreign_keys` 在事务里是空操作，
+  0010 用 `PRAGMA defer_foreign_keys`（事务结束自动复位）；这三张表都不是任何表的 `REFERENCES` 目标（grep 过），
+  所以 `ALTER TABLE RENAME` 不会顺带改写别人的 FK 定义 —— 这一条是查出来的，不是假设的。
+- **读数归因**（照 [[attribute-each-reading-to-the-tree-it-ran-on]]）：本批所有"实测"都跑在**那棵被 park 的树**上
+  （core 的 canonical 10 条测试全过、`Cargo.lock` +1 行、`--offline` 建得过），**不是** `8af5f76` 这棵树。
+  回到主干后本机复跑：`arch-check 48/48`、`git status` 空 ⇒ 主干与第一百三十八批收盘时同一状态。
+- **没做的**：#1 标签整体仍在 #1（施工图已把上面五条并进去，并新增了"两个静默错路由"的点名：
+  `syncml.rs:506` 的 `else "folders"` 与 `host/lib.rs:1701` 的 `else UpsertNote` —— 编得过、不红、数据进错表）。
+
+
 ### 体积（2026-10-18 第一百三十八批：**#3 收口** —— v0.0.145 的真产物读数回来了，Android 那一格从"我们比它大"翻成"我们比它小 2.1~3.3×"，上限门禁就此能立；只动工装与文档 ⇒ 不升版本）
 - **上一批留的那句"故意留到下一批"是这一批**：`release.yml` 的 Android 档位换成 release 之后，
   CI 的产物今天回来了（`gh release view v0.0.145 --json assets`，draft）：

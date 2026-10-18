@@ -55,6 +55,12 @@
 
 ### D3 相等关系只有一个，且在 Rust 写入时算
 `canonical = casefold(NFC(trim(title)))`，存成生成列并 `UNIQUE`（未删行范围内）。
+> **⚠ 这一句已于同日订正**（见下面"落地前置订正"第 1 条）：正确的算式是
+> **`NFKC( trim → 全 Unicode 小写 → NFKC )`** —— NFC 折不了它自己点名的"全角/半角归一"，
+> 而"小写会去归一化"要求第二遍；同时它也**不是 casefold**（`ß` 不折成 `ss`，实测）。
+> 另一处口径：`canonical` **不是 SQLite 生成列**（SQL 里做不了 NFKC），它是核心写入的一列
+> + `CREATE UNIQUE INDEX tags_canonical_live ON tags(canonical) WHERE deleted_at IS NULL`。
+> 列名也跟着仓库走：软删除列叫 `deleted_at`（本 ADR 草稿原本写 `deleted_time`，那是 Joplin 的名字）。
 中文不需要大小写折叠，但**需要 NFC 与全角/半角归一**——Joplin 恰恰是这里漏的：它把 ASCII-only 的
 `COLLATE NOCASE`、JS 的 `.toLowerCase()`、`Intl.Collator{sensitivity:'accent'}`、
 以及 `setTags.ts:66-67` 的裸 `includes()` 混在一条链上，于是**同一颗标签在四个地方算不等**。
@@ -180,6 +186,60 @@ an_unknown_purged_kind_is_replanned_every_round_but_costs_no_requests`，读数�
 那一半要用 `crates/notera-webdav/tests/engine_over_webdav.rs`（真 `WebDavRemote` 打在测试服务器上）去量，
 **不许拿假 remote 的读数冒充真适配器的行为** —— 登记成待办，标签落地那一批补。
 
+## 落地前置订正（2026-10-18 第一百三十九批：**动手试装了一次**，五条都是量出来的，不是推的）
+
+本批把 D1/D3/D7 的施工图真正落到 `core` + `migrations/0010` 时撞到五格，全部**在本 ADR 里改口**，
+代码现场存成 `.logs/tags-batch-20261018-pending.patch`（半成品：`EntityKind::Tag` 尚未接通下游 ~15 处
+穷尽匹配，`git apply` 之后**编不过** —— 它是现场快照，不是待落地补丁；`git apply --check` 只证明它还能贴回当时那棵树）。
+
+1. **D3 那句 `casefold(NFC(trim))` 里的 NFC 做不到它自己点名的"全角/半角归一"。必须是 NFKC。**
+   全角→半角、连字 `ﬁ`→`fi`、上标 `²`→`2` 都是**兼容性映射**，NFC 一概不折。
+   实测读数（`icu_normalizer` 2.3 的 `ComposingNormalizerBorrowed::new_nfkc().normalize()`）：
+   `ＦＵＬＬ → "full"`、`ﬁle → "file"`、`² → "2"`、`Ⅳ → "iv"`、`Ⅷ → "viii"`、`İstanbul → "i̇stanbul"`。
+   ⇒ 用 NFC 的话「ＦＵＬＬ」与「FULL」是两颗标签 —— 这正是本 ADR 背景那一节要消灭的"同一颗标签算不等"。
+   **改成 `NFKC( trim → 全 Unicode 小写 )`，且两头都做一遍 NFKC**：小写本身会去归一化
+   （`İ` 小写 = `i` + U+0307），只做一遍会让"预组合进来"与"分解进来"算出两个值，
+   而 `UNIQUE(canonical)` 需要的是**不动点**（`canonical(canonical(x)) == canonical(x)`，这条要有测试）。
+   仍然**不是 casefold**：`ß` 不折成 `ss`（实测 `"Straße" ≠ "STRASSE"`），这一格是有意的取舍
+   （`icu_casemap` 不在锁里），**不许在代码注释里把它说成 casefold**。
+
+2. **`sync_remote_index` 在 0007 被 `ALTER TABLE ADD COLUMN deleted_at` 加过一列**，
+   而 0010 要重建这张表 ⇒ 手写 `CREATE` 时漏掉它就是**丢数据**。
+   ⚠ 更要紧的是**这条错抓不到**：全新库与 v9 升级库都会同样地缺那一列，
+   所以 D7 原计划的"终态逐字节对撞"测试**照样绿**。
+   ⇒ 证人必须换成**同一张表在迁移前后的列集合相等**（外加"行内容相等"与"0007 那一列点名还在"），
+   不是两条路径之间比。这条改到 D7"验证方式"第 5 条。
+
+3. **outbox 是 `INTEGER PRIMARY KEY AUTOINCREMENT`** ⇒ `DROP` 老表 + `RENAME` 新表要证明序列接得上：
+   带显式 id 拷贝会把 `sqlite_sequence` 顶到 `MAX(id)`，改名再把那一行跟着走。
+   证人：升级后再插一条 outbox，`last_insert_rowid()` 必须**大于**旧最大值
+   （从 1 重新开始 = 第一条新行撞 `UNIQUE` 或盖掉刚迁过来的旧行）。
+
+4. **`v_dirty_entities` 这个视图今天有零个 Rust 消费者**（`grep -rn v_dirty_entities crates/ --include=*.rs` 命中 **0**），
+   而 `0005_views.sql` 那句"诊断/verify 用"是主张不是事实。它仍然必须跟着加 `tag` 那一支
+   （否则"标签永不进脏集"这种形状会以最难发现的方式出现），但**顺带登记这条死抽象**
+   （与 `FakeClock` 同一族）：处置要单独一批，要么给它一个消费者，要么删。
+
+5. **`migrations_and_pragmas.rs` 里那个"造一个真正的 v_k 库"的 helper 手抄了 5 个迁移文件**
+   （`[(u32,&str); 5]`）⇒ 所谓"从 v9 老库升上来"这一格**从来没存在过**，测试绿着空转。
+   改成**从盘上扫 `migrations/` 目录**（版本号取文件名前缀），并补一条
+   `every_migration_file_on_disk_is_registered`：盘上文件数 ≠ 注册的版本号就红
+   （这一格挡的是"新增一个 .sql 忘了进 `MIGRATIONS` ⇒ 它躺在目录里没人跑，而 `Store::open` 照样绿"）。
+
+另外两条实现层的，记在这里省得下批再撞：
+`icu_normalizer` 要 **`default-features = false, features = ["compiled_data"]`** —— 默认特性多拉
+`utf8_iter`/`utf16_iter` 两个 optional 依赖（本机实测 `cargo build --offline` 红："no matching package named
+`utf16_iter` found"），而 `idna_adapter` 锁进来的正是 `compiled_data` 那一档；类型名不是 `Normalizer`
+（这crate 里根本没这个名字），是 `ComposingNormalizerBorrowed`，方法是 `normalize(&str) -> Cow<str>` 而不是
+返回 `Result` 的 `normalize_to_string`。`Cargo.lock` 实测只 +1 行（一条新边），零新包。
+`Store::open` 的迁移执行器把每条迁移包在**一个事务**里 ⇒ `PRAGMA foreign_keys` 在事务里是空操作，
+0010 用 `PRAGMA defer_foreign_keys = ON`（事务结束自动复位）；这三张表都不是任何表的 `REFERENCES` 目标
+（仓内 grep 过），所以不存在 `ALTER TABLE RENAME` 顺带改写别人 FK 定义的问题。
+
+**顺序没变**：这一批仍然是 D7 的"第三刀"（迁移 + kind + 命令面 + 界面 + 文档**必须一批内落完**），
+因为 `negativePromises.spec.ts` 那五面禁令禁的就是 `tags` 表名/列名/DTO 名 ——
+只把迁移放进去会让那条门红，只翻门不放迁移则是把禁令删了却没兑现正面承诺。两种都不可交。
+
 ## 拒绝的方案
 
 | 方案 | 拒绝理由 |
@@ -215,6 +275,14 @@ an_unknown_purged_kind_is_replanned_every_round_but_costs_no_requests`，读数�
    也不许把那颗链接变成第二颗标签。
 5. **迁移终态等价**：全新库 v10 与 v9 老库升 v10 的表/索引/CHECK 集合逐字节对撞；
    `tombstones.entity_type` 的新 CHECK 要能**拒**一个陌生的 kind（正向 + 反向两条）。
+   > **订正（第一百三十九批，试装时量到的，见"落地前置订正"第 2 条）**：光这一条**不够** ——
+   > 它会和"两条路径都同样丢列"一起绿。必须再加三证人，缺一不可：
+   > ① 同一张表**迁移前后的列集合相等**（点名 `sync_remote_index.deleted_at` 还在，那是 0007 加的）；
+   > ② 迁移前后**行内容逐字节相等**（按 `ORDER BY 1,2` dump 比）；
+   > ③ outbox 的 **AUTOINCREMENT 序列接得上**（升级后插入的新 id 必须 > 旧最大值）；
+   > ④ 外加一条 `every_migration_file_on_disk_is_registered`：`migrations/` 目录里的文件数
+   >    与注册进 `MIGRATIONS` 的版本号不一致就红（挡"新 .sql 躺在目录里没人跑"）。
+   >    配套地，测试里那个"造 v_k 库"的 helper **不许再手抄文件名单**，要从盘上扫。
 6. **相等关系只有一处**：静态判据扫界面，不许出现 `.toLowerCase()`/`normalize('NFC')` 参与标签比较
    （这条扫的是"第二个执行者"，与本项目"两份账对同一件事要互相对撞"同源）。
 7. **负面承诺翻正面的五面刀**：`negativePromises.spec.ts:802-842` 现在禁的是表名/列名/DTO 字段/控件名/文案，
