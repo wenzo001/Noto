@@ -12,10 +12,13 @@
  *
  * 跑法：`pnpm --dir apps/desktop exec vitest run src/disabledOpacityLedger.spec.ts`
  */
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+// 运行期 vitest 的 SSR transform 真注入 __dirname（本机 710 条全绿为证）；CI 的 vue-tsc 用浏览器 tsconfig 不认它
+// ⇒ 这里只做环境声明，取路径的代码一字不改（run 39085500758 的三条 TS2304 就是这个）。
+declare const __dirname: string;
 const SRC = join(__dirname);
 /**
  * 已经登记待拍的豁免：文件 + 它现在那个值。拍板之后要么删这一条，要么整族消失。
@@ -35,9 +38,10 @@ type Rule = { file: string; selector: string; value: string };
 function disabledOpacityRules(): Rule[] {
   const out: Rule[] = [];
   const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const name = ent.name;
       const full = join(dir, name);
-      if (statSync(full).isDirectory()) {
+      if (ent.isDirectory()) {
         if (name !== 'node_modules') walk(full);
         continue;
       }
@@ -50,7 +54,7 @@ function disabledOpacityRules(): Rule[] {
         if (!/disabled/.test(selector)) continue;
         const m = /opacity:\s*([0-9.]+)/.exec(block.slice(block.indexOf('{')));
         if (!m) continue;
-        out.push({ file: relative(SRC, full).replace(/\\/g, '/'), selector, value: m[1] });
+        out.push({ file: full.slice(SRC.length + 1).replace(/\\/g, '/'), selector, value: m[1] });
       }
     }
   };
