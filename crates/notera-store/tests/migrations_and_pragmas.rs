@@ -55,6 +55,7 @@ fn empty_db_migrates_to_latest_and_tables_exist() {
         "note_revisions",
         "attachments",
         "note_attachments",
+        "tags",
         "tombstones",
         "sync_accounts",
         "sync_state",
@@ -291,20 +292,40 @@ fn pragmas_match_data_model_section_12() {
 }
 
 /// 造一个"真正的 v_k 库"：只按顺序应用前 k 个迁移文件（ADR-0012 的 M2 场景）。
+///
+/// **文件名单从盘上扫，不手写**（旧版是 `[(u32,&str); 5]` 那份手抄表）：手抄那份的失效方式是
+/// "加了 0010 之后这里还是只到 5"，于是"从 v9 升上来"这一格根本不存在，测试绿着空转。
+/// 扫盘 ⇒ 迁移目录多一个文件，这个 helper 自动认得；版本号取自文件名前缀（`0007_xxx.sql` → 7）。
+fn migrations_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../migrations")
+        .canonicalize()
+        .expect("migrations 目录读不到")
+}
+
+/// 盘上迁移文件按版本号排好序的 `(ver, sql)` 表。
+fn migration_files() -> Vec<(u32, String)> {
+    let mut out: Vec<(u32, String)> = std::fs::read_dir(migrations_dir())
+        .unwrap()
+        .filter_map(|e| {
+            let name = e.unwrap().file_name().to_string_lossy().to_string();
+            let stem = name.strip_suffix(".sql")?;
+            let ver: u32 = stem.split('_').next()?.parse().ok()?;
+            let sql = std::fs::read_to_string(migrations_dir().join(&name)).unwrap();
+            Some((ver, sql))
+        })
+        .collect();
+    out.sort_by_key(|(v, _)| *v);
+    out
+}
+
 fn build_partial_db(file: &std::path::Path, through: u32) {
-    let files: [(u32, &str); 5] = [
-        (1, include_str!("../../../migrations/0001_init.sql")),
-        (2, include_str!("../../../migrations/0002_sync.sql")),
-        (3, include_str!("../../../migrations/0003_search.sql")),
-        (4, include_str!("../../../migrations/0004_indexes.sql")),
-        (5, include_str!("../../../migrations/0005_views.sql")),
-    ];
     let conn = rusqlite::Connection::open(file).unwrap();
-    for (ver, sql) in files {
+    for (ver, sql) in migration_files() {
         if ver > through {
             break;
         }
-        conn.execute_batch(sql).unwrap();
+        conn.execute_batch(&sql).unwrap();
     }
     conn.pragma_update(None, "user_version", through as i64)
         .unwrap();
@@ -392,4 +413,421 @@ fn downgrade(file: &std::path::Path, to: u32) {
     let conn = rusqlite::Connection::open(file).unwrap();
     conn.pragma_update(None, "user_version", to as i64).unwrap();
     drop(conn);
+}
+
+// ------------------------------------------------- 0010（标签）重建三张表的证人 -------
+
+/// `PRAGMA table_info` 的列名，按 `cid`（= 物理顺序）。
+/// 顺序也要看：0010 里那句 `INSERT INTO …_new SELECT * FROM …` 是**按位置**对齐的，
+/// 列名都对但顺序不同不会报错，只会把值挪家（`seg` 那一格长出时间戳这种）。
+fn columns_of(file: &std::path::Path, table: &str) -> Vec<String> {
+    let conn = rusqlite::Connection::open(file).unwrap();
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    let mut out = stmt
+        .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
+        .unwrap()
+        .by_ref()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(stmt);
+    out.sort_by_key(|(cid, _)| *cid);
+    out.into_iter().map(|(_, n)| n).collect()
+}
+
+/// 按**列名**取一格并 CAST 成文本 —— 整数与文本因此能逐字对撞，且期望值与列名配成对
+/// （按位置比的话，一次挪家正好被"下一次挪家"抵消，两张表互换读起来是绿的）。
+fn cell(file: &std::path::Path, table: &str, key_where: &str, col: &str) -> Option<String> {
+    let conn = rusqlite::Connection::open(file).unwrap();
+    conn.query_row(
+        &format!("SELECT CAST({col} AS TEXT) FROM {table} WHERE {key_where}"),
+        [],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .ok()
+    .flatten()
+}
+
+/// 在"还没有标签"的那一版上，往 0010 要重建的三张表各写一行，每格都给一个**可辨认**的值。
+fn seed_pre_tag_sync_rows(file: &std::path::Path) {
+    let conn = rusqlite::Connection::open(file).unwrap();
+    conn.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+    conn
+        .execute(
+            "INSERT INTO sync_accounts (id,label,base_url,root_prefix,auth_kind,tls_policy,device_id,
+                                        protocol_min,protocol_max,enabled,created_at)
+             VALUES ('acct-1','测试本','https://dav.example/','/.notes','basic','strict','dev-old',1,1,1,
+                     '2026-09-20T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    conn
+        .execute(
+            "INSERT INTO tombstones (entity_type,entity_id,rev,deleted_at,purged,content_hash,
+                                     device_id,title_snap,created_at)
+             VALUES ('note','tomb-1',3,'2026-09-21T00:00:00.000Z',1,'sha256:tomb','dev-old','墓碑快照',
+                     '2026-09-21T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    conn
+        .execute(
+            "INSERT INTO sync_remote_index (account_id,kind,entity_id,rev,hash12,size,deleted,purged,
+                                            seg,updated_at,deleted_at)
+             VALUES ('acct-1','note','ri-1',7,'hash12值',1234,1,0,'seg-07','2026-09-30T00:00:00.000Z',
+                     '2026-10-01T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    // 显式 id=42：下面要量 AUTOINCREMENT 序列接没接上。
+    conn
+        .execute(
+            "INSERT INTO sync_operations (id,account_id,dedupe_key,entity_type,entity_id,op,payload_rev,
+                                          sha256,state,attempts,next_retry_at,last_error,created_at,updated_at)
+             VALUES (42,'acct-1','dk-42','folder','op-1','upsert',9,'sha-9','pending',2,
+                     '2026-10-02T00:00:00.000Z',NULL,'2026-09-29T00:00:00.000Z','2026-09-29T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    drop(conn);
+}
+
+/// 0010 把 `tombstones` / `sync_remote_index` / `sync_operations` 重建了一遍（SQLite 没有
+/// `DROP CONSTRAINT`，抬 CHECK 词汇表只能建新表搬数据）。这一条是那张 CHECK 名单上写明的证人。
+///
+/// 它要挡的三种死法各有一段：
+///  · **丢列** —— 手写 CREATE 漏掉 0007 给 `sync_remote_index` 追加的 `deleted_at`。
+///    证人**不能**是"全新库与升级库一致"：两条路径由同一份手写 CREATE 决定，会一样地缺、
+///    于是终态等价测试绿着放过（这一格是 ADR-0022 落地前置订正第 ② 条实测到的）。
+///    ⇒ 这里比的是**同一张表迁移前后的列集合**，不许变小、也不许换序。
+///  · **值挪家** —— 列名齐了但顺序不同，`INSERT … SELECT *` 按位置把 `seg` 写成时间戳。
+///  · **AUTOINCREMENT 序列断了** —— `DROP` 旧表带走 `sqlite_sequence` 那一行，新表从 1 重新数，
+///    第一条新 outbox 就撞上刚迁过来的旧行。
+#[test]
+fn tag_rebuild_preserves_every_column_and_row() {
+    let fx = Fix::new();
+    let db = fx.db_file();
+    let prev = SUPPORTED_SCHEMA_VERSION - 1;
+    build_partial_db(&db, prev);
+    seed_pre_tag_sync_rows(&db);
+
+    let tables = ["tombstones", "sync_remote_index", "sync_operations"];
+    let before: Vec<(&str, Vec<String>)> =
+        tables.iter().map(|t| (*t, columns_of(&db, t))).collect();
+
+    let store = fx.reopen();
+    assert_eq!(store.migration_report().from, prev);
+    assert_eq!(user_version(&db), SUPPORTED_SCHEMA_VERSION);
+
+    // ① 列：不许少，也不许换序
+    for (table, cols_before) in &before {
+        let cols_after = columns_of(&db, table);
+        for col in cols_before {
+            assert!(
+                cols_after.contains(col),
+                "重建 {table} 时丢了列 {col}：前={cols_before:?} 后={cols_after:?}"
+            );
+        }
+        assert_eq!(
+            cols_after, *cols_before,
+            "{table} 的列顺序变了 —— 0010 那句 `SELECT *` 按位置拷贝，会静默把值挪家"
+        );
+    }
+
+    // ② 行：每一格的值按列名对撞
+    type ColWant = (&'static str, &'static str);
+    type RowWant = (&'static str, &'static str, Vec<ColWant>);
+    let want: Vec<RowWant> = vec![
+        (
+            "tombstones",
+            "entity_id='tomb-1'",
+            vec![
+                ("entity_type", "note"),
+                ("entity_id", "tomb-1"),
+                ("rev", "3"),
+                ("deleted_at", "2026-09-21T00:00:00.000Z"),
+                ("purged", "1"),
+                ("content_hash", "sha256:tomb"),
+                ("device_id", "dev-old"),
+                ("title_snap", "墓碑快照"),
+                ("created_at", "2026-09-21T00:00:00.000Z"),
+            ],
+        ),
+        (
+            "sync_remote_index",
+            "entity_id='ri-1'",
+            vec![
+                ("account_id", "acct-1"),
+                ("kind", "note"),
+                ("entity_id", "ri-1"),
+                ("rev", "7"),
+                ("hash12", "hash12值"),
+                ("size", "1234"),
+                ("deleted", "1"),
+                ("purged", "0"),
+                ("seg", "seg-07"),
+                ("updated_at", "2026-09-30T00:00:00.000Z"),
+                // 0007 追加的那一列 —— 丢列那格的靶子
+                ("deleted_at", "2026-10-01T00:00:00.000Z"),
+            ],
+        ),
+        (
+            "sync_operations",
+            "id=42",
+            vec![
+                ("id", "42"),
+                ("account_id", "acct-1"),
+                ("dedupe_key", "dk-42"),
+                ("entity_type", "folder"),
+                ("entity_id", "op-1"),
+                ("op", "upsert"),
+                ("payload_rev", "9"),
+                ("sha256", "sha-9"),
+                ("state", "pending"),
+                ("attempts", "2"),
+                ("next_retry_at", "2026-10-02T00:00:00.000Z"),
+                ("created_at", "2026-09-29T00:00:00.000Z"),
+                ("updated_at", "2026-09-29T00:00:00.000Z"),
+            ],
+        ),
+    ];
+    for (table, key_where, cols) in &want {
+        for (col, expect) in cols {
+            assert_eq!(
+                cell(&db, table, key_where, col).as_deref(),
+                Some(*expect),
+                "{table} 重建后 {col} 变了或没了（行也没了？key: {key_where}）"
+            );
+        }
+    }
+
+    // ③ AUTOINCREMENT 序列接得上：升级后新排的 outbox 必须**大于**搬过来的最大 id。
+    //    两格都要：`sqlite_sequence` 那一行是**序列本身**的证人（它丢了 ⇒ 删过的 id 会被复用），
+    //    只量"新行 id 更大"挡不住它 —— 表退化成普通 `INTEGER PRIMARY KEY` 时照样给 43，读数一样。
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    let seq: Option<i64> = conn
+        .query_row(
+            "SELECT seq FROM sqlite_sequence WHERE name='sync_operations'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    // 读数取**下界**而不是 42：`fx.reopen()` 自己的引导会再排几条 outbox（43、44…），
+    // 那些是本程序正常的写，不是迁移的错。要证的只是"序列没退回 42 以下"。
+    assert!(
+        seq.unwrap_or(0) >= 42,
+        "重建把 AUTOINCREMENT 序列弄丢了：sqlite_sequence 里是 {seq:?}（应 ≥ 42）⇒ 旧 id 会被复用"
+    );
+    conn.execute(
+        "INSERT INTO sync_operations (account_id,dedupe_key,entity_type,entity_id,op,state,
+                                          created_at,updated_at)
+             VALUES ('acct-1','dk-new','tag','tag-op','upsert','pending',
+                     '2026-10-05T00:00:00.000Z','2026-10-05T00:00:00.000Z')",
+        [],
+    )
+    .expect("抬过 CHECK 之后 'tag' 必须能进 outbox（这一发同时是词汇表的正证）");
+    let new_id: i64 = conn
+        .query_row(
+            "SELECT id FROM sync_operations WHERE dedupe_key='dk-new'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        new_id > 42,
+        "AUTOINCREMENT 序列没接上：新行 id={new_id} 不大于搬过来的 42 ⇒ 会撞旧行"
+    );
+
+    // ④ `notes.tag_ids` 的 DEFAULT 是 `'[]'`，且读侧把它当空集而不是 nil
+    let note = store
+        .create_note(&default_folder(&store), doc_text("升级后新建的笔记"))
+        .unwrap();
+    assert!(store
+        .get_note(&note.id)
+        .unwrap()
+        .unwrap()
+        .tag_ids
+        .is_empty());
+    assert!(columns_of(&db, "notes").iter().any(|c| c == "tag_ids"));
+
+    // ⑤ 脏集视图的第三支：标签进去了才会被计划上传。
+    //    少了这一支，症状是"标签在界面上建好了，远端永远看不见它"，而界面一切正常。
+    conn
+        .execute(
+            "INSERT INTO tags (id,title,canonical,rev,sync_rev,remote_rev,content_hash,created_at,updated_at)
+             VALUES ('tag-dirty','工作','工作',5,0,0,'sha256:tag',
+                     '2026-10-05T00:00:00.000Z','2026-10-05T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    let dirty: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM v_dirty_entities WHERE entity_type='tag' AND entity_id='tag-dirty'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        dirty, 1,
+        "v_dirty_entities 没有标签那一支：标签永远不会被计划上传"
+    );
+    drop(conn);
+}
+
+/// SQL 里的 kind 词汇表（三张表的 CHECK）与 Rust 的 `EntityKind` 是同一件事的两份账。
+/// 两条腿各挡一半：**文本差集**（盘上 CHECK 名单 ⇄ 类型派生名单，双向）挡"词汇表里拼错/多一个"；
+/// **运行时接受/拒绝**挡"0010 只抬了其中一张表"—— 扫描取的是所有文件的**并集**，
+/// 单张表漏抬在文本上看不出来（0001 那份旧名单还在贡献三个值），只有真插才量得到。
+#[test]
+fn kind_vocabulary_in_sql_matches_entity_kind() {
+    use notera_core::EntityKind;
+
+    // 期望侧**从类型派生**，不是手抄：加第五种实体时这个 match 编译不过，
+    // 于是"加 kind"这件事必须在这里做一次显式决定（ADR-0022 D7 的"不许静默降级"）。
+    let sql_name = |k: EntityKind| match k {
+        EntityKind::Note => "note",
+        EntityKind::Folder => "folder",
+        EntityKind::Attachment => "attachment",
+        EntityKind::Tag => "tag",
+    };
+    let want: std::collections::BTreeSet<String> = EntityKind::ALL
+        .iter()
+        .map(|k| sql_name(*k).to_string())
+        .collect();
+    assert!(
+        !EntityKind::ALL.is_empty() && want.len() == 4,
+        "类型这一侧扫到 {} 个 kind：仪器瞎了，不是词汇表没问题",
+        want.len()
+    );
+
+    // 实际侧：盘上每一份迁移里 `(entity_type IN (` / `(kind IN (` 的取值集合
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut hits = 0usize;
+    for (ver, sql) in migration_files() {
+        for needle in ["(entity_type IN (", "(kind IN ("] {
+            let mut from = 0usize;
+            while let Some(rel) = sql[from..].find(needle) {
+                let start = from + rel + needle.len();
+                let body = &sql[start..];
+                let end = body
+                    .find(')')
+                    .unwrap_or_else(|| panic!("{ver:04} 号迁移里 {needle} 的 IN 列表没有右括号"));
+                let items = body[..end]
+                    .split('\'')
+                    .skip(1)
+                    .step_by(2)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>();
+                assert!(!items.is_empty(), "{ver:04} 号迁移扫到一条空的 IN 名单");
+                hits += 1;
+                seen.extend(items);
+                from = start + end;
+            }
+        }
+    }
+    assert!(
+        hits >= 6,
+        "只扫到 {hits} 处 kind CHECK（预期三张表 × 至少一份）：扫描器对不上表名就白跑"
+    );
+    let missing: Vec<&str> = want
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|k| !seen.contains(*k))
+        .collect();
+    let extra: Vec<&String> = seen.iter().filter(|k| !want.contains(*k)).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "SQL 的 kind 词汇表与 EntityKind 不一致：SQL 里缺 {missing:?}，SQL 里多 {extra:?}"
+    );
+
+    // 第三条腿：CHECK 在运行时的读数。全新库（v10）上逐个接受、陌生值拒绝。
+    let fx = Fix::new();
+    let _store = fx.open();
+    let db = fx.db_file();
+    let conn = rusqlite::Connection::open(&db).unwrap();
+    // 外键**默认就是开的**（`rusqlite` 的 `bundled` 特征定义了 `SQLITE_DEFAULT_FOREIGN_KEYS=1`，
+    // 实测到这条才知道 —— 裸连接不设 PRAGMA 也会被 FK 拦）。所以先要有真账户，
+    // 否则这一腿量到的是 FK 而不是 CHECK，红会报在错误的格上。
+    conn.execute(
+        "INSERT INTO sync_accounts (id,label,base_url,root_prefix,auth_kind,tls_policy,device_id,
+                                    enabled,created_at)
+         VALUES ('acct-w','词汇表','https://dav.example/','/.notes','basic','strict','dev','1',
+                 '2026-10-05T00:00:00.000Z')",
+        [],
+    )
+    .unwrap();
+    for k in &want {
+        let checks = [
+            format!(
+                "INSERT INTO tombstones (entity_type,entity_id,rev,deleted_at,purged,device_id,created_at)
+                 VALUES ('{k}','w-{k}',1,'2026-10-05T00:00:00.000Z',0,'dev','2026-10-05T00:00:00.000Z')"
+            ),
+            format!(
+                "INSERT INTO sync_remote_index (account_id,kind,entity_id,rev,updated_at)
+                 VALUES ('acct-w','{k}','w-{k}',1,'2026-10-05T00:00:00.000Z')"
+            ),
+            format!(
+                "INSERT INTO sync_operations (account_id,dedupe_key,entity_type,entity_id,op,state,
+                                              created_at,updated_at)
+                 VALUES ('acct-w','dk-{k}','{k}','w-{k}','upsert','pending',
+                         '2026-10-05T00:00:00.000Z','2026-10-05T00:00:00.000Z')"
+            ),
+        ];
+        for sql in &checks {
+            conn.execute(sql, []).unwrap_or_else(|e| {
+                panic!("词汇表里的 {k} 被 CHECK 拒了（这就是把实体加进类型却没抬 CHECK 的形状）：{e}\n{sql}")
+            });
+        }
+    }
+    // 反向：词汇表外的 kind 必须**被拒**，否则 CHECK 只是装饰
+    for table_sql in [
+        "INSERT INTO tombstones (entity_type,entity_id,rev,deleted_at,purged,device_id,created_at)
+         VALUES ('widget','w-1',1,'2026-10-05T00:00:00.000Z',0,'dev','2026-10-05T00:00:00.000Z')",
+        "INSERT INTO sync_remote_index (account_id,kind,entity_id,rev,updated_at)
+         VALUES ('acct-w','widget','w-2',1,'2026-10-05T00:00:00.000Z')",
+        "INSERT INTO sync_operations (account_id,dedupe_key,entity_type,entity_id,op,state,
+                                      created_at,updated_at)
+         VALUES ('acct-w','dk-w','widget','w-3','upsert','pending',
+                 '2026-10-05T00:00:00.000Z','2026-10-05T00:00:00.000Z')",
+    ] {
+        let e = conn
+            .execute(table_sql, [])
+            .expect_err("CHECK 放过了词汇表外的 kind ⇒ 它形同虚设");
+        assert!(
+            e.to_string().contains("CHECK"),
+            "拒是拒了，但不是 CHECK 拒的：{e}"
+        );
+    }
+    drop(conn);
+}
+
+/// **迁移名单从盘上扫，不手写**（ADR-0022 落地前置订正第 ⑤ 条）：旧版这里是一份手抄的
+/// `[(u32,&str); 5]`，于是加了 0010 之后"从 v9 升上来"这一格根本不存在 —— 绿着空转。
+/// 这条把"盘上有哪些迁移文件"和"程序真的应用了哪些"对撞，两个方向都看。
+#[test]
+fn every_migration_file_on_disk_is_applied() {
+    let disk: Vec<u32> = migration_files().into_iter().map(|(v, _)| v).collect();
+    assert!(
+        !disk.is_empty(),
+        "扫到 0 个迁移文件：目录读不到或后缀不匹配，这条判据就是空枪"
+    );
+    assert_eq!(
+        disk,
+        contiguous_from(1),
+        "盘上的迁移号必须从 1 连续递增（跳号 = 旧库升级时会整段跳过）"
+    );
+    let fx = Fix::new();
+    let store = fx.open();
+    assert_eq!(
+        store.migration_report().applied,
+        disk,
+        "盘上有文件却没被应用：MIGRATIONS 名单漏了一条，老库升到这一版时那一格的 SQL 根本不跑"
+    );
+    assert_eq!(
+        SUPPORTED_SCHEMA_VERSION,
+        *disk.last().unwrap(),
+        "支持版本不等于盘上最大的迁移号"
+    );
 }

@@ -92,6 +92,7 @@ impl Fix {
         self.store
             .list_notes(&NoteQuery {
                 folder: None,
+                tag: None,
                 trash: false,
                 limit: u32::MAX,
                 offset: 0,

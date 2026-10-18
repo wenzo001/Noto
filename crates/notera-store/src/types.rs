@@ -48,6 +48,10 @@ pub struct Note {
     pub has_attachment: bool,
     pub pinned: bool,
     pub color: Option<String>,
+    /// 这一篇挂着的标签 id（**按 id 排序去重**，顺序不进契约）。
+    /// 存在 `notes.tag_ids` 那一列里（JSON 数组），不是投影表 —— 理由见 `migrations/0010_tags.sql` ②。
+    /// 读出来的是**原样**（可能含已删/已折叠的 id）；给界面与检索用请走 `Store::live_tag_ids`。
+    pub tag_ids: Vec<String>,
     pub rev: Rev,
     pub sync_rev: Rev,
     pub sync_hash: Option<String>,
@@ -134,6 +138,9 @@ pub struct Attachment {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteQuery {
     pub folder: Option<EntityId>,
+    /// 按标签筛（ADR-0022）。命中的是那**一颗**标签，以及"链接里还写着它的别名"的那些：
+    /// 折叠之后旧 id 留在属主记录里（D4 不重写笔记），只按 id 等值查会漏掉这一批。
+    pub tag: Option<EntityId>,
     pub trash: bool,
     pub limit: u32,
     pub offset: u32,
@@ -143,6 +150,7 @@ impl NoteQuery {
     pub fn all() -> Self {
         Self {
             folder: None,
+            tag: None,
             trash: false,
             limit: 0,
             offset: 0,
@@ -151,6 +159,18 @@ impl NoteQuery {
     pub fn in_folder(folder: &EntityId) -> Self {
         Self {
             folder: Some(folder.clone()),
+            tag: None,
+            trash: false,
+            limit: 0,
+            offset: 0,
+        }
+    }
+    /// 按标签筛那一族（侧栏点一颗标签）。`trash: false` 是有意的：回收站里的笔记
+    /// 不算"这颗标签的内容"，两处列表不许互相漏。
+    pub fn with_tag(tag: &EntityId) -> Self {
+        Self {
+            folder: None,
+            tag: Some(tag.clone()),
             trash: false,
             limit: 0,
             offset: 0,
@@ -159,6 +179,7 @@ impl NoteQuery {
     pub fn trash() -> Self {
         Self {
             folder: None,
+            tag: None,
             trash: true,
             limit: 0,
             offset: 0,
@@ -376,6 +397,12 @@ pub enum ApplyOp {
         env: serde_json::Value,
     },
     UpsertFolder {
+        env: serde_json::Value,
+    },
+    /// ADR-0022：标签记录。形状与 `UpsertFolder` 完全一致（同一套 rev/hash/复活规则），
+    /// 差别只在 payload 的键集与"D4 折叠"那一格 —— 所以它复用 [`ApplyOp::Tombstone`]/[`ApplyOp::Purge`]
+    /// 这些**已经带 kind** 的臂，不另写"标签版删除/永久删除"。
+    UpsertTag {
         env: serde_json::Value,
     },
     /// 冲突解决的一半：**采纳服务器那一版作为正文**（CONFLICT-RESOLUTION §6.1）。

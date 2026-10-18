@@ -3,6 +3,7 @@
 //! 铁律（见 docs/ARCHITECTURE-MAP.md §2）：零 I/O、零 async、零跨 crate 依赖。
 //! 这里放的是"词汇表"，不是策略。任何 WebDAV/同步概念都不许进入本 crate。
 
+pub mod canonical;
 pub mod error;
 
 use serde::{Deserialize, Serialize};
@@ -218,15 +219,29 @@ pub enum EntityKind {
     Note,
     Folder,
     Attachment,
+    /// ADR-0022 D1：标签是**新的可同步实体**（`records/tag/`），但笔记↔标签的多对多
+    /// **不是**独立同步项 —— `tag_ids` 嵌在笔记记录自己的载荷里，链接在 apply 时本地重导，
+    /// 与 `note_attachments` 同一条已验证的形状（Joplin 把 `note_tags` 做成同步项，
+    /// 它的五格伤疤逐条列在 ADR-0022 背景那一节）。
+    Tag,
 }
 
 impl EntityKind {
+    /// 全部 kind。**加变体必须改这一份**：穷尽匹配靠它兜底，
+    /// 而 `match` 里漏一支只会红一次（这一格存在的理由就是 ADR-0022 D7 那句"靠运气不是设计"）。
+    pub const ALL: [EntityKind; 4] = [
+        EntityKind::Note,
+        EntityKind::Folder,
+        EntityKind::Attachment,
+        EntityKind::Tag,
+    ];
     /// 远端目录名。
     pub fn dir(self) -> &'static str {
         match self {
             EntityKind::Note => "note",
             EntityKind::Folder => "folder",
             EntityKind::Attachment => "attachments",
+            EntityKind::Tag => "tag",
         }
     }
     /// 清单条目里的单字符类型标记（省流量，实测每字节都影响 gzip）。
@@ -235,6 +250,7 @@ impl EntityKind {
             EntityKind::Note => 'n',
             EntityKind::Folder => 'f',
             EntityKind::Attachment => 'a',
+            EntityKind::Tag => 't',
         }
     }
     pub fn from_tag(t: &str) -> Option<Self> {
@@ -242,6 +258,7 @@ impl EntityKind {
             "n" => Some(EntityKind::Note),
             "f" => Some(EntityKind::Folder),
             "a" => Some(EntityKind::Attachment),
+            "t" => Some(EntityKind::Tag),
             _ => None,
         }
     }

@@ -17,7 +17,12 @@ import { useSettingsStore } from './settings';
 import { useToastStore } from './toasts';
 import { t, type MessageKey } from '../i18n';
 
-export type ListMode = { kind: 'all' } | { kind: 'folder'; folderId: string | null } | { kind: 'trash' };
+export type ListMode =
+  | { kind: 'all' }
+  | { kind: 'folder'; folderId: string | null }
+  /** 侧栏点一颗标签（ADR-0022）。核心按**这一颗**筛，含"链接里还写着它的别名 id"的那些。 */
+  | { kind: 'tag'; tagId: string }
+  | { kind: 'trash' };
 
 const PAGE_SIZE = 200;
 
@@ -56,6 +61,8 @@ export const useNoteStore = defineStore('notes', () => {
   const searching = ref(false);
   const searchErrorKey = ref<string | null>(null);
   const titles = ref<Record<string, string>>({});
+  /** 每篇的活标签 id（核心解析过折叠与软删，见 `loadTagIds`）。按 id 存，不按位置。 */
+  const tagIdsByNote = ref<Record<string, string[]>>({});
 
   const inTrash = computed(() => mode.value.kind === 'trash');
   const searching_ = computed(() => query.value.trim().length > 0);
@@ -96,6 +103,9 @@ export const useNoteStore = defineStore('notes', () => {
     else {
       args.trash = false;
       if (mode.value.kind === 'folder') args.folder = mode.value.folderId ?? null;
+      // 标签那一格给的是 id，不是标题：相等关系只有核心那一处（ADR-0022 D3），
+      // 界面按名字筛就是第二个执行者。
+      if (mode.value.kind === 'tag') args.tagId = mode.value.tagId;
     }
     return args;
   }
@@ -321,6 +331,37 @@ export const useNoteStore = defineStore('notes', () => {
     }
   }
 
+  /**
+   * ADR-0022：设这篇笔记的标签集合（整份替换，与 pinned/color 同族）。
+   *
+   * 它同样占一格 rev，所以 `handRevToEditor` 不能省（理由与 `setColor` 上那段一样：
+   * 不交接就是编辑器抱着旧 `expectedRev` 出门，下一支自动保存被 `stale_edit` 拒）。
+   * 成功后**回读一次** `note_tags`：链接里的旧 id 可能被核心折叠改写（D4），
+   * 界面要的是解析过的那一份，不是自己刚发出去的那一份。
+   */
+  async function setTags(id: string, tagIds: string[]): Promise<string[]> {
+    try {
+      await callCommand<Note>(Commands.setNoteTags, { id, tagIds });
+      return await loadTagIds(id);
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+      return tagIdsByNote.value[id] ?? [];
+    }
+  }
+
+  /** 这篇的活标签 id（核心解析过别名与软删）。编辑器打开一篇时读一次。 */
+  async function loadTagIds(id: string): Promise<string[]> {
+    try {
+      const raw = await callCommand<unknown>(Commands.noteTags, { id });
+      const list = Array.isArray(raw) ? raw.filter((x): x is string => typeof x === 'string') : [];
+      tagIdsByNote.value = { ...tagIdsByNote.value, [id]: list };
+      return list;
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+      return [];
+    }
+  }
+
   async function moveTo(id: string, folderId: string): Promise<void> {
     try {
       const note = await callCommand<Note>(Commands.setNoteFolder, { id, folderId });
@@ -452,6 +493,9 @@ export const useNoteStore = defineStore('notes', () => {
     openToday,
     setPinned,
     setColor,
+    tagIdsByNote,
+    setTags,
+    loadTagIds,
     searchTotal,
     moveTo,
     moveToTrash,

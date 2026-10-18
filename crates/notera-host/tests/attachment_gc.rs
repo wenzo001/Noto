@@ -183,6 +183,7 @@ async fn an_unreferenced_blob_is_quarantined_not_deleted() {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -413,6 +414,7 @@ async fn a_reference_returning_inside_the_grace_period_comes_back_without_a_sing
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -505,6 +507,7 @@ async fn a_quarantined_blob_is_destroyed_only_after_the_grace_period_and_never_w
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -632,6 +635,7 @@ async fn releasing_a_quarantine_never_lands_in_the_reclaim_ledger() {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -682,6 +686,7 @@ async fn a_user_retry_recovers_a_quarantined_attachment_locally_before_asking_th
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -735,6 +740,7 @@ async fn a_corrupt_quarantine_copy_does_not_silently_defeat_the_retry_button() {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -839,6 +845,7 @@ async fn a_crash_between_the_move_and_the_ledger_heals_itself_without_one_reques
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -977,6 +984,7 @@ async fn a_local_note_that_references_an_image_in_its_doc_protects_its_bytes() {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -1075,6 +1083,7 @@ async fn nothing_is_destroyed_until_the_server_confirms_it_still_has_the_bytes()
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -1189,6 +1198,7 @@ async fn two_stores_on_one_data_dir_never_move_or_destroy_the_same_bytes_twice()
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -1411,6 +1421,7 @@ async fn two_os_processes_on_one_data_dir_claim_and_destroy_the_bytes_exactly_on
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,

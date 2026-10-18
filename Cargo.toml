@@ -20,7 +20,7 @@ members = [
 exclude = ["tools/feasibility-probe"]
 
 [workspace.package]
-version = "0.0.145"
+version = "0.0.146"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
@@ -59,6 +59,22 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 async-trait = "0.1"
 dashmap = "6"
+# 标签名的唯一相等关系要用它（ADR-0022 D3：NFKC + 全 Unicode 小写，全仓只有一处算 canonical）。
+# **零新下载**：锁里早就有 2.3.0（经 `url → idna → idna_adapter`），这里只是把一条已存在的传递依赖
+# 升成 `notera-core` 的直接依赖 ⇒ Cargo.lock 只多一条边，不多一个包。
+# ⚠ `default-features = false` 是**必需的**，不是洁癖：默认特性多开 `utf8_iter`/`utf16_iter` 两个
+# optional 依赖（`icu_normalizer` 的 `default = ["compiled_data","utf8_iter","utf16_iter"]`），
+# 而 `idna_adapter` 锁进来的是 `default-features = false + compiled_data` 那一份。
+# 照着开默认特性会让 `cargo build --offline` 当场要 `utf16_iter`（本机实测红过一次：
+# "no matching package named `utf16_iter` found"）—— 也就是**为了一个归一化函数往产品里加两个包**。
+# 只要 `compiled_data` 就够：`ComposingNormalizerBorrowed::new_nfkc()` + `.normalize(&str) -> Cow<str>`
+# 都在这一档下就有（本机第二次踩在这里：类型名不是 `Normalizer`，那个名字在这个 crate 里根本不存在）。
+# `icu_properties` 那一档**实测不需要**：只开 `compiled_data` 建得过、`canonical` 那 10 条测试全过，
+# 所以按小的来（当初以为是它挡着 `Normalizer`，那个判断是错的，错在类型名）。
+# 实测两条：`Cargo.lock` 只 +1 行（那条新边，不多一个包），`--offline` 建得过。
+# 选它而不是 `unicode-normalization`：同一份数据表已经在编译产物里了，再引一套就是第二份真相 + 多一份体积
+# （用户的抱怨一就是"包太大"，任何让包变长的"顺手"都要给理由）。
+icu_normalizer = { version = "2.3", default-features = false, features = ["compiled_data"] }
 bytes = "1"
 # 0.42：OSV/RustSec 对 0.37.5 报了两条可用性中断（RUSTSEC-2026-0194 重复属性名的二次方耗时、
 # RUSTSEC-2026-0195 `NsReader` 的命名空间声明无界增长），修于 0.41.0。我们这处用法是读用户

@@ -455,6 +455,9 @@ fn parse_kind(s: &str) -> Option<EntityKind> {
         "folder" => Some(EntityKind::Folder),
         // 目录名是 "attachments"（EntityKind::dir()），单数同样接受，避免两侧写法打架。
         "attachment" | "attachments" => Some(EntityKind::Attachment),
+        // ADR-0022：标签。这一档**必须**在本客户端认得 —— 旧客户端走到这里会 `None`
+        // ⇒ 信封反序列化失败 ⇒ 具名拒收（D8 拍的就是"B：接受噪声、界面说清"，不抬 min_protocol）。
+        "tag" => Some(EntityKind::Tag),
         _ => None,
     }
 }

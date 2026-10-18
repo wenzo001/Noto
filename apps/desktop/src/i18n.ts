@@ -340,6 +340,18 @@ const MESSAGES: Record<MessageKey, string> = {
   'sidebar.colorBlue': '蓝色',
   'sidebar.colorPurple': '紫色',
   'sidebar.colorPink': '粉色',
+  // ADR-0022「标签」：多值组织语义。编辑器里那排 chip 与侧栏那一族共用这几句。
+  // `tags.add` 这句是 A1 那条负面承诺翻正之后钉在界面文案上的那一格（见 negativePromises.spec.ts）。
+  'tags.section': '标签',
+  'tags.add': '加标签',
+  'tags.placeholder': '输入标签名，回车建一颗',
+  'tags.create': '建「{title}」',
+  'tags.none': '还没有标签',
+  'tags.remove': '从这篇摘掉「{title}」',
+  'tags.attach': '给这篇加上「{title}」',
+  'tags.delete': '删除标签「{title}」',
+  'tags.filterClear': '看全部笔记',
+  'tags.count': '{count} 篇',
   'settings.attachmentLedger': '附件',
   'settings.attachmentSummary': '这台设备上有 {count} 份附件 · 共 {size}',
   'settings.attachmentAbsent': '另有 {count} 份（{size}）的字节不在这台设备上 —— 在笔记里点开那张图可以重试取回',

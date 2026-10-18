@@ -183,6 +183,10 @@ pub fn kind_dir(kind: &str) -> Result<&'static str, PathError> {
         "n" | "note" => EntityKind::Note.dir(),
         "f" | "folder" => EntityKind::Folder.dir(),
         "a" | "attachment" | "attachments" => EntityKind::Attachment.dir(),
+        // ADR-0022：标签的清单标记 `t` 与目录名 `tag` 都收（与上面三档同一规矩）。
+        // 这一行是**下行那道门**：陌生 kind 在这里 `Err(BadKind)`，记录连取都不取
+        // —— 旧客户端没有这一行，所以它遇到 tag 条目会具名失败，而不是写错表。
+        "t" | "tag" => EntityKind::Tag.dir(),
         other => return Err(PathError::BadKind(other.to_string())),
     };
     Ok(dir)

@@ -2,6 +2,7 @@
 /** 侧栏：文件夹树 + 新建/入口 + 同步徽标 + 导航。 */
 import { computed, ref } from 'vue';
 import FolderTree from './FolderTree.vue';
+import TagList from './TagList.vue';
 import AppDialog from './ui/AppDialog.vue';
 import SyncBadge from './SyncBadge.vue';
 import { useFolderStore } from '../stores/folders';
@@ -148,6 +149,8 @@ function selectTrash(): void {
       </AppDialog>
 
       <FolderTree />
+    <!-- 标签那一族在文件夹下面（ADR-0022 D6：颜色是视觉入口，标签是检索与批量入口，两者并存）。 -->
+    <TagList />
       <p v-if="folders.errorKey" class="side-error" role="alert">{{ errorText }}</p>
     </div>
 

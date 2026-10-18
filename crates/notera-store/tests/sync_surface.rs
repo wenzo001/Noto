@@ -614,11 +614,45 @@ fn mark_synced_refuses_to_lead_local_head_and_attachment_kind_is_explicit() {
         store.mark_synced(EntityKind::Note, &missing_id(), Rev(1), "sha256:y"),
         Err(StoreError::NotFound { .. })
     ));
-    // 附件以 sha256 寻址：契约的 EntityId 表达不了，必须走专用入口（见交付说明）
-    assert!(matches!(
-        store.mark_synced(EntityKind::Attachment, &n.id, Rev(1), "sha256:y"),
-        Err(StoreError::Constraint(_))
-    ));
+}
+
+/// `rows::table_of` 是 **kind → 实体表名** 的唯一权威。这一条就是它存在的全部理由：
+/// `mark_synced` 以前写的是 `if kind == Note {"notes"} else {"folders"}` ——
+/// 加第四种实体时它会**静默把标签的确认点写进 `folders`**：编得过、不红、
+/// 而症状是"标签的 sync_rev 永远不动 ⇒ 每轮重传，用户只看到同步在转圈"。
+/// 把它改回 `if/else` 会让这一条红（标签那一发落不到 `tags`，而"另一个本"被误确认）。
+#[test]
+fn mark_synced_routes_each_kind_to_its_own_table() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let note = create(&store, &folder, "笔记那一行");
+    let extra = store.create_folder(None, "另一个本").unwrap();
+    let tag = store.create_tag("读后").unwrap();
+    assert_eq!(tag.sync_rev, Rev(0), "夹具前提：标签刚建时是脏的");
+
+    store
+        .mark_synced(EntityKind::Tag, &tag.id, tag.rev, "sha256:tag")
+        .expect("标签的确认点必须走得通（`sync_hash` 那一列也在这条边上）");
+
+    let after = store.read_tag(&tag.id).unwrap().expect("标签要在");
+    assert_eq!(after.sync_rev, tag.rev, "确认点要落到 tags 自己那一行");
+    // 另外两张表一个字没动
+    assert_eq!(
+        store.get_folder(&extra.id).unwrap().unwrap().sync_rev,
+        extra.sync_rev,
+        "标签那一发被写进 folders 了（`table_of` 退化成 if/else 就是这个形状）"
+    );
+    assert_eq!(
+        store.get_note(&note.id).unwrap().unwrap().sync_rev,
+        note.sync_rev
+    );
+
+    // 附件在这里仍然是**具名拒绝**，不是 `else` 的兜底目标
+    let e = store
+        .mark_synced(EntityKind::Attachment, &tag.id, Rev(1), "sha256:a")
+        .expect_err("附件不许落进任何一张 UUID 实体表");
+    assert!(e.to_string().contains("set_attachment_states"), "{e}");
 }
 
 /// 第二台设备的视角：收到一条带图片的笔记，附件必须**当场**认账。
@@ -1085,5 +1119,37 @@ fn trash_expiry_candidates_key_on_the_deletion_not_on_the_last_touch() {
             .unwrap()
             .is_empty(),
         "读的是 updated_at ⇒ 刚删一天的行被当成早就到期，自动销毁吃掉用户的反悔窗口"
+    );
+}
+
+/// 读侧那一格的口径：**库里没有这一行 = 没有标签**，不是错误。
+///
+/// 逼出这条的是整跑 ㊷ 那条腿（它判"这一腿 console error 为零"）：那条腿注入一份 200 行的假清单，
+/// store 自动选中 `rows[0]`，于是界面去读一篇**库里根本没有的**笔记的标签 —— 原来这里抛
+/// `QueryReturnedNoRows` ⇒ 桥回 HTTP 400 ⇒ 红。真机上同一格也不是异常：对面**正在传来**的那一篇、
+/// 本机刚**永久删掉**的那一篇，都会走到"没有这一行"。让一次读投影去目击同步竞态，是读侧的错。
+///
+/// 但这一条不许顺手长成"什么都能吞"：下面那半截对照钉的是"挂上了就必须读得回来"。
+/// （坏 id 那一格在 host 层，`note_tags` 仍旧具名拒 400 —— 线上读数见台账第一百四十一批。）
+#[test]
+fn reading_tags_of_a_note_that_is_not_there_answers_empty() {
+    let fx = Fix::new();
+    let store = fx.open();
+
+    let ids = store
+        .live_tag_ids(&missing_id())
+        .expect("库里没有这一篇 ⇒ 回空集，不许报错");
+    assert!(ids.is_empty(), "空集才是对的读数：{ids:?}");
+
+    // 对照：同一颗读法在"真挂着标签"的那一篇上必须读得回来（否则上面那条是恒真的空枪）
+    let folder = default_folder(&store);
+    let note = create(&store, &folder, "读侧对照那一篇");
+    let tag = store.create_tag("对照那颗").expect("create_tag");
+    store
+        .set_note_tags(&note.id, &[tag.id.as_str().to_owned()])
+        .expect("set_note_tags");
+    assert_eq!(
+        store.live_tag_ids(&note.id).expect("这一篇在库里"),
+        vec![tag.id.as_str().to_owned()]
     );
 }

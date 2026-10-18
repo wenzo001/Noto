@@ -7863,17 +7863,43 @@ function contrastRatio(fg, bg) {
 
   const clipOf = (b) => ({ x: b.x, y: b.y, width: b.width, height: b.height });
   const away = async () => { await p.mouse.move(4, 4); await p.waitForTimeout(140); };
+  /**
+   * 落点：**药丸形的角不在自己的形状里**。原来这里只写死"左上角往里 6px"（为的是躲开行级控件
+   * hover 时才显形的那簇工具，G115），但 `--r-chip` 那种整颗椭圆的控件，6px 那一点被圆角裁在
+   * 形状之外 —— `elementFromPoint` 交回的是祖先，Playwright 的可达性检查就一直等到超时。
+   * 0.0.146 那批把 `.tag-chip--add` 那颗加进顶栏时，腿 63 就是这么把它报成"点不着"的（探针复现：
+   * 三种界面状态下 `hover(..., {position:{x:6,y:6}})` 全部超时，而 `at6` 落在一颗无 class 的祖先 `<div>` 上）。
+   * 现在与腿 65 共用同一把尺：先把指针放进这一格（悬停工具层要显形才量得准），再按
+   * 中心 → 偏左 → 靠左上 → 中下 → 角 依次取**第一个命中自己或自己内部**的点；五点都不中才算点不着。
+   * `why` 只是读数，不是豁免：挑不中时仍然让 Playwright 按角那一点去 hover，红就红在原文上。
+   */
+  const aim = (i) => p.evaluate((idx) => {
+    const el = document.querySelector(`[data-ms-probe="${idx}"]`);
+    if (!el) return { dx: 6, dy: 6, why: 'gone' };
+    const r = el.getBoundingClientRect();
+    if (getComputedStyle(el).pointerEvents === 'none') return { dx: 6, dy: 6, why: 'pe-none' };
+    for (const [fx, fy] of [[0.5, 0.5], [0.25, 0.5], [0.12, 0.5], [0.5, 0.75], [6 / r.width, 6 / r.height]]) {
+      const cx = Math.round(r.x + r.width * fx), cy = Math.round(r.y + r.height * fy);
+      const h = document.elementFromPoint(cx, cy);
+      if (h && (h === el || el.contains(h))) return { dx: Math.max(1, cx - r.x), dy: Math.max(1, cy - r.y), why: '' };
+    }
+    const mid = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2));
+    const name = mid ? (mid.getAttribute('data-testid') || String(mid.className ?? '').split(' ')[0] || mid.tagName.toLowerCase()) : 'no-point';
+    return { dx: 6, dy: 6, why: `covered-by:${name}` };
+  }, i);
   const shots = async (t) => {
     await away();
     const a = await p.screenshot({ clip: clipOf(t.box) });
     const b = await p.screenshot({ clip: clipOf(t.box) });
-    // 落点取左上角往里 6px：行级按钮的中心在 hover 时正是那簇工具的位置（G115 修的就是这一格）
-    const ok = await p.hover(`[data-ms-probe="${t.i}"]`, { position: { x: 6, y: 6 }, timeout: 4000 })
+    await p.mouse.move(t.box.x + Math.round(t.box.width / 2), t.box.y + Math.round(t.box.height / 2));
+    await p.waitForTimeout(160);
+    const aimed = await aim(t.i);
+    const ok = await p.hover(`[data-ms-probe="${t.i}"]`, { position: { x: aimed.dx, y: aimed.dy }, timeout: 4000 })
       .then(() => true)
-      .catch(() => false);
+      .catch((e) => { t.whyHover = String(e.message ?? e).split('\n')[0]; return false; });
     await p.waitForTimeout(180);
     const c = await p.screenshot({ clip: clipOf(t.box) });
-    return { stable: Buffer.compare(a, b) === 0, hovered: ok, changed: Buffer.compare(a, c) !== 0 };
+    return { stable: Buffer.compare(a, b) === 0, hovered: ok, why: aimed.why, changed: Buffer.compare(a, c) !== 0 };
   };
 
   const unstable = [];
@@ -7891,7 +7917,7 @@ function contrastRatio(fg, bg) {
     const base = String(t.cls).split(' ')[0];
     measuredByClass.add(base);
     if (!r.stable) unstable.push(`${who} ${JSON.stringify(t.chain)}`);
-    else if (!r.hovered) unreachable.push(who);
+    else if (!r.hovered) unreachable.push(`${who} 采样${JSON.stringify(r.why)} ${String(t.whyHover ?? '')}`);
     else if (t.disabled && r.changed) disabledChanged.push(`${who} ${JSON.stringify(t.chain)}`);
     else if (t.selected) { exemptSelected.push(base); if (r.changed) changedByClass.add(base); }
     else if (!t.disabled && !r.changed) noHover.push(`${who} hit=${t.hit} ${JSON.stringify(t.chain)}`);

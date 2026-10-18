@@ -22,6 +22,7 @@ mod rows;
 mod search;
 mod store;
 mod syncml;
+mod tags;
 
 pub use crate::backup::{
     apply_pending_restore, inspect_backup, BackupInfo, PendingRestore, BACKUP_DIR_NAME,
@@ -41,6 +42,7 @@ pub use crate::types::{
 };
 
 pub use crate::store::Store;
+pub use crate::tags::Tag;
 
 /// 让 `notera-core` 的类型在本 crate 的公共签名里保持可达（sync/host 直接复用）。
 pub use notera_core::{ContentHash, DeviceId, EntityId, EntityKind, Rev};

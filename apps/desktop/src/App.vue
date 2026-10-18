@@ -19,6 +19,7 @@ import { LINK_PROBE_INTERVAL_MS } from './util/timing';
 import { useConflictStore } from './stores/conflicts';
 import { useEditorStore } from './stores/editor';
 import { useFolderStore } from './stores/folders';
+import { useTagStore } from './stores/tags';
 import { useNoteStore } from './stores/notes';
 import { useSettingsStore } from './stores/settings';
 import { useShellStore } from './stores/shell';
@@ -32,6 +33,7 @@ const shell = useShellStore();
 const sync = useSyncStore();
 const notes = useNoteStore();
 const folders = useFolderStore();
+const tags = useTagStore();
 const editor = useEditorStore();
 const settings = useSettingsStore();
 const conflicts = useConflictStore();
@@ -67,6 +69,11 @@ function handleEvent(event: UiEvent): void {
   }
   if (event.kind === 'notes-changed') {
     void notes.invalidate(event.ids ?? []);
+    // 标签的链接住在笔记记录里（ADR-0022 D1）⇒ 对面动过标签也会动过笔记，
+    // 这一格顺带把侧栏那一份标签账回读一次。
+    // ⚠ 已知欠账：**只改标签名**不动任何笔记，所以这一台要等下一次笔记变化或重启才跟上；
+    // 同步事件里没有"标签变了"这一族信号。登记在 CHANGELOG 本批的欠账栏，不是没想到。
+    void tags.load();
     if (!editor.dirty && editor.noteId && (event.ids ?? []).includes(editor.noteId)) void editor.reloadRemote();
     return;
   }
@@ -223,7 +230,7 @@ let probeTimer: number | null = null;
 
 async function boot(): Promise<void> {
   // 首帧路径：只取本地数据；任何网络等待都不允许出现在这里（PLATFORM §3）
-  await Promise.all([folders.load(), notes.load()]);
+  await Promise.all([folders.load(), notes.load(), tags.load()]);
   booted.value = true;
   settings.applyThemeToDocument();
 

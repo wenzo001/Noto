@@ -46,6 +46,30 @@ impl Env {
     }
 }
 
+/// 收到的载荷里那份 `tag_ids` → **要不要覆盖本机这一份**（ADR-0022 D1）。
+///
+/// `None` = 载荷里根本没有这个键（旧版本写出来的记录，那时还没有标签这一族）⇒ **保持本机原样**。
+/// 空数组 `[]` 才是明确的"这一篇不再有标签"。这两种必须分得开：
+/// 把"没有这个键"读成"清空"，等于一次远端旧记录的正常到达静默删掉用户的链接。
+pub(crate) fn tag_ids_from_env(env: &Env) -> Result<Option<Vec<String>>, StoreError> {
+    let Some(raw) = env.field("tag_ids") else {
+        return Ok(None);
+    };
+    let arr = raw
+        .as_array()
+        .ok_or_else(|| StoreError::Constraint("载荷里的 tag_ids 不是数组".into()))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for v in arr {
+        let s = v
+            .as_str()
+            .ok_or_else(|| StoreError::Constraint("tag_ids 里有非字符串元素".into()))?;
+        notera_core::EntityId::parse(s)
+            .map_err(|e| StoreError::Constraint(format!("tag_ids 里 {s:?} 不是合法 UUID: {e}")))?;
+        out.push(s.to_string());
+    }
+    crate::tags::normalize_tag_ids(&out).map(Some)
+}
+
 pub(crate) fn env_of(v: &serde_json::Value, want: &str) -> Result<Env, StoreError> {
     let obj = v
         .as_object()
@@ -171,6 +195,7 @@ impl Store {
             ApplyOp::UpsertFolder { env } => {
                 self.apply_folder(tx, env_of(env, "folder")?, now, rep)
             }
+            ApplyOp::UpsertTag { env } => self.apply_tag(tx, env_of(env, "tag")?, now, rep),
             ApplyOp::SetRemote {
                 kind,
                 id,
@@ -189,6 +214,117 @@ impl Store {
             }
             ApplyOp::Purge { kind, id } => self.apply_purge(tx, *kind, id, now, rep),
         }
+    }
+
+    /// 收下一颗标签记录（ADR-0022 D1/D3/D4）。与 `apply_folder` 共用同一套 rev / 复活闸门，
+    /// 两条标签特有的：
+    ///  · **`canonical` 不许由载荷带进来** —— 一律用核心的 `canonical_tag_name(title)` 重算。
+    ///    载荷里带了也不信、直接忽略：D3 要的就是"相等关系只有一处"，
+    ///    收下一颗对岸算好的 canonical 等于把第二份真相写进库（那边算错一次，这里就永久长出一颗同名标签）。
+    ///  · **同名折叠的赢家只看 id**：`winner = min(id)`。
+    ///    原方案写的是"比 `created_at`"，但**信封里根本没有 `created_at` 这一格**（notes/folders 也一样不带），
+    ///    跨设备就没有可比的量 —— 这是写收件路径时才发现的。UUIDv7 的高 48 位就是创建时刻的毫秒，
+    ///    所以 id 的字典序 ≒ 创建顺序，而且它是**两边都拿得到、且唯一**的量。
+    ///    输家不删行、只记 `alias_of`：笔记链接里可能还写着它的 id，读侧 `live_tag_ids` 把旧 id 解析到赢家，
+    ///    于是**不需要重写任何一篇笔记**（这正是"链接嵌在属主记录里"要买的东西）。
+    fn apply_tag(
+        &self,
+        tx: &Connection,
+        env: Env,
+        now: &str,
+        rep: &mut ApplyReport,
+    ) -> Result<(), StoreError> {
+        if env.purged {
+            return self.apply_purge(tx, EntityKind::Tag, &env.id, now, rep);
+        }
+        if let Some(t) = Self::tombstone_of(tx, EntityKind::Tag, &env.id)? {
+            if t.purged {
+                return Err(StoreError::Rejected(format!(
+                    "拒绝复活：标签 {} 已有 purged 墓碑",
+                    env.id
+                )));
+            }
+        }
+        let title = env
+            .field("title")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| StoreError::Rejected(format!("标签 {} 缺 title", env.id)))?
+            .to_string();
+        let canonical = crate::tags::canonical_of_title(&title);
+        // `alias_of` **不从载荷收、也不参与哈希**：折叠是本机对"我看到的这批记录"套同一条规则
+        // （`min(id)`）算出来的派生事实，两边各自算就收敛到同一个 winner。
+        // 收下来会造出一颗真毒丸 —— 理由写在 `tags.rs::tag_hash` 上面那段。
+        let hash = crate::tags::tag_hash(&title);
+        let device = env
+            .device
+            .clone()
+            .unwrap_or_else(|| self.device.to_string());
+
+        if let Some(cur) = Store::read_tag_tx(tx, &env.id)? {
+            if env.rev.get() < cur.rev.get() {
+                rep.skipped += 1; // 本机已有更新的一版：幂等跳过，绝不回退
+                return Ok(());
+            }
+            tx.execute(
+                "UPDATE tags SET title = ?2, canonical = ?3, rev = ?4, sync_rev = ?4, sync_hash = ?5,
+                        content_hash = ?5, updated_at = ?6, updated_device = ?7, deleted_at = ?8
+                 WHERE id = ?1",
+                params![
+                    env.id.as_str(),
+                    title,
+                    canonical,
+                    env.rev.get() as i64,
+                    hash,
+                    now,
+                    device,
+                    env.deleted_at
+                ],
+            )?;
+            rep.applied += 1;
+            return Ok(());
+        }
+
+        // 新行。同名的活非别名行如果存在，就是要折叠的那一颗。
+        let incumbent: Option<String> = tx
+            .query_row(
+                "SELECT id FROM tags WHERE canonical = ?1 AND deleted_at IS NULL AND alias_of IS NULL ORDER BY id LIMIT 1",
+                [&canonical],
+                |r| r.get::<_, String>(0),
+            )
+            .ok();
+        let my_alias = match incumbent.as_deref() {
+            None => None,
+            Some(w) => {
+                if env.id.as_str() < w {
+                    // 我才是赢家：把现有那颗降级成别名（不删行 —— 还有笔记写着它的 id）。
+                    tx.execute(
+                        "UPDATE tags SET alias_of = ?2, updated_at = ?3 WHERE id = ?1 AND alias_of IS NULL",
+                        params![w, env.id.as_str(), now],
+                    )?;
+                    None
+                } else {
+                    Some(w.to_string())
+                }
+            }
+        };
+        tx.execute(
+            "INSERT INTO tags (id, title, canonical, alias_of, rev, sync_rev, sync_hash, remote_rev,
+                               content_hash, created_at, updated_at, created_device, updated_device, deleted_at)
+             VALUES (?1,?2,?3,?4,?5,?5,?6,0,?6,?7,?7,?8,?8,?9)",
+            params![
+                env.id.as_str(),
+                title,
+                canonical,
+                my_alias,
+                env.rev.get() as i64,
+                hash,
+                now,
+                device,
+                env.deleted_at
+            ],
+        )?;
+        rep.applied += 1;
+        Ok(())
     }
 
     /// `adopt = true` 只允许由 [`ApplyOp::AdoptConflict`] 传入：冲突采纳远端正文。
@@ -237,8 +373,7 @@ impl Store {
                 })?,
             ),
         };
-        let pinned = env.field("pinned").and_then(|v| v.as_bool());
-        // 区分"字段缺失"（不动）与"字段为 null"（清空）
+        let pinned = env.field("pinned").and_then(|v| v.as_bool()); // 区分"字段缺失"（不动）与"字段为 null"（清空）
         let color: Option<Option<String>> = env
             .field("color")
             .map(|v| v.as_str().map(|s| s.to_string()));
@@ -271,14 +406,23 @@ impl Store {
                     "INSERT INTO notes
                        (id, folder_id, doc, doc_format, pinned, color, title, plain_text, summary,
                         char_count, block_count, has_attachment, rev, sync_rev, sync_hash, remote_rev,
-                        content_hash, created_at, updated_at, deleted_at, purged_at, created_device, updated_device)
-                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14,?13,?14,?15,?15,?16,NULL,?17,?17)",
+                        content_hash, created_at, updated_at, deleted_at, purged_at, created_device, updated_device,
+                        tag_ids)
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14,?13,?14,?15,?15,?16,NULL,?17,?17,?18)",
                     params![
                         env.id.as_str(), folder.as_str(), prepared.doc_json, prepared.doc_version as i64,
                         pinned.unwrap_or(false) as i64, color.flatten(), prepared.title, prepared.plain_text,
                         prepared.summary, prepared.char_count as i64, prepared.block_count as i64,
                         prepared.doc_has_attachment as i64, env.rev.get() as i64, prepared.content_hash.as_str(),
-                        now, env.deleted_at.clone(), device
+                        now, env.deleted_at.clone(), device,
+                        // ADR-0022 D1：**新建分支也要带链接**。两台真设备实测到的形状是
+                        // "笔记过去了、标签没过去"（读侧空集，界面上那篇笔记看起来从没打过标签）——
+                        // 更新分支走 `commit_edit` 有这一格，新建分支是另一条手写 SQL，漏一次就是一次
+                        // 静默丢数据，而且只有"对面先有笔记"这种顺序才踩得到。
+                        // 载荷里没有这一键 ⇒ `'[]'`：新行本来就没有可保持的链接（与更新分支
+                        // "没带就保持本机原样"是同一条口径的两个分支，不是两种规则）。
+                        serde_json::to_string(&tag_ids_from_env(&env)?.unwrap_or_default())
+                            .map_err(|e| StoreError::Constraint(format!("tag_ids 序列化失败: {e}")))?,
                     ],
                 )?;
                 let rowid = Self::note_rowid_or_err(tx, &env.id)?;
@@ -342,6 +486,10 @@ impl Store {
                     folder_id,
                     pinned,
                     color,
+                    // ADR-0022 D1：链接住在属主记录里 ⇒ 收到的载荷带 `tag_ids` 就整份替换，
+                    // **没带就保持本机原样**（旧版本写出来的记录没有这一键，把它读成"清空"
+                    // 就是一次静默的用户数据丢失）。
+                    tag_ids: tag_ids_from_env(&env)?,
                     deleted_at: Some(env.deleted_at.clone()),
                     origin: RevOrigin::Remote,
                     enqueue: false,
@@ -500,18 +648,9 @@ impl Store {
                 "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
             ));
         }
-        // 穷尽匹配（ADR-0022 D7 ①）：以前是 `if kind == Note {…} else {folders}` ——
-        // 加第四个实体变体会**静默落进 folders** 那张表。附件在上面那条早退里已经拒过一次，
-        // 这里再钉一次，为的是让"下一个变体"必须改到这一行才编译得过（编译就是判据）。
-        let table = match kind {
-            EntityKind::Note => "notes",
-            EntityKind::Folder => "folders",
-            EntityKind::Attachment => {
-                return Err(StoreError::Constraint(
-                    "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
-                ))
-            }
-        };
+        // 表名从 `rows::table_of` 这一份权威来（ADR-0022 落地前置订正）：以前这里与
+        // `mark_synced` 各写一份 `if Note {notes} else {folders}`，后者至今会把新实体静默送进 folders。
+        let table = rows::table_of(kind)?;
         let head: Option<(i64, i64)> = tx
             .query_row(
                 &format!("SELECT rev, sync_rev FROM {table} WHERE id = ?1"),
@@ -555,38 +694,12 @@ impl Store {
                 "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
             ));
         }
-        // 穷尽匹配（ADR-0022 D7 ①）：以前是 `if kind == Note {…} else {folders}` ——
-        // 加第四个实体变体会**静默落进 folders** 那张表。附件在上面那条早退里已经拒过一次，
-        // 这里再钉一次，为的是让"下一个变体"必须改到这一行才编译得过（编译就是判据）。
-        let table = match kind {
-            EntityKind::Note => "notes",
-            EntityKind::Folder => "folders",
-            EntityKind::Attachment => {
-                return Err(StoreError::Constraint(
-                    "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
-                ))
-            }
-        };
+        // 同上：表名与"读回哪一列"都从 `rows` 那一份权威来，两处不再各写一遍 match。
+        let table = rows::table_of(kind)?;
         let head: Option<(i64, i64, Option<String>)> = tx
-            .query_row(
-                &match kind {
-                    EntityKind::Note => {
-                        "SELECT rev, sync_rev, title FROM notes WHERE id = ?1".to_string()
-                    }
-                    EntityKind::Folder => {
-                        "SELECT rev, sync_rev, name FROM folders WHERE id = ?1".to_string()
-                    }
-                    // 上面那条 `table` 的匹配已经把附件拒了；这一臂存在的唯一理由是**穷尽**：
-                    // 少一臂就编译不过，而不是少一臂就静默用 folders 那一句去查 notes 的列。
-                    EntityKind::Attachment => {
-                        return Err(StoreError::Constraint(
-                            "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
-                        ))
-                    }
-                },
-                [id.as_str()],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
+            .query_row(&rows::head_select(kind)?, [id.as_str()], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
             .optional()?;
         let prev: Option<i64> = tx
             .query_row(

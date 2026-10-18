@@ -549,6 +549,7 @@ fn existing_content_hashes(
     loop {
         let q = NoteQuery {
             folder: Some(folder.clone()),
+            tag: None,
             trash: false,
             limit: NOTE_PAGE,
             offset,

@@ -60,13 +60,20 @@ Phase 1 落地文件：`0001_init` `0002_sync` `0003_search` `0004_indexes` `000
 
 | 组 | 表 | 是否同步 | 归属 crate |
 |---|---|---|---|
-| 权威内容 | `folders` `notes` `note_revisions` `attachments` `note_attachments` | 是 | `notera-store` |
+| 权威内容 | `folders` `notes` `note_revisions` `attachments` `note_attachments` `tags` | 是 | `notera-store` |
 | 删除事实 | `tombstones` | 是 | `notera-store` |
 | 同步元数据 | `sync_accounts` `sync_state` `sync_remote_index` `sync_operations` `sync_conflicts` | 否（本地推导缓存） | `notera-store` + `notera-sync` |
 | 本地配置 | `settings` `meta` | 否 | `notera-config` |
 | 检索 | `notes_fts`（FTS5 虚表，external content） | 否（可重建派生） | `notera-store` |
 
 **没有 `notes` 与 `note_data` 的分离**：`doc` 直接内联在 `notes`，因为 Notera 的读模式是"列表→打开单条"，不需要为列表加载正文（列表只读派生列）。若 Phase 7 实测显示列表扫描因溢出页拖慢，再按 ADR 流程拆分为 `note_docs` 旁表——不提前设计。
+
+**没有 `note_tags` 投影表**（2026-10-18，ADR-0022 D1）：笔记↔标签的多对多放在 `notes.tag_ids`
+（一个 JSON 数组列），不是独立同步项，也不是带外键的本地投影表。带外键的投影表会把
+"链接先到、标签那行还没下载"这一格竞态原样请回来 —— 而它长在 `apply_remote` 的**写事务**里，
+一发失败就是整批回滚（Joplin 的 `note_tags` 正是这一族伤疤的集合）。
+读侧统一走 `Store::live_tag_ids`（滤软删、把别名改写到 winner），所以删除不需要级联、
+迟到的链接也只是"看不见的引用"，不需要任何清理任务。
 
 ---
 
@@ -382,6 +389,63 @@ CREATE VIRTUAL TABLE notes_fts USING fts5(
 -- 不使用触发器：派生文本需要 richtext→plain_text 转换，必须在 Rust 侧完成后同事务写入。
 -- 维护点唯一：notera-store::SearchIndexer（见 §7）。
 ```
+
+---
+
+### 5.4 `0010_tags.sql`（ADR-0022：标签成为第四种可同步实体）
+
+```sql
+CREATE TABLE tags (
+  id              TEXT NOT NULL PRIMARY KEY,               -- UUIDv7，各设备各生成（不用标题哈希当 id：D2）
+  title           TEXT NOT NULL,                            -- 用户看见并原样保留的那一份
+  canonical       TEXT NOT NULL,                            -- 唯一的相等键，只有核心算（D3）
+  alias_of        TEXT REFERENCES tags(id) ON DELETE SET NULL
+                  DEFERRABLE INITIALLY DEFERRED,             -- D4 折叠的输家指针；见下面那条外键
+  rev             INTEGER NOT NULL DEFAULT 0,
+  sync_rev        INTEGER NOT NULL DEFAULT 0,
+  sync_hash       TEXT,                                     -- `mark_synced` 按表名统一写这一列
+  remote_rev      INTEGER NOT NULL DEFAULT 0,
+  content_hash    TEXT NOT NULL,                            -- = sha256(canonical({"title":…})),见 SYNC-PROTOCOL §3.1
+  created_at      TEXT NOT NULL,
+  updated_at      TEXT NOT NULL,
+  created_device  TEXT NOT NULL DEFAULT '',
+  updated_device  TEXT NOT NULL DEFAULT '',
+  deleted_at      TEXT,                                     -- D5 软删除（标签不进回收站界面）
+  CHECK (length(trim(canonical)) > 0)
+);
+CREATE UNIQUE INDEX tags_canonical_live ON tags(canonical) WHERE deleted_at IS NULL AND alias_of IS NULL;
+```
+
+* `ALTER TABLE notes ADD COLUMN tag_ids TEXT NOT NULL DEFAULT '[]'` —— 链接在属主记录里（§3 那段）。
+* **`canonical` 不进哈希、不上线**：它由 `notera_core::canonical::canonical_tag_name(title)` 现算
+  （trim → NFKC → 全 Unicode 小写 → 再 NFKC 到定点）。列名跟着 `notes` 的既有形状用 `deleted_at`，
+  不用 ADR 草稿里的 `deleted_time`（一个库里两种"软删除"列名，迟早有人在 JOIN 上猜错）。
+* `tags_canonical_live` 是**部分**唯一索引，两个条件各挡一种错：
+  `deleted_at IS NULL` ⇒ 删掉之后同名要能再建；`alias_of IS NULL` ⇒ 折叠的输家必须还能留在表里
+  （链接要靠它解析旧 id）。原来只写了第一个条件 —— 那是自相矛盾的：`create_tag` 允许折叠出别名行，
+  而索引会拒绝插那一行，症状是"两台设备各建一颗同名标签之后，其中一台同步不进去"（写收件路径时抓到）。
+* **那条外键必须是可延迟的**：折叠 = 同一个事务里"先把输的那颗标成别名、再插入赢的那一行"，
+  那一刻 winner 还不存在 ⇒ 普通外键在 UPDATE 那一发就 `FOREIGN KEY constraint failed`。
+  两台真设备实测到过：引擎只留下一句 `rejections=1 / FOREIGN KEY constraint failed`，
+  症状是"对面那颗标签永远同步不进来"。（`rusqlite` 的 `bundled` 特征定义了
+  `SQLITE_DEFAULT_FOREIGN_KEYS=1` ⇒ 裸连接默认就开外键，这条也是量出来的。）
+* 这份迁移还**重建**了 `tombstones` / `sync_remote_index` / `sync_operations` 三张表
+  （SQLite 没有 `DROP CONSTRAINT`，要把 kind 词汇表的 CHECK 从三种抬到四种只能建新表搬数据）。
+  三个坑各有证人（`crates/notera-store/tests/migrations_and_pragmas.rs::tag_rebuild_preserves_every_column_and_row`）：
+  丢列（0007 给 `sync_remote_index` 追加的 `deleted_at`）、值挪家（`INSERT … SELECT *` 按**位置**对齐）、
+  AUTOINCREMENT 序列断掉（`sqlite_sequence` 那一行接不上 ⇒ 旧 id 被复用）。
+  **证人不能是"全新库与升级库一致"**：两条路径由同一份手写 CREATE 决定，会一样地缺、于是照样绿。
+* `v_dirty_entities` 加了第三支 `SELECT 'tag' …`。少了那一支，症状是"标签在界面上建好了、
+  远端永远看不见它"，而界面一切正常。⚠ 顺带量到：这个视图**今天没有任何 Rust 消费者**
+  （`grep -rn v_dirty_entities crates/ --include=*.rs` 命中 0），真判脏的权威是 `syncml::dirty_entities`。
+  本批不顺手删它，登记成欠账（§16）。
+* **读侧那一格：`Store::live_tag_ids` 对"库里没有这一行"回空集，不报错。** 界面读一篇笔记的标签只走这一处，
+  而"这一篇此刻不在库里"是**正当状态** —— 对面正在传来的那一篇、本机刚永久删掉的那一篇都会走到这里；
+  让它报错等于叫一次读投影去目击同步竞态（实测：整跑 ㊷ 那条腿注入一份假清单，桥回 HTTP 400，
+  而那条腿判的正是"这一腿 console error 为零"）。**宽容只给"没有这一行"，不给"这不是一个 id"**：
+  坏 id 仍旧在命令层具名拒 400（`bad_id`），否则这一格会长成一把吞掉一切的伞。
+  证人：`sync_surface.rs::reading_tags_of_a_note_that_is_not_there_answers_empty`
+  （带"挂上了就必须读得回来"的对照，摘掉宽容只有它红）。
 
 ---
 

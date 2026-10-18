@@ -569,6 +569,12 @@ impl App {
                 .map(EntityId::parse)
                 .transpose()
                 .map_err(|_| CmdError::of("bad_id", false))?,
+            tag: c
+                .tag_id
+                .as_deref()
+                .map(EntityId::parse)
+                .transpose()
+                .map_err(|_| CmdError::of("bad_id", false))?,
             trash: c.trash,
             limit: c.limit,
             offset: c.offset,
@@ -595,6 +601,7 @@ impl App {
                 .store
                 .list_notes(&NoteQuery {
                     folder: Some(f.id.clone()),
+                    tag: None,
                     trash: false,
                     limit: 0,
                     offset: 0,
@@ -634,6 +641,7 @@ impl App {
             .store
             .list_notes(&NoteQuery {
                 folder: Some(f.id.clone()),
+                tag: None,
                 trash: false,
                 limit: 0,
                 offset: 0,
@@ -1203,6 +1211,16 @@ impl App {
                 .filter(|t| !t.trim().is_empty()),
             // 附件按 sha256 寻址，不是 UUID 实体：卡片只能用哈希当前缀。
             EntityKind::Attachment => Some(r.local_hash.chars().take(12).collect()),
+            // 标签没有"正文"可冲突，卡片上能给的只有名字（ADR-0022 D1：链接嵌在笔记里，
+            // 所以标签侧只可能出现"改名 vs 删除"这一类，没有块级内容可比）。
+            EntityKind::Tag => self
+                .inner
+                .store
+                .read_tag(&r.id)
+                .ok()
+                .flatten()
+                .map(|t| t.title)
+                .filter(|t| !t.trim().is_empty()),
         };
         // 副本还在才报得出它的 rev；副本已被删则给 None，面板那栏退回卡片自带的兜底预览。
         let copy_rev = match &r.copy_note_id {
@@ -3603,6 +3621,7 @@ impl App {
                 .map_err(store_err)?
                 .map(|f| f.deleted_at),
             EntityKind::Attachment => None,
+            EntityKind::Tag => store.read_tag(id).map_err(store_err)?.map(|t| t.deleted_at),
         };
         match row {
             // 行还在：以行的 deleted_at 为准（None = 已恢复，绝不能回落到旧墓碑）
@@ -3812,6 +3831,7 @@ fn kind_slot(kind: &str) -> KindSlot {
     match kind {
         "n" | "note" => KindSlot::Entity(EntityKind::Note),
         "f" | "folder" => KindSlot::Entity(EntityKind::Folder),
+        "t" | "tag" => KindSlot::Entity(EntityKind::Tag),
         "a" | "attachment" | "attachments" => KindSlot::NotAnEntity(
             "附件以 sha256 寻址，走 Store::set_attachment_states（notera-store/src/apply.rs:497-499 原话）",
         ),
@@ -3960,6 +3980,7 @@ impl LocalPort for HostLocalPort {
                     Some(EntityKind::Attachment) => {
                         (EntityKind::Attachment, nil.clone(), Some(v.id.clone()))
                     }
+                    Some(EntityKind::Tag) => (EntityKind::Tag, EntityId::parse(&v.id).ok()?, None),
                     None => {
                         // 认不出的类型整条跳过：宁可下一轮重下，也不能把它写成别的实体的行
                         tracing::warn!(kind = v.kind, "远端视图里有未知类型，本条不缓存");
@@ -4029,6 +4050,7 @@ impl LocalPort for HostLocalPort {
             // 附件按 sha256 寻址、走独立队列（SYNC-PROTOCOL §13），不是这里的 UUID 实体
             Some(EntityKind::Note) => self.0.store().note_envelope_wire(&eid),
             Some(EntityKind::Folder) => self.0.store().folder_envelope_wire(&eid),
+            Some(EntityKind::Tag) => self.0.store().tag_envelope_wire(&eid),
             Some(EntityKind::Attachment) => Ok(None),
             // 认不出的类型标记：绝不当成笔记上传（那会把别的东西写进 note/ 目录）
             None => return Err(LocalError::Storage(format!("未知的实体类型标记: {kind}"))),
@@ -4076,6 +4098,9 @@ impl LocalPort for HostLocalPort {
                         }
                         KindSlot::Entity(EntityKind::Note) => {
                             mapped.push(StoreApplyOp::UpsertNote { env })
+                        }
+                        KindSlot::Entity(EntityKind::Tag) => {
+                            mapped.push(StoreApplyOp::UpsertTag { env })
                         }
                         // `kind_slot` 从不产这一臂（附件归在 NotAnEntity 里），它存在的唯一理由是
                         // **穷尽**：以后谁把词汇表改成 `Entity(Attachment)`，必须在这里表态。
@@ -4147,10 +4172,11 @@ impl LocalPort for HostLocalPort {
                         KindSlot::Entity(EntityKind::Note) => {
                             mapped.push(StoreApplyOp::AdoptConflict { env })
                         }
-                        // 文件夹没有"正文"可采纳（上面那句注释说的就是这一格）。
+                        // 文件夹与标签没有"正文"可采纳（上面那句注释说的就是这一格）。
                         // 以前它是 `if kind == "n"` 的 else：静默。现在是显式一条臂 + 一句 debug。
-                        KindSlot::Entity(EntityKind::Folder) => {
-                            tracing::debug!(kind = %kind, id = %id, "文件夹没有可采纳的正文，跳过这一条");
+                        KindSlot::Entity(EntityKind::Folder)
+                        | KindSlot::Entity(EntityKind::Tag) => {
+                            tracing::debug!(kind = %kind, id = %id, "这一种实体没有可采纳的正文，跳过");
                         }
                         KindSlot::Entity(EntityKind::Attachment) | KindSlot::NotAnEntity(_) => {}
                         KindSlot::Unknown => {
@@ -4415,6 +4441,7 @@ fn kind_tag(k: EntityKind) -> &'static str {
         EntityKind::Note => "n",
         EntityKind::Folder => "f",
         EntityKind::Attachment => "a",
+        EntityKind::Tag => "t",
     }
 }
 
@@ -4427,6 +4454,7 @@ fn tag_kind(tag: &str) -> Option<EntityKind> {
         "n" => Some(EntityKind::Note),
         "f" => Some(EntityKind::Folder),
         "a" => Some(EntityKind::Attachment),
+        "t" => Some(EntityKind::Tag),
         _ => None,
     }
 }
@@ -4953,6 +4981,7 @@ mod tests {
         let rows = app
             .list_notes(ListNotesCmd {
                 folder_id: None,
+                tag_id: None,
                 trash: false,
                 limit: 10,
                 offset: 0,
@@ -5938,6 +5967,7 @@ mod tests {
         let rows = app
             .list_notes(ListNotesCmd {
                 folder_id: None,
+                tag_id: None,
                 trash: false,
                 limit: 50,
                 offset: 0,

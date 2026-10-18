@@ -108,6 +108,20 @@ export interface FolderNode extends Folder {
   noteCount?: number;
 }
 
+/* -------------------------------------------------------------------- 标签 */
+
+/**
+ * 核心给界面的那一格标签（ADR-0022）。只有这三格是有意的：
+ * `canonical`（相等键）与别名/rev 都是核心算的派生物，递到界面就是邀请"第二个执行者"
+ * —— 那条静态判据（不许在前端做 normalize/小写比较）扫的正是这一格。
+ */
+export interface Tag {
+  id: Uuid;
+  title: string;
+  /** 引用它的**活笔记**篇数，别名链接已改写计到 winner 上（所以折叠后不会出现"0 篇/3 篇"那种读数）。 */
+  noteCount: number;
+}
+
 /* -------------------------------------------------------------------- 检索 */
 
 export interface SearchHit {
@@ -504,6 +518,15 @@ export const Commands = {
   getNote: 'get_note',
   search: 'search',
   listFolders: 'list_folders',
+  /** ADR-0022 标签族：多值组织语义。与 §6 那颗单值小色点**并存**（颜色=视觉标记，标签=检索与批量），
+   *  `set_note_color` 那条不是被它替换掉的。 */
+  listTags: 'list_tags',
+  createTag: 'create_tag',
+  renameTag: 'rename_tag',
+  deleteTag: 'delete_tag',
+  setNoteTags: 'set_note_tags',
+  /** 读侧解析过的活标签 id（`notes.tag_ids` 的原样那一列不上线，见核心 `tag_json` 那段）。 */
+  noteTags: 'note_tags',
   attachFile: 'attach_file',
   attachmentData: 'attachment_data',
   // 坏图/坏附件占位上的两个用户动作。名字与载荷都是核心那两条命令的逐字契约。

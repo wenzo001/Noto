@@ -347,6 +347,7 @@ fn list_projection_is_ordered_paginated_and_has_no_doc_field() {
     let page = store
         .list_notes(&NoteQuery {
             folder: Some(folder.clone()),
+            tag: None,
             trash: false,
             limit: 2,
             offset: 0,

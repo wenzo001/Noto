@@ -3,6 +3,7 @@
 import { computed, watch } from 'vue';
 import NoteList from '../components/NoteList.vue';
 import RichEditor from '../components/RichEditor.vue';
+import TagChips from '../components/TagChips.vue';
 import EmptyState from '../components/EmptyState.vue';
 import SkeletonRows from '../components/SkeletonRows.vue';
 import AppSelect from '../components/ui/AppSelect.vue';
@@ -91,6 +92,11 @@ const folderChoices = computed(() =>
             @update:model-value="moveToFolder($event)"
           />
         </span>
+
+        <!-- 标签那一排（ADR-0022）。**挂在文档头这一行里面**，不是插在文档头与工具条之间 ——
+             §3.4 那条几何判据量的是"工具条与文档头、与正文逐像素贴住"（整跑腿 70），
+             中间多插一行就把那条缝撑开了（第一次落地实测：390 档 `头到条 = 69px`，红）。 -->
+        <TagChips />
 
         <!--右侧动作区。`margin-left:auto` 把它推到顶栏右端，
              于是顶栏读起来是"左=这篇是什么/  右=对它做什么"，

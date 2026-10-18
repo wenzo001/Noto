@@ -137,6 +137,7 @@ fn assert_body_still_usable(b: &App, sha: &str) {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,
@@ -1055,6 +1056,7 @@ async fn a_hanging_attachment_endpoint_never_blocks_the_text_round() {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,

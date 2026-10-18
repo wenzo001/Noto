@@ -48,6 +48,10 @@ pub(crate) struct Edit {
     pub folder_id: Option<EntityId>,
     pub pinned: Option<bool>,
     pub color: Option<Option<String>>,
+    /// 标签集合（ADR-0022 D1）。`None` = 不改；`Some(vec)` = 整份替换。
+    /// 它**不进 content_hash**（与 `pinned`/`color` 同族，见 `note_wire` 那段注释），
+    /// 但会顶 rev ⇒ 脏集按 `rev <> sync_rev` 照样把它推出去。
+    pub tag_ids: Option<Vec<String>>,
     pub deleted_at: Option<Option<String>>,
     pub expected_rev: Option<Rev>,
     pub origin: RevOrigin,
@@ -73,6 +77,7 @@ impl Default for Edit {
             folder_id: None,
             pinned: None,
             color: None,
+            tag_ids: None,
             deleted_at: None,
             expected_rev: None,
             origin: RevOrigin::Local,
@@ -1131,8 +1136,10 @@ impl Store {
         let row = tx.query_row(&sql, [id.as_str()], |r| {
             let doc_json: String = r.get(2)?;
             let note = rows::note_from_row(r)?;
-            // 按位置读：`NOTE_COLS` 加列时这一位要跟着挪（加 `updated_device` 那次 21 → 22）。
-            let rowid: i64 = r.get(22)?;
+            // **按列名读，不按位置**：`rowid` 挂在 `NOTE_COLS` 尾巴后面，加一列（这次是 `tag_ids`）
+            // 就把它的位置顶歪一格 —— 旧注释里那句"加 updated_device 那次 21 → 22"就是这一族的手动记账，
+            // 而手动记账的失效方式是"红在一个跟标签毫无关系的测试里"（这次是 8 条附件队列全红）。
+            let rowid: i64 = r.get("rowid")?;
             Ok(CurNote {
                 note,
                 doc_json,
@@ -1146,7 +1153,7 @@ impl Store {
         }
     }
 
-    fn assert_editable(note: &Note) -> Result<(), StoreError> {
+    pub(crate) fn assert_editable(note: &Note) -> Result<(), StoreError> {
         if note.deleted_at.is_some() {
             // "打开中的笔记不得带 deleted_at"（DATA-MODEL §5.1 notes 表注释）
             return Err(StoreError::Constraint(format!(
@@ -1299,7 +1306,7 @@ impl Store {
                 title = ?7, plain_text = ?8, summary = ?9, char_count = ?10, block_count = ?11,
                 has_attachment = ?12, rev = ?13, sync_rev = ?14, sync_hash = ?15,
                 content_hash = ?16, updated_at = ?17, updated_device = ?18, deleted_at = ?19,
-                remote_rev = ?20
+                remote_rev = ?20, tag_ids = ?21
              WHERE id = ?1",
             params![
                 cur.note.id.as_str(),
@@ -1321,7 +1328,16 @@ impl Store {
                 now,
                 device.clone(),
                 deleted_at,
-                remote_rev.get() as i64
+                remote_rev.get() as i64,
+                // `None` = 这一笔不动标签集合 ⇒ 写回原值（不是写 `'[]'` 把它们清空）。
+                // 序列化不会失败（Vec<String>），但 `unwrap` 在这里是把"不可能"当理由用：
+                // 真返回 Err 时宁可比默认多花一次 panic 也不许静默写空集（那是丢链接）。
+                edit.tag_ids
+                    .clone()
+                    .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| "[]".into()))
+                    .unwrap_or_else(
+                        || serde_json::to_string(&cur.note.tag_ids).unwrap_or_else(|_| "[]".into())
+                    ),
             ],
         )?;
         if text_changed {
@@ -1617,6 +1633,10 @@ impl Store {
             "SELECT {} FROM notes n JOIN folders f ON f.id = n.folder_id
               WHERE (CASE WHEN ?1 THEN n.deleted_at IS NOT NULL ELSE n.deleted_at IS NULL END)
                 AND (?4 IS NULL OR n.folder_id = ?4)
+                AND (?5 IS NULL OR EXISTS(
+                      SELECT 1 FROM json_each(n.tag_ids) j
+                      JOIN tags tk ON tk.id = j.value
+                      WHERE tk.id = ?5 OR tk.alias_of = ?5))
               ORDER BY n.pinned DESC, n.updated_at DESC, n.id
               LIMIT ?2 OFFSET ?3",
             rows::LIST_COLS
@@ -1626,9 +1646,13 @@ impl Store {
         let offset = q.offset as i64;
         let folder_bind = q.folder.as_ref().map(|f| f.as_str().to_string());
         let folder_param: Option<&str> = folder_bind.as_deref();
+        // 标签那一格认**两种链接**：直接写着 winner id 的，和折叠后还写着某个别名 id 的
+        // （`tk.alias_of = ?5` 走的就是 D4 那条"不重写任何一篇笔记"）。
+        let tag_bind = q.tag.as_ref().map(|t| t.as_str().to_string());
+        let tag_param: Option<&str> = tag_bind.as_deref();
         let mut stmt = conn.prepare(&sql)?;
         let mut rows = stmt.query_map(
-            params![trash, limit, offset, folder_param],
+            params![trash, limit, offset, folder_param, tag_param],
             rows::list_from_row,
         )?;
         let out = rows.by_ref().collect::<Result<Vec<_>, _>>()?;

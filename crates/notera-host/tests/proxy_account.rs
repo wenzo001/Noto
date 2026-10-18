@@ -169,6 +169,7 @@ async fn dropping_the_proxy_makes_the_same_account_fail() {
         .store()
         .list_notes(&notera_store::NoteQuery {
             folder: None,
+            tag: None,
             trash: false,
             limit: 50,
             offset: 0,

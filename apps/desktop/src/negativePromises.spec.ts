@@ -705,21 +705,20 @@ describe('§5 文案死键：登记的每一句都必须有人引用（前端字
 });
 
 /**
- * §6 的最后一格「标签（tag）不做（数据模型里根本不存在）」—— **2026-10-13 按用户拍板改口**：
- * 归类语义由笔记 / 文件夹的**单值颜色**承担，不提供 tag 数据结构（改口全文见 `docs/design/SPEC-AMENDMENTS.md`）。
- * 这一格此前是 §6 十条里唯一零证人的那一格，其余九条各有执行者（上面那九个 describe）。
+ * §6 的「标签」那一格：A1 那条负面承诺**已于 2026-10-18 翻成正面承诺 A12**（ADR-0022 落地）。
+ * 这一格从"禁止存在"改成"**必须存在，而且只有这一个形状**"—— 形状钉不住，翻正就是空话：
  *
- * 判**四面**，因为每一面各自会漏，而"改口"只有落在数据模型上才分辨得出是口径还是撒谎：
- *  · **schema 面**：往迁移里加一个 `tags` 表 / `notes.tags` 列 = 把标签系统做进数据模型；
- *  · **DTO 面**：表还没动而行类型先长出 `tags: Vec<String>` —— 下一步界面就能用它，且这一层漂移不留 SQL 痕迹；
- *  · **控件面**：画了入口却没起中文名字（文案面干净，入口照样在屏幕上）；
- *  · **文案面**：模型没变而界面上先说"给笔记打标签" = 发明能力（与 §4.8、§3.3 同族）。
+ *  · **schema 面**：`tags` 表必须在，列集合必须恰好是那一套；`notes.tag_ids` 必须在，
+ *    而且**不许长出 `note_tags` 投影表**（那是 Joplin 五格伤疤的来源，ADR-0022 D1 明确不走）。
+ *  · **DTO 面**：Rust 的 `Note.tag_ids` 必须在；前端 `Note` interface 里**不许**有它
+ *    —— 链接的读侧只有 `note_tags` 那一条边（原样那一列含已折叠/已删的 id，画出来就是点不开的 chip）。
+ *  · **控件面**：入口的 testid 必须点名在场（画了入口没名字、有名字没入口，两面各自都抓得到）。
+ *  · **文案面**：说得出"加标签"；而**没做的**那几样（层级标签、标签管理屏、订阅/共享）不许先在文案里发明。
  *
- * **命名撞车必须分辨得出来**（与「合并」那一格同一个教训）：`notera-importer` 的 `unknown_enml_tags`
- * 是 ENEX 里没映射上的 **ENML 元素名**，`version-now-tag` 是版本历史"当前那一版"的记号 —— 两位都不许被冤枉；
- * 而"不许被冤枉"本身也要一条在场的反向自检守着：豁免名单一旦退化成"永远命中不到东西"就是假绿。
+ * **命名撞车必须仍然分辨得出来**：`unknown_enml_tags`（ENEX 元素名）与 `version-now-tag`
+ * （版本历史记号）两位继续被放过 —— 新门如果把它们判成违规，那是在误伤别人（ADR-0022 验证第 7 条）。
  */
-describe('§6 标签那一格（改口后）：没有 tag 数据结构，归类的唯一入口是单值颜色', () => {
+describe('§6 标签那一格（翻正后）：tags 表与 tag_ids 必须存在，而且只有这一个形状', () => {
   const REPO = join(SRC, '..', '..', '..');
   const readRepo = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
   /** 违规的名字集合：**整段**叫 tag/tags/label/labels（撞名的长名字不进这一族）。 */
@@ -752,40 +751,45 @@ describe('§6 标签那一格（改口后）：没有 tag 数据结构，归类�
     [...block.matchAll(/^\s*(?:readonly\s+)?(\w+)\??\s*:/gm)].map((m) => m[1] ?? '');
 
   const migrationFiles = readdirSync(join(REPO, 'migrations')).filter((f) => f.endsWith('.sql')).sort();
-  const migrationSql = migrationFiles.map((f) => readRepo(join('migrations', f))).join('\n');
+  // **先剥 SQL 注释**再抽形状：这一族迁移文件里大量用 `--` 写"为什么"，其中就有整句 SQL 的引用
+  // （0010 的文件头原样写着 `ALTER TABLE notes ADD COLUMN tag_ids`）。不剥的话，把真语句改坏
+  // 而注释还留着 ⇒ 判据绿着放过 —— 实测过：这一把自己的刀第一次就砍空了。
+  const migrationSql = migrationFiles
+    .map((f) => readRepo(join('migrations', f)))
+    .join('\n')
+    .replace(/--[^\n]*/g, '');
   const tableNames = [...migrationSql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?([a-z_][a-z0-9_]*)/gi)].map((m) => m[1] ?? '');
-  const noteCols = sqlColumns(sqlBlock(migrationSql, 'notes'));
+  const noteColsFromCreate = sqlColumns(sqlBlock(migrationSql, 'notes'));
+  // `ALTER TABLE … ADD COLUMN` 也是这张表的**有效形状**：0010 给 notes 加的 `tag_ids` 就是这么来的。
+  // 只看 CREATE 那一块的话，这一族列在判据眼里等于不存在 —— 与 ADR-0022 落地前置订正第 ② 条
+  // 量的那一格（0007 的 deleted_at 在手抄 CREATE 里丢了，两条路径却"一致地缺"）是同一个盲区。
+  const altered = (table: string): string[] =>
+    [...migrationSql.matchAll(new RegExp(`ALTER TABLE ${table} ADD COLUMN (\\w+)`, 'gi'))].map((m) => m[1] ?? '');
+  const noteCols = [...noteColsFromCreate, ...altered('notes')];
   const folderCols = sqlColumns(sqlBlock(migrationSql, 'folders'));
+  const tagCols = sqlColumns(sqlBlock(migrationSql, 'tags'));
 
   const storeTypes = readRepo('crates/notera-store/src/types.rs');
-  const rustBlocks = ['Note', 'NoteListRow', 'Folder'].map((n) => rustStruct(storeTypes, n));
+  const rustNoteFields = rustFields(rustStruct(storeTypes, 'Note'));
   const frontTypes = read('api/types.ts');
-  const tsBlocks = ['Note', 'Folder'].map((n) => tsInterface(frontTypes, n));
   const enexFields = rustFields(rustStruct(readRepo('crates/notera-importer/src/enex.rs'), 'EnexNote'));
   const ids = new Set(allTestIds());
 
-  it('对照①：schema 面真读到了那两个块（表名、列数、color 都在）—— 抽到空块的话"没有标签列"等于没扫', () => {
+  it('对照①：三面抽取器都真读到了东西（抽到空块的话"形状对上了"等于没扫）', () => {
     expect(migrationFiles.length).toBeGreaterThanOrEqual(3);
     expect(tableNames.length).toBeGreaterThanOrEqual(10);
     expect(tableNames).toContain('notes');
+    expect(tableNames).toContain('tags');
     expect(noteCols.length).toBeGreaterThanOrEqual(10);
     expect(folderCols.length).toBeGreaterThanOrEqual(8);
     expect(noteCols).toContain('color');
     expect(folderCols).toContain('color');
+    expect(tagCols.length, 'tags 表一个列都没读到').toBeGreaterThanOrEqual(10);
+    expect(rustNoteFields.length, 'Rust 的 Note 结构体没解析到').toBeGreaterThanOrEqual(6);
+    expect(rustNoteFields).toContain('color');
   });
 
-  it('对照②：DTO 面真读到了那五块，且每块都带 color（颜色的替身在模型里是在场的）', () => {
-    const blocks: Array<[string, string[]]> = [
-      ...['Note', 'NoteListRow', 'Folder'].map((n) => [`rust:${n}`, rustFields(rustStruct(storeTypes, n))] as [string, string[]]),
-      ...['Note', 'Folder'].map((n) => [`ts:${n}`, tsFields(tsInterface(frontTypes, n))] as [string, string[]]),
-    ];
-    for (const [label, fields] of blocks) {
-      expect(fields.length, `${label} 只读到 ${fields.length} 个字段（块没解析到）`).toBeGreaterThanOrEqual(6);
-      expect(fields, `${label} 块里读不到 color`).toContain('color');
-    }
-  });
-
-  it('对照③·牙齿：三支抽取器面对故意写的标签形状必须都抓到（否则"零违规"可以是"解析器没在看"）', () => {
+  it('对照·牙齿：三支抽取器面对故意写的坏形状必须抓到（否则"零违规"可以是"解析器没在看"）', () => {
     expect(sqlColumns('CREATE TABLE notes (\n  id TEXT PRIMARY KEY,\n  tags TEXT,\n)')).toContain('tags');
     expect(rustFields('pub struct Note {\n    pub id: EntityId,\n    pub tags: Vec<String>,\n}')).toContain('tags');
     expect(tsFields('export interface Note {\n  id: Uuid;\n  labels?: string[];\n}')).toContain('labels');
@@ -793,50 +797,90 @@ describe('§6 标签那一格（改口后）：没有 tag 数据结构，归类�
     expect(TAG_NAME.test('unknown_enml_tags')).toBe(false);
   });
 
-  it('对照④·撞名的两位真在场并被放过（ENML 元素名 ≠ 笔记的标签；版本记号 ≠ 标签入口）', () => {
+  it('撞名的两位真在场并被放过（ENML 元素名 ≠ 笔记的标签；版本记号 ≠ 标签入口）', () => {
     expect(enexFields.filter((f) => /tags/i.test(f))).toEqual(['unknown_enml_tags']);
     expect(enexFields.filter((f) => TAG_NAME.test(f))).toEqual([]);
     expect(ids.has('version-now-tag'), '名单里读不到 version-now-tag（豁免的对象已经不在了）').toBe(true);
   });
 
-  it('主判据·schema 面：没有任何一张表的表名落进标签那一族', () => {
-    const hits = tableNames.filter((t) => TAG_NAME.test(t));
-    expect(hits, JSON.stringify(hits)).toEqual([]);
+  it('主判据·schema 面：tags 的列集合与 notes.tag_ids 恰好是那一份，且没有 note_tags 投影表', () => {
+    const want = [
+      'alias_of', 'canonical', 'content_hash', 'created_at', 'created_device', 'deleted_at',
+      'id', 'remote_rev', 'rev', 'sync_hash', 'sync_rev', 'title', 'updated_at', 'updated_device',
+    ].sort();
+    expect([...tagCols].sort(), JSON.stringify(tagCols)).toEqual(want);
+    expect(noteCols, 'notes 少了 tag_ids：链接就不在属主记录里了').toContain('tag_ids');
+    // 多出来的那一种形状是要挡的真东西：`note_tags` 独立表 = Joplin 的重复链接 + 链接比项先到。
+    const projections = tableNames.filter((t) => /^note_tags?$/.test(t));
+    expect(projections, JSON.stringify(projections)).toEqual([]);
   });
 
-  it('主判据·schema 面：notes / folders 两块的列名里没有标签那一族', () => {
-    const hits = [...noteCols, ...folderCols].filter((c) => TAG_NAME.test(c));
+  it('主判据·DTO 面：Rust 的 Note 带 tag_ids，前端 Note 不带（读侧只有 note_tags 那一条边）', () => {
+    expect(rustNoteFields, 'Rust 的 Note 没有 tag_ids：链接就没随属主记录走').toContain('tag_ids');
+    const noteTs = tsFields(tsInterface(frontTypes, 'Note'));
+    expect(noteTs.length, '前端 Note interface 没解析到').toBeGreaterThanOrEqual(4);
+    const hits = noteTs.filter((f) => /tags?/i.test(f));
     expect(hits, JSON.stringify(hits)).toEqual([]);
+    // 前端那份 Tag 的形状只有三格（canonical/别名/rev 都不上线，见核心 tag_json）
+    const tagTs = tsFields(tsInterface(frontTypes, 'Tag'));
+    expect([...tagTs].sort(), JSON.stringify(tagTs)).toEqual(['id', 'noteCount', 'title']);
   });
 
-  it('主判据·DTO 面（Rust）：Note / NoteListRow / Folder 三块都不许长出标签字段', () => {
-    const hits = rustBlocks.flatMap(rustFields).filter((f) => TAG_NAME.test(f));
-    expect(hits, JSON.stringify(hits)).toEqual([]);
-  });
-
-  it('主判据·DTO 面（前端）：Note / Folder 两个 interface 都不许长出标签字段', () => {
-    const hits = tsBlocks.flatMap(tsFields).filter((f) => TAG_NAME.test(f));
-    expect(hits, JSON.stringify(hits)).toEqual([]);
-  });
-
-  it('主判据·控件面：全仓入口的名字里没有标签那一族，而颜色那一族真在场', () => {
-    const hits = [...ids].filter((id) => /(^|-)tags?(-|$)/i.test(id) && id !== 'version-now-tag');
-    expect(hits, JSON.stringify(hits)).toEqual([]);
-    // 替身真的在场：归类的入口只有颜色那一族（§6-11 + 2026-10-09 拍板"只做侧栏小色点"）
+  it('主判据·控件面：标签那族入口按名字在场，而颜色那一族没被替换掉', () => {
+    for (const ok of [
+      'tag-row', 'tag-input', 'tag-create', 'tag-panel',
+      'tag-section', 'tag-rename', 'tag-delete-confirm', 'tag-browse-clear',
+    ]) {
+      expect(ids.has(ok), `名单里读不到 ${ok}（界面那一族少了一个入口，命令就成了没人调的）`).toBe(true);
+    }
+    // 悬浮面板那颗**触发按钮**的名字是 prop（`testid="…"`），渲染出来才变成 data-testid，
+    // 共享的抽取器看不见它 ⇒ 在这一族自己的源文件里点名。少这一发，"入口整颗消失"
+    // 只会红在面板那几条上，而那颗再也没人按得着的触发器是死的。
+    const chips = read('components/TagChips.vue');
+    const list = read('components/TagList.vue');
+    for (const [src, name] of [[chips, 'tag-add-toggle'], [list, 'tag-delete']] as const) {
+      expect(src.includes(`testid="${name}"`), `${name} 那颗触发按钮不在源文件里了`).toBe(true);
+    }
+    // 牙齿：把 prop 写成 data-testid 之外的任何东西（例如删掉）必须被上面抓到 ——
+    // 这一句是把"抽取器看不见"这件事本身钉住，不是重复上一条。
+    expect(ids.has('tag-add-toggle'), '抽取器不该看得见 AppPopover 的 testid prop（否则上面那两行是空枪）').toBe(false);
+    // 替身没有被撤掉：D6 说的是颜色与标签**并存**
     for (const ok of ['note-color-panel', 'folder-color-panel', 'note-color-none', 'folder-color-none']) {
       expect(ids.has(ok), `名单里读不到 ${ok}`).toBe(true);
     }
   });
 
-  it('主判据·文案面：没有任何一句把"打标签 / 标签库"说成产品能力，而颜色的说法在场', () => {
-    const pairs = i18nPairs();
-    const BAN = /(打标签|加标签|添加标签|新建标签|标签库|标签管理|标签系统|标签列表|多个标签|按标签(找|搜)|给笔记标签)/;
-    for (const lie of ['给笔记打标签', '标签管理', '支持多个标签', '按标签搜索笔记']) {
-      expect(BAN.test(lie), lie).toBe(true);
+  it('主判据·相等关系只有一处：标签这一族的界面文件里不许出现第二个归一化执行者', () => {
+    // ADR-0022 D3：`canonical` 只有核心算（NFKC + 全 Unicode 小写）。界面若自己再 `toLowerCase()`
+    // 或 `normalize()` 比一次，就是"同一件事两份账"—— Joplin 那四套相等关系混在一条链上，
+    // 结果同一颗标签在四个地方算不等（本格的由来）。显示排序走 `Collator`，那不是相等关系。
+    const SECOND = /\.\s*(toLowerCase|toUpperCase)\s*\(|\.normalize\s*\(/;
+    for (const f of ['stores/tags.ts', 'components/TagChips.vue', 'components/TagList.vue']) {
+      const src = read(f);
+      expect(src.length, `${f} 读不到内容（扫描器对着空文件扫，等于没检查）`).toBeGreaterThan(200);
+      expect(SECOND.test(src), `${f} 里出现了第二个归一化执行者`).toBe(false);
     }
-    const hits = pairs.filter((p) => BAN.test(p.value)).map((p) => `${p.key}=${p.value}`);
-    expect(hits, JSON.stringify(hits)).toEqual([]);
-    // 替身那一族按**名字**钉住，不只数条数：只写"≥3 条"的话，删掉其中一句也不会红（k7 那把空刀就是这么留下的）
+    // 牙齿①：坏形状必须被抓到
+    expect(SECOND.test('const same = a.toLowerCase() === b;')).toBe(true);
+    expect(SECOND.test('a.normalize("NFC") === b')).toBe(true);
+    // 牙齿②：排序那一族真的在场（否则"没有第二个执行者"可以是"根本没有执行者"）
+    expect(read('stores/tags.ts')).toContain('Intl.Collator');
+  });
+
+  it('主判据·文案面：说得出的那几句都在，而没做的那几样不许先发明', () => {
+    const pairs = i18nPairs();
+    // 已拍板做掉的（ADR-0022 D1/D6 + 本次界面切片）：按名字钉，不只数条数
+    for (const key of ['tags.section', 'tags.add', 'tags.create', 'tags.attach', 'tags.remove', 'tags.delete']) {
+      expect(pairs.find((p) => p.key === key), `文案键 ${key} 不在了`).not.toBeUndefined();
+    }
+    expect(pairs.find((p) => p.key === 'tags.add')?.value).toBe('加标签');
+    // 仍然**没做**的那几样：层级标签（Joplin 加了又回滚）、标签管理/合并屏、订阅共享、按标签搜索的算符
+    const NOT_YET = /(层级标签|嵌套标签|标签父子|标签管理|标签合并|合并标签|标签订阅|共享标签|标签颜色|标签图标|标签筛选器)/;
+    const over = pairs.filter((p) => NOT_YET.test(p.value)).map((p) => `${p.key}=${p.value}`);
+    expect(over, JSON.stringify(over)).toEqual([]);
+    // 这条 BAN 自己也要有牙齿：写一句"标签管理"必须被抓到
+    expect(NOT_YET.test('标签管理')).toBe(true);
+    // 颜色的说法仍然在场（D6：并存，不是替换）
     expect(pairs.find((p) => p.key === 'sidebar.colorTitle'), '颜色选择器那一句标题不在了').not.toBeUndefined();
     expect(pairs.filter((p) => p.key.startsWith('sidebar.color')).length).toBeGreaterThanOrEqual(3);
   });

@@ -49,6 +49,117 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 标签（2026-10-18 第一百四十一批：**落地** —— ADR-0022 第三刀起，从 `EntityKind::Tag` 到界面 chip 与侧栏那一族；那道原子墙这次翻过去了）
+
+- **→ 0.0.146**（这一批改的是产品：新 kinds 的同步协议面 + 新表 + 新命令 + 新界面，所以升 patch）。
+- **做了什么（一次做完，因为"迁移 + 翻门"必须同批，见第一百三十九/四十批那道墙）**：
+  · **core**：`EntityKind::Tag` + `ALL`（穷尽匹配的兜底，`match` 漏一支就编译不过）+
+  `canonical.rs::canonical_tag_name`（trim → **NFKC** → 全 Unicode 小写 → 再 NFKC 到定点；
+  依赖 `icu_normalizer` 钉 `default-features = false, features = ["compiled_data"]` —— 默认特征会拉进
+  `utf8_iter`/`utf16_iter` 两个没锁版本的 crate，`--offline` 直接编不过，这条是本批实测到的）。
+  · **迁移 `0010_tags.sql`**：建 `tags`（含 `sync_hash`）、`ALTER TABLE notes ADD COLUMN tag_ids`（**不建
+  `note_tags` 投影表**，理由写在文件头第 ② 段），并把 `tombstones`/`sync_remote_index`/`sync_operations`
+  三张 CHECK 锁住的表**重建**一遍（SQLite 没有 `DROP CONSTRAINT`）；`v_dirty_entities` 加第三支。
+  · **store**：`rows::table_of`/`head_select` 收成 kind→表/列的**唯一**权威（原来四处各写一个 `match`，
+  其中 `mark_synced` 是 `if kind == Note {"notes"} else {"folders"}`）；`apply_tag`（rev 闸门 + 复活闸门 +
+  D4 折叠 `winner = min(id)`）；`tag_ids_from_env`（**没带这一键 = 保持本机原样**，带 `[]` = 明确清空）；
+  `dirty_entities`/`synced_heads`/`remote_moved_entities`/`remote_index_replace`/`mark_synced` 各加标签那一臂；
+  `note_wire` 发 `tag_ids`；`tags.rs` 一套 CRUD + `live_tag_ids`（别名改写到 winner）。
+  · **crypto / webdav / host**：`parse_kind` 认 `tag`、`kind_dir` 认 `"t"|"tag"`、`kind_slot` 认 `t`/`tag`
+  （陌生 kind 仍是**具名拒收**，0.0.142 那一刀的形状没变）、`envelope_wire` 的标签支、`delete_time`、
+  冲突卡片的标题支；六条命令（`list_tags`/`create_tag`/`rename_tag`/`delete_tag`/`set_note_tags`/`note_tags`）；
+  `NoteQuery.tag` 与 `ListNotesCmd.tag_id`。
+  · **界面**：`stores/tags.ts`（相等关系不在前端：全族零 `toLowerCase`/`normalize`，只有显示排序走 `Collator`）、
+  `TagChips.vue`（编辑器里那排 chip + 悬浮选择器，回车 = "建或认"，同名由核心折叠）、`TagList.vue`
+  （侧栏那一族：计数、点一下筛、就地改名、删除走悬浮窗确认）。
+  · **文档**：SYNC-PROTOCOL §1 kind 词汇表的四道门 + §3.1 各 kind 的 payload 键集；DATA-MODEL §3 那句
+  "没有 `note_tags`" + 新 §5.4；ADR-0022 新章"落地时又量出来的四条"；SPEC-AMENDMENTS A12 的状态行改成
+  **已落地**并撤掉 `protocol = 2` 那一格；规范 v2 §6 那句"标签（数据模型里根本不存在）"划掉。
+- **两条真缺陷是被两台真设备的判据逼出来的，不是复核读出来的**（都在上面 ADR 新章 ⑩⑪）：
+  ① `apply_note` 的**新建分支**是另一条手写 SQL，没带 `tag_ids` ⇒ 笔记过去了、链接没过去，
+  对面那台看到的是"这篇从没打过标签"（`live_tag_ids` 返回空集，红在 `tagging_a_note_…`）；
+  ② `tags.alias_of` 用的是**立即**外键 ⇒ 折叠那一发"先把输的标成别名、再插赢的那一行"里，
+  标别名那一刻 winner 还不存在，`FOREIGN KEY constraint failed` 让 `apply_remote` **整批回滚**，
+  引擎那边只留一句 `rejections=1`（红在两条折叠判据；正序反序各红一次）。改 `DEFERRABLE INITIALLY DEFERRED`。
+  顺带一条**环境事实**：`rusqlite` 的 `bundled` 特征定义了 `SQLITE_DEFAULT_FOREIGN_KEYS=1` ⇒ 裸连接不设 PRAGMA
+  也开外键（第一次撞到的时候红的是"词汇表里的 attachment 被 CHECK 拒了"，其实拒它的是 FK —— 错码会把人往错的方向带）。
+- **门禁**：`negativePromises.spec.ts` 那一族从"禁止存在"翻成"**必须存在且只有这一个形状**"六条
+  （schema 列集合逐字 / `notes.tag_ids` / 不许长出 `note_tags` / Rust `Note.tag_ids` 与前端 `Note` 不带它 /
+  控件名单点名 / 文案两句钉死 + "没做的那几样不许先发明"），并加一条**第二个归一化执行者**静态门。
+  **翻门第一版是空枪**：抽取器把 `0010` 文件头注释里那句原样引用的 `ALTER TABLE notes ADD COLUMN tag_ids`
+  当成真语句读到了 ⇒ 我把真语句改坏（`tag_label`）它照样绿。现在先剥 `--` 注释再抽形状。
+- **变异读数（每条判据各自一刀，都留在 `.logs/`）**：`mut-t1-reorder`（挪 `deleted_at` 的位置）红在列顺序；
+  `mut-t2-no-tag-branch`（去掉视图第三支）红在"标签永远不会被计划上传"；`mut-t3-no-autoincrement`
+  （撤 `AUTOINCREMENT`）红在 `sqlite_sequence` 是 `None`——而"新行 id 更大"那一格**照样绿**，
+  所以这条判据是加强之后才有力气的（加强前那一遍是**红的对照组**，见 `mut-t3-control.log` 的 `Some(44)`）；
+  `mut-t4-check-not-widened`（只抬两张表的 CHECK）证明文本腿与运行时腿**互补**：并集看不见"漏抬一张"，
+  只有真插才红；`mut-t5-extra-kind` 红在"SQL 里多 widget"；`mut-t6-stray-file` 红在"盘上有文件没被应用"；
+  界面那两把（改 `tag_ids` 列名、改 `testid="tag-add-toggle"`）各红一条。`mut-final-control.log` 是还原后的全绿。
+- **读数（本批这棵树，独占机器）**：`cargo test --workspace -- --test-threads=1` **755 / 0 / 7**
+  （101 个 result 块，`TEST_EXIT=0`；上一批台账的 734/0/6 是 0.0.145 那棵树，**多的那一条 `#[ignore]`
+  是本批 `canonical.rs` 的读数探针 `print_measured_shapes`**，不是漏了什么测试）；
+  `cargo clippy --workspace --all-targets -- -D warnings` `CLIPPY_EXIT=0`、0 条 error/warning；
+  `arch-check` **48/48**（含新命令名 ⇄ 前端声明那条与 `include_str!` 追踪那条——后者在第一跑红过：
+  `0010_tags.sql` 还没 `git add`，"本机编得过、干净检出编不过"就是它抓的）；
+  前端 `vitest run` **80 文件 / 722 条**、`vue-tsc --noEmit` **0 错**；
+  标签端到端 `--test tags_e2e` **8/8**（两台真设备 + 正反到达顺序）、`sync_surface` **16/16**、
+  `migrations_and_pragmas` **8/8**。整跑那一条 lane 的读数写在下面（与本批同树）。
+- **整跑那一遍先红两条，两条都不是"再跑一次就绿"**（`.logs/lane-147.log` 792 PASS / 2 FAIL）：
+  ① **㊷ 那一腿的 console error**：桥回 **HTTP 400** —— 那条腿注入一份 200 行的假清单，store 自动选中 `rows[0]`，
+  我新加的那一发去读 `note_tags`，而 `live_tag_ids` 对**库里没有的那一篇**抛 `QueryReturnedNoRows`。
+  读侧改成"没有这一行 = 没有标签"（`Ok(vec![])`），**坏 id 仍旧 400**：真机上"对面正在传来的 id"与"本机刚永久删掉的那篇"
+  都会走到这一格，在这儿报错等于让一次读投影去目击同步竞态。线上两条一起量，才不是一把吞掉一切的伞：
+  `note_tags(missing)` → **200 `[]`**、`note_tags("not-an-uuid")` → **400 `bad_id`**。
+  ② **腿 63 把 `tag-add-toggle` 报成"点不着"**：探针复现出 `hover(…, {position:{x:6,y:6}})` 超时，而 `elementFromPoint`
+  在那一点交回的是**一颗无 class 的祖先 `<div>`** —— 药丸（`--r-chip`）把那颗的角裁在自己的形状之外，6px 落在圆角外；
+  同一颗在有 chip 的那一屏 y 只差 5px 就命中 ⇒ 这是个**刀刃上的采样点**，不是稳定的产品缺陷。
+  腿 65 早就为这件事改成"多点取第一个命中自己的"，腿 63 还留着单点。现在两腿同一把尺，并把 `covered-by:` 与
+  Playwright 的原文一起打进读数（红要能自己说清为什么红）。**这条尺的牙是量出来的**：真拿一层盖住那颗 ⇒
+  `aim` 报 `covered-by:div` 且 hover 超时红；不盖 ⇒ 那一屏 41 颗全过。
+- **第三件事只有看截图抓得到**（`.logs/tagrow-390.png`）：390 那一档打开一篇**挂着两颗标签**的笔记，屏幕上只有
+  「+ 加标签」，两颗 chip 一颗都不画 —— 窄屏的编辑器是 `v-if` 挂上去的，点进行那一瞬 `selectedId` 已经落定，
+  `watch(noteId)` 之后没有"变化"可看，于是读侧一次都不出门；宽屏那一档只是碰巧赢在时序上（boot 时 store 晚于本组件赋值）。
+  修法 = 挂载即读（`{ immediate: true }`），判据落在 `tagChipsMount.spec.ts` **4 条**（调用边 / 两颗都画 / 空回包对照 /
+  认不出的 id 不许长出）。**变异**：把 `immediate` 摘掉 ⇒ **3 红 1 绿**（绿的正是"空回包"那一条对照，它本来就该绿）；
+  还原 ⇒ 4/4 绿。浏览器同树复量：390 那一档从 `chips:[34]` 变 `chips:[46,46,34]`。
+  读侧那一格另有一条 Rust 证人：`sync_surface.rs::reading_tags_of_a_note_that_is_not_there_answers_empty`
+  —— **变异**：把"没有这一行"改回报错 ⇒ 只有它红、其余 16 条绿；还原 ⇒ 17/17。
+  新 spec 第一版还撞了 §6 那条门**自己的对照腿**：那条门扫"属性 = 带引号字符串"这一形状，而我在测试文件里
+  原样引了一次那颗控件的名字 ⇒ 红在"抽取器不许看得见 AppPopover 的 testid prop"这一句上。红得对 ——
+  改的是我的 spec（换成按类名找那颗），**门一格没放宽**（与"门禁注释里别复述被禁的词"同一族：扫描器看不见"这是测试代码"）。
+- **重跑收口（本批最后一遍台面，`.logs/lane-149.log`）**：**794 条 PASS / 0 条 FAIL**、`LANE_EXIT=0`、`>>> 布局门禁 PASS`。
+  现场是空库 `.logs/lane149` + 本批新编的 debug 桥；跑完按端口持有者 PID（`44420`，名字核对过是 `notera-cli`）带走，
+  chrome 残留计数 0，台面自己的残骸自检报"活动 0 条 / 回收站 0 条"。两条旧红各自那一格现在的读数：
+  **㊷** 那条 console 判据 PASS（同一腿另三条满页读数在案 —— `共 18 条` ⇄ 核心真回 18 行、注入满页 ⇒ 换成 `已载入 200 条`）；
+  **腿 63** 的 §4.9 悬停实测 `46 颗（禁用 1，注入 1；选中态豁免 3）/ 无变化 0 / 基线不稳 0 / 点不着 0`。
+  **归因按实写**：这一遍跑的是**还没提交**的本批树（HEAD 当时是 `efa7bde`），台面自己在预检里就印了
+  "这份读数不许归因到任何 commit" ⇒ 提交之后本批只剩版本号那一格会变（`bump-version` 改完自证一致），
+  代码与判据与这一遍是同一份树。
+- **本批没做、按实登记的欠账**（不写成"已完备"）：① 搜索算符 `标签:` 与多选批量加/摘（清单 P5）；
+  ② **对面只改标签名**时本机侧栏要等下一次笔记变化或重启才跟上 —— 同步事件里没有"标签变了"这一族信号；
+  ③ 标签那一族入口的**浏览器几何判据**（整跑现在只判"没把既有布局带坏"，不判"这一族自己在 390/1440 两档对不对"）；
+  ④ `v_dirty_entities` 那个零消费者的死抽象（第一百三十九批量到的，处置要单独一批）；
+  ⑤ D8 拍 B 的落点：任务 #4 那格"这台设备不认识某种记录，升级即可"的可见化；
+  ⑥ 三平台真机与 `sharp_s`（`ß`/`ss`）那格大小写折叠的口径；
+  ⑦ **导入器还没把 ENEX 的 `<tag>` 映射进新表** —— 原先那句理由（"本库没有标签列"）从今天起是假的，
+  已就地订正成"导入器自己欠的一格"（`enex.rs` 偏离清单第 2 条）；补那一格要连带拍"同名标签并入既有那一颗、
+  还是每篇各建一颗"。`<tag>` 照旧逐条点名在 `unknown_enml_tags` 里，不会悄悄消失。
+- **台面之后又扫了一遍"文档对代码"的账**（这一批把标签从"明确不做"翻成"已落地"，被翻的口径不止一处）：
+  `UNIMPLEMENTED-INVENTORY-2026-10-12.md` 那一行原来写"No `tags` table/column anywhere"并已按 10-12 读数的身份
+  改写（标签 ⇒ ✅ IMPLEMENTED 并注日期；分面/正则留在 ❌），同文件 §未做清单那一格 `标签/分面/正则` 也拆开；
+  `PRODUCTION-READINESS.md` 那两句（"Evernote 的标签本库表达不了"与"标签要不要成为一等概念等你拍"）各补一条
+  带日期的订正，写清"拍板已发生、而导入那一格仍欠"。三处都是**文字与注释**，没有动行为；
+  复验跑的是 `arch-check` 与 `cargo test -p notera-importer`（见下）。
+- **最终树（0.0.146）上的四条读数**：`cargo test --workspace -- --test-threads=1` **756 / 0 / 7**（`TEST_EXIT=0`）、
+  `cargo clippy --workspace --all-targets -- -D warnings` **0 条 error/warning**、`arch-check` **48/48**、
+  前端 `vitest run` **81 文件 / 726 条全过**。
+  中间 `arch-check` 红过一次，**红的不是本批任何一条判据，而是 `hygiene:scratch-budget-guarded`** ——
+  我自己这一场的探针把 `.logs` 的残骸预算顶穿了（80 项 ⇒ 该删 6 项）。处置按仓内规矩走
+  `scripts/clean-scratch.mjs`（**不手删**）：删 6 项，台账点名的两份台面日志、9 份 `mut-*` 变异读数与那份
+  受保护的 `*.patch` 逐样核过都还在 ⇒ 复跑 48/48。这一格正是那条纪律的又一次正例：残骸的红要由机器报，
+  而我上一批给它加的"未知参数一律停手"今天没被绕开。
+  **归因分清**：整跑那 794 条是 **bump 前**那一遍（与本批代码同一份树，只差版本号）；上面这四条是 bump 之后的最终树。
+
 ### 标签（2026-10-18 第一百四十批：第二次试装 —— **notera-store 那一半接通并全绿**，又量出三条；仍停在同一道原子墙前 ⇒ 只动 ADR 与台账，不升版本）
 - **做了什么**：把 `git apply` 回来的现场往前推了一整块：`rows::table_of` 收成**唯一**的 kind→表名权威，
   `apply_delete` / `apply_purge` / `set_remote_rev_tx` / `remote_index_replace`(加 bump_tag) /

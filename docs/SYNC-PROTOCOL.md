@@ -32,7 +32,8 @@ Notera ⇄ 用户自有 WebDAV 的同步协议 v1。本文是**规范性**文档
 │   └── seg-<NNNN>.json             基线分段，不可变命名，内容随压实而变
 ├── records/
 │   ├── note/<id>.json              一条笔记 = 一个信封文件（可变）
-│   └── folder/<id>.json
+│   ├── folder/<id>.json
+│   └── tag/<id>.json               ADR-0022：标签实体（第四种 kind）
 ├── attachments/<2hex>/<sha256>     内容寻址，一旦存在即不可变
 ├── locks/<device>.json             尽力而为租约（非正确性依赖，见 §11.4）
 └── tmp/<device>-<nonce>.json       原子写暂存（>24h 由维护轮清理）
@@ -41,6 +42,16 @@ Notera ⇄ 用户自有 WebDAV 的同步协议 v1。本文是**规范性**文档
 * 目录名一律小写；`<id>` 为 UUIDv7 字符串（实测路径安全，无 `/ ? space`）。
 * `<2hex>` = sha256 前两个十六进制字符，用于摊平单目录文件数。
 * 路径构造集中在 `notera-webdav::RemotePath`，**必须**校验 `id` 字符集并拒绝任何 `..`（目录穿越即安全事故）。
+* **kind 词汇表**（`note | folder | attachment(s) | tag`）在四处必须同时在场，缺一个就是一条真缺陷：
+  `notera_core::EntityKind`（含 `ALL`/`dir()`/`tag()`/`from_tag()`）、
+  `notera_webdav::path::kind_dir`（**fetch 之前**那道门，认不出就 `BadKind`，记录根本取不回来）、
+  `notera_crypto::envelope::parse_kind`（`Envelope.kind` 是类型化 serde，陌生 variant 反序列化不过）、
+  以及 host 的 `kind_slot`（清单里出现我不认识的条目 ⇒ **具名拒收**，不静默丢）。
+  这一族有机器看守：`crates/notera-store/tests/migrations_and_pragmas.rs` 的
+  `kind_vocabulary_in_sql_matches_entity_kind`（SQL 的 CHECK ⇄ 类型的双向差集 + 运行时接受/拒绝）。
+* **标签的链接不是同步项**：笔记↔标签的多对多嵌在笔记记录自己的 payload 里
+  （`tag_ids: [id]`，与 `folder_id`/`pinned`/`color` 同族，不进 `content_hash`）。
+  ⇒ 没有 `note_tags/` 这一族目录，也就没有 Joplin 那格"链接比项先到"的竞态（ADR-0022 D1）。
 
 ---
 
@@ -95,6 +106,31 @@ Notera ⇄ 用户自有 WebDAV 的同步协议 v1。本文是**规范性**文档
 | `enc.alg=none` 且 `hash_alg=sha256` | v1 默认；开启 E2EE 后 `hash_alg` 必须转 `hmac-sha256`，否则泄露明文等价指纹 |
 
 `purged=true` 的记录是**墓碑公告**：`payload` 为 `null`（即便 `alg=none`），只保留 `id/rev/hash/deleted_at/purged`。它使"永久删除"可传播（§8）。
+
+### 3.1 各 kind 的 `payload` 键集（决定 `hash`，不许漂移）
+
+| kind | payload 的键 | 为什么是这一组 |
+|---|---|---|
+| `note` | `v`/`content` ⊕ `folder_id`/`pinned`/`color`/`tag_ids` | 富文本那一部分是哈希对象；四个同步键是 **`Document` 归一时丢弃的未知顶层键**，所以 `hash` 仍等于 `sha256(canonical(doc))`（§3 那条约束因此继续成立） |
+| `folder` | `name`/`parent_id`/`color`/`sort_order`/`system_kind` | 与 `store::folder_hash` 的入参逐字一致 |
+| `tag` | **只有 `title`** | 见下 |
+
+**标签的 `canonical` 与 `alias_of` 不上线**，因此也不参与 `content_hash`（`tags.rs::tag_hash`）。两条理由都是实测出来的，不是审美：
+
+* `canonical` 是 `title` 的纯函数（核心那一处，NFKC + 全 Unicode 小写）。传了它 ⇒ 两台构建的 ICU 归一化表一旦不同步，
+  就把一次**格式分歧**烘进哈希里；不传 ⇒ 两边各自算，收敛到同一个结果。
+* `alias_of`（D4 折叠的输家指针）是"本机看到的这批记录"套同一条规则（`winner = min(id)`）算出的**派生本地事实**。
+  传了它并且把它算进哈希，就会造出一颗**真毒丸**：折叠时给输的那颗写 `alias_of` 是不顶 rev 的本地降级，
+  于是那一行的 `content_hash` 与 wire 里的 payload 对不上 ⇒ I6 闸门整批回滚，
+  症状是"对面有一颗标签之后，本机再也同步不进来任何东西"。
+  这一格由 `crates/notera-host/tests/tags_e2e.rs` 的两台设备折叠判据守着（正反两个到达顺序各一条）。
+
+**标签记录带 `protocol: 1`，本仓库 `MAX_PROTOCOL` 仍是 1**（ADR-0022 D7 ② 原写的是"tag 记 `protocol = 2`"，
+本批按实测撤下这一格）。理由：这次变的是**kind 词汇表**，不是内容格式，而词汇表已经有三道更精确的门
+（`kind_dir` 在 fetch 之前就拒、`Envelope.kind` 是类型化 serde、host 的 `kind_slot` 具名拒收）；
+把 `MAX_PROTOCOL` 抬到 2 反而会**削弱**那道为"新版写、旧版读"准备的门 —— 从此协议 2 的**笔记**记录也会被本机照收。
+旧设备的实际行为与版本门无关，由 ADR-0022 D8 量出来（每轮一次具名拒收、一个请求，不风暴），
+并且用户已在 D8 拍 B：**不抬 `min_protocol`**，把"这台该升级了"做到界面可见（任务 #4 那一格）。
 
 ---
 

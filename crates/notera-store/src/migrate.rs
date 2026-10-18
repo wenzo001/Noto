@@ -66,6 +66,18 @@ pub(crate) static MIGRATIONS: &[Migration] = &[
         name: "0009_attachment_reclaims",
         sql: include_str!("../../../migrations/0009_attachment_reclaims.sql"),
     },
+    // ADR-0022 标签。**这条不是"加一张表"，是重建三张被 CHECK 锁住 kind 词汇表的表** ——
+    // 风险全在重建那一步（丢列 / AUTOINCREMENT 序列接不上 / 视图少一支）。
+    // 证人写在 `migrations_and_pragmas.rs`：列集合不许变小（点名 0007 那列）、行内容逐字节相等、
+    // 序列必须大于旧最大值、盘上文件数与注册版本号对撞。
+    // ⚠ 这里用 `//` 而不是 `///`：数组字面量里的元素**接不了文档注释**，
+    //   写成 `///` 是 `unused_doc_comment` 警告，而 CI 的 clippy 是 `-D warnings` ⇒ 直接红。
+    //   老库这一条跑过的代价：`Store::open` 迁移前那份 `notera.sqlite.pre-migration.9` 备份照旧会留。
+    Migration {
+        ver: 10,
+        name: "0010_tags",
+        sql: include_str!("../../../migrations/0010_tags.sql"),
+    },
 ];
 
 pub(crate) fn supported_version() -> u32 {

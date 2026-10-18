@@ -6,6 +6,7 @@
 use crate::error::StoreError;
 use crate::rows;
 use crate::store::Store;
+use crate::tags::Tag;
 use crate::types::*;
 use notera_core::{EntityId, EntityKind, Rev};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -222,6 +223,10 @@ impl Store {
         for (kind, sql) in [
             (EntityKind::Note, "SELECT id, rev, content_hash FROM notes WHERE rev = sync_rev AND deleted_at IS NULL"),
             (EntityKind::Folder, "SELECT id, rev, content_hash FROM folders WHERE rev = sync_rev AND deleted_at IS NULL"),
+            // 少了这一臂的症状最难归因：新设备**已经**有这颗标签（上一轮传上来的），
+            // 但引擎在脏集里看不见"已确认"这一档，于是每轮重下同一条 —— 与 note/folder
+            // 当年那条"260 条的库卡在 196/260"是同一个形状（见本函数上面那段注释）。
+            (EntityKind::Tag, "SELECT id, rev, content_hash FROM tags WHERE rev = sync_rev AND deleted_at IS NULL"),
         ] {
             let mut stmt = conn.prepare(sql)?;
             let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?)))?;
@@ -301,6 +306,17 @@ impl Store {
                 AND NOT EXISTS(SELECT 1 FROM tombstones t
                                  WHERE t.entity_type='folder' AND t.entity_id=f.id AND t.purged=1)
               ORDER BY f.id",
+        )?;
+
+        collect_dirty(
+            &conn,
+            &mut out,
+            EntityKind::Tag,
+            "SELECT t.id, t.rev, t.content_hash, t.sync_rev, t.deleted_at FROM tags t
+              WHERE t.rev <> t.sync_rev
+                AND NOT EXISTS(SELECT 1 FROM tombstones t2
+                                 WHERE t2.entity_type='tag' AND t2.entity_id=t.id AND t2.purged=1)
+              ORDER BY t.id",
         )?;
 
         if account_known {
@@ -503,7 +519,11 @@ impl Store {
                     "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
                 ));
             }
-            let table = if kind == EntityKind::Note { "notes" } else { "folders" };
+            // 这一行以前是 `if kind == Note {"notes"} else {"folders"}` ——
+            // 加第四种实体时它会**静默把标签的确认点写进 folders**：编得过、不红，
+            // 而症状是"标签的 sync_rev 永远不动 ⇒ 每轮重传"（最难归因的那一类）。
+            // 现在表名只有 `rows::table_of` 一个来源，附件在这里也是具名拒绝。
+            let table = rows::table_of(kind)?;
             let cur_rev: Option<i64> = tx
                 .query_row(&format!("SELECT rev FROM {table} WHERE id = ?1"), [id.as_str()], |r| r.get(0))
                 .optional()?;
@@ -575,16 +595,7 @@ impl Store {
         remote_rev: Rev,
         hash12: &str,
     ) -> Result<bool, StoreError> {
-        let table = match kind {
-            EntityKind::Note => "notes",
-            EntityKind::Folder => "folders",
-            // 附件以 sha256 为主键，UUID 契约表达不了（见 Store::set_attachment_states）
-            EntityKind::Attachment => {
-                return Err(StoreError::Constraint(
-                    "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
-                ))
-            }
-        };
+        let table = rows::table_of(kind)?;
         let n = tx.execute(
             &format!("UPDATE {table} SET remote_rev = ?2 WHERE id = ?1"),
             params![id.as_str(), remote_rev.get() as i64],
@@ -652,6 +663,9 @@ impl Store {
             let mut bump_folder = tx.prepare(
                 "UPDATE folders SET remote_rev = MAX(remote_rev, ?2) WHERE id = ?1",
             )?;
+            let mut bump_tag = tx.prepare(
+                "UPDATE tags SET remote_rev = MAX(remote_rev, ?2) WHERE id = ?1",
+            )?;
             let mut stmt = tx.prepare(
                 "INSERT INTO sync_remote_index (account_id, kind, entity_id, rev, hash12, size, deleted, purged, seg, deleted_at, updated_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -669,6 +683,9 @@ impl Store {
                     }
                     EntityKind::Folder => {
                         bump_folder.execute(params![key, e.rev.get() as i64])?;
+                    }
+                    EntityKind::Tag => {
+                        bump_tag.execute(params![key, e.rev.get() as i64])?;
                     }
                     // 附件以 sha256 寻址，实体行上没有 remote_rev 这一档（见 set_remote_rev_tx）
                     EntityKind::Attachment => {}
@@ -1430,6 +1447,23 @@ impl Store {
         env.as_ref().map(wire_bytes).transpose()
     }
 
+    /// 见 [`Store::note_envelope_wire`]（标签版，ADR-0022 D1）。
+    ///
+    /// 软删除的标签照样发**内容记录**（带 `deleted_at`），与笔记/文件夹同一口径：
+    /// 删除是"内容的一次修改"，不是"文件消失"（ADR-0006）。只有行真的没了（永久删除）
+    /// 才退化成墓碑公告。
+    pub fn tag_envelope_wire(&self, id: &EntityId) -> Result<Option<Vec<u8>>, StoreError> {
+        let id = id.clone();
+        let device = self.device.to_string();
+        let env = self.with_read(|conn| -> Result<Option<serde_json::Value>, StoreError> {
+            match Self::read_tag_tx(conn, &id)? {
+                Some(t) => Ok(Some(tag_wire(&t, &device))),
+                None => tombstone_wire(conn, EntityKind::Tag, &id, &device),
+            }
+        })?;
+        env.as_ref().map(wire_bytes).transpose()
+    }
+
     // ----------------------------------------------------------- 冲突收件箱 -----
 
     /// 收件箱里是否已经有一张**同样的**未处理卡片（同实体、同一对哈希）。
@@ -1541,7 +1575,11 @@ impl Store {
     pub fn remote_moved_entities(&self, account: &str) -> Result<Vec<DirtyEntity>, StoreError> {
         let conn = self.read()?;
         let mut out = Vec::new();
-        for (table, kind) in [("notes", EntityKind::Note), ("folders", EntityKind::Folder)] {
+        for (table, kind) in [
+            ("notes", EntityKind::Note),
+            ("folders", EntityKind::Folder),
+            ("tags", EntityKind::Tag),
+        ] {
             let mut stmt = conn.prepare(&format!(
                 "SELECT e.id, e.rev, e.content_hash, e.sync_rev FROM {table} e
                    JOIN sync_remote_index r
@@ -1708,6 +1746,9 @@ fn note_wire(n: &Note, device: &str) -> Result<serde_json::Value, StoreError> {
     map.insert("folder_id".into(), serde_json::json!(n.folder_id.as_str()));
     map.insert("pinned".into(), serde_json::json!(n.pinned));
     map.insert("color".into(), serde_json::json!(n.color));
+    // ADR-0022 D1：标签链接就住在这里（与上面三键同一族，都不进 content_hash ——
+    // `Document` 归一时丢弃未知顶层键，所以 `sha256(canonical(payload)) == content_hash` 仍成立）。
+    map.insert("tag_ids".into(), serde_json::json!(n.tag_ids));
     Ok(envelope(
         EntityKind::Note,
         &n.id,
@@ -1741,6 +1782,25 @@ fn folder_wire(f: &Folder, device: &str) -> serde_json::Value {
         &f.updated_at,
         device,
         f.deleted_at.as_deref(),
+        false,
+        payload,
+    )
+}
+
+/// 标签 `payload` 只有 `title` 一格，与 `tags.rs::tag_hash` 的键集**必须是同一份**：
+/// `hash == sha256(canonical(payload))` 是 I6 闸门复核的东西，多一个键就是整批回滚。
+/// `canonical`/`alias_of` 都不上线（理由写在 `tag_hash` 上面那段）。
+fn tag_wire(t: &Tag, device: &str) -> serde_json::Value {
+    let payload = serde_json::json!({ "title": t.title });
+    envelope(
+        EntityKind::Tag,
+        &t.id,
+        t.rev,
+        Some(t.sync_rev),
+        &t.content_hash,
+        &t.updated_at,
+        device,
+        t.deleted_at.as_deref(),
         false,
         payload,
     )

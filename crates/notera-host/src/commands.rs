@@ -392,6 +392,29 @@ pub struct RenameFolderCmd {
     pub name: String,
 }
 
+/// 标签命令的入参（ADR-0022）。`title` 是用户原样看到的那一份；
+/// **`canonical` 不在这里**——相等键由核心算，界面递什么都是第二份真相（D3）。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateTagCmd {
+    pub title: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameTagCmd {
+    pub id: String,
+    pub title: String,
+}
+
+/// 整份替换那篇笔记的标签集合（与 `pinned`/`color` 同一族：集合本身就是这一笔的全部内容）。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetNoteTagsCmd {
+    pub id: String,
+    pub tag_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MoveFolderCmd {
@@ -405,6 +428,9 @@ pub struct MoveFolderCmd {
 pub struct ListNotesCmd {
     #[serde(default)]
     pub folder_id: Option<String>,
+    /// 按标签筛（ADR-0022）。侧栏点一颗标签就是这一格。
+    #[serde(default)]
+    pub tag_id: Option<String>,
     #[serde(default)]
     pub trash: bool,
     #[serde(default = "default_limit")]
@@ -668,6 +694,23 @@ impl From<notera_store::StoreError> for CmdError {
 
 type R<T> = Result<T, CmdError>;
 
+/// 标签上线给界面的那一格：`{id, title, noteCount}`。
+///
+/// 只有这三格是**有意的**：`canonical`/`alias_of`/`rev` 都是核心的派生物，
+/// 递到界面就是邀请"第二个执行者"（ADR-0022 D3 那条静态判据扫的正是这类）。
+/// `noteCount` 走 `tag_note_counts` —— 它已把别名链接改写计到 winner 上，
+/// 所以折叠之后不会出现"winner 0 篇、输家 3 篇"这种读数。
+fn tag_json(
+    t: &notera_store::Tag,
+    counts: &std::collections::BTreeMap<String, i64>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": t.id.as_str(),
+        "title": t.title,
+        "noteCount": counts.get(t.id.as_str()).copied().unwrap_or(0),
+    })
+}
+
 fn id(s: &str) -> R<EntityId> {
     EntityId::parse(s).map_err(|_| CmdError::of("bad_id", false))
 }
@@ -849,6 +892,49 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
             j(serde_json::Value::Null)
         }
         "list_folders" => j(app.list_folders()?),
+        // ------------------------------------------------------------ 标签（ADR-0022）
+        "list_tags" => {
+            let counts = app.store().tag_note_counts()?;
+            let tags = app.store().list_tags()?;
+            j(tags
+                .iter()
+                .map(|t| tag_json(t, &counts))
+                .collect::<Vec<_>>())
+        }
+        "create_tag" => {
+            let c: CreateTagCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let counts = app.store().tag_note_counts()?;
+            j(tag_json(&app.store().create_tag(&c.title)?, &counts))
+        }
+        "rename_tag" => {
+            let c: RenameTagCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let counts = app.store().tag_note_counts()?;
+            j(tag_json(
+                &app.store().rename_tag(&id(&c.id)?, &c.title)?,
+                &counts,
+            ))
+        }
+        "delete_tag" => {
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            app.store().delete_tag(&id(&c.id)?)?;
+            j(serde_json::Value::Null)
+        }
+        "set_note_tags" => {
+            let c: SetNoteTagsCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            j(app.to_dto(app.store().set_note_tags(&id(&c.id)?, &c.tag_ids)?)?)
+        }
+        "note_tags" => {
+            // 读侧单独一条而不是塞进笔记 DTO：`notes.tag_ids` 存的是**原样**（可能含已折叠/已删的 id），
+            // 界面要的是解析过的那一份，两者混在一个字段里迟早有人拿错。
+            let c: IdCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let ids = app.store().live_tag_ids(&id(&c.id)?)?;
+            j(ids)
+        }
         "search" => {
             let c: SearchCmd =
                 serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;

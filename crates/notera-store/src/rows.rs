@@ -17,7 +17,7 @@ use rusqlite::{params, Connection, Row};
 /// 2026-10-10 加 `updated_device` 时那一位就从 21 挪到 22；漏改的话"当前行"会读到别的列上。
 pub(crate) const NOTE_COLS: &str = "id, folder_id, doc, doc_format, title, plain_text, summary, \
      char_count, block_count, has_attachment, pinned, color, rev, sync_rev, sync_hash, remote_rev, \
-     content_hash, created_at, updated_at, deleted_at, purged_at, updated_device";
+     content_hash, created_at, updated_at, deleted_at, purged_at, updated_device, tag_ids";
 
 /// 列表投影：绝不 `SELECT doc`（性能约束，DATA-MODEL §13）。
 pub(crate) const LIST_COLS: &str = "n.id, n.folder_id, f.name, n.title, n.summary, n.char_count, \
@@ -40,6 +40,7 @@ pub(crate) fn kind_tag(kind: EntityKind) -> &'static str {
         EntityKind::Note => "note",
         EntityKind::Folder => "folder",
         EntityKind::Attachment => "attachment",
+        EntityKind::Tag => "tag",
     }
 }
 
@@ -48,8 +49,55 @@ pub(crate) fn kind_from_tag(s: &str) -> Result<EntityKind, StoreError> {
         "note" => EntityKind::Note,
         "folder" => EntityKind::Folder,
         "attachment" => EntityKind::Attachment,
+        "tag" => EntityKind::Tag,
         other => return Err(StoreError::Constraint(format!("未知 entity_type: {other}"))),
     })
+}
+
+/// **kind → 实体表名的唯一权威**（ADR-0022 落地前置订正第 ②/⑤ 条之外最要紧的一条）。
+///
+/// 为什么要收成一个函数而不是每处各写一个 `match`：这一族以前有四处
+/// （`apply_delete` / `apply_purge` / `set_remote_rev_tx` / `mark_synced`），
+/// 其中 `mark_synced` 到今天还是 `if kind == Note {"notes"} else {"folders"}` ——
+/// **加第五种实体时它会静默把标签的确认点写进 `folders`**：编得过、不红、数据进错表，
+/// 而且错得最隐蔽（标签的 `sync_rev` 永远不动 ⇒ 每轮重传，用户只看到"同步转圈"）。
+/// 附件在这里也是一次具名拒绝（sha256 寻址，UUID 契约表达不了），不是 `else` 兜底。
+/// 判据：`crates/notera-store/tests/sync_surface.rs` 里那条 `mark_synced_routes_each_kind_to_its_own_table`
+/// （四个 kind 各自要到自己的表；把它改回 `if/else` 会红，因为附件/标签那一臂的错会浮出来）。
+pub(crate) fn table_of(kind: EntityKind) -> Result<&'static str, StoreError> {
+    match kind {
+        EntityKind::Note => Ok("notes"),
+        EntityKind::Folder => Ok("folders"),
+        EntityKind::Tag => Ok("tags"),
+        EntityKind::Attachment => Err(StoreError::Constraint(
+            "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+        )),
+    }
+}
+
+/// `kind → "读回 rev/sync_rev/标题快照" 那一句`。和 `table_of` 同一个理由：
+/// 标题列在 `notes` 叫 `title`、在 `folders`/`tags` 叫 `name`，以前靠一个 `match` 的两臂各写一遍 SQL，
+/// 少一臂就编译不过 —— 但**写错一臂**（拿 folders 那句去查 notes 的列）只有跑到那一条才炸。
+/// 合成一份之后，表名与列名从同一个分支出来，配不成对就写不出来。
+pub(crate) fn head_select(kind: EntityKind) -> Result<String, StoreError> {
+    let table = table_of(kind)?;
+    let title_col = match kind {
+        // 列名照各表自己的 DDL：`notes.title` / `tags.title`（0010）/ `folders.name`（0001）。
+        // 这里写错一列不会"少个字段"，是**整条 apply_purge 在运行时炸 no such column**，
+        // 所以它由 `crates/notera-host/tests/tags_e2e.rs::a_purged_tag_leaves_its_title_in_the_tombstone`
+        // 那条判据量着：永久删除一枚标签，墓碑的 `title_snap` 必须就是它的标题 ——
+        // 列名拿错（`folders.name` 用在 `tags` 上）在这一发就 no such column。
+        EntityKind::Note | EntityKind::Tag => "title",
+        EntityKind::Folder => "name",
+        EntityKind::Attachment => {
+            return Err(StoreError::Constraint(
+                "附件以 sha256 寻址：请用 Store::set_attachment_states".into(),
+            ))
+        }
+    };
+    Ok(format!(
+        "SELECT rev, sync_rev, {title_col} FROM {table} WHERE id = ?1"
+    ))
 }
 
 /// 行映射内部用：错误借道 `rusqlite::Error`。
@@ -107,6 +155,16 @@ pub(crate) fn note_from_row(row: &Row) -> rusqlite::Result<Note> {
         deleted_at: row.get(19)?,
         purged_at: row.get(20)?,
         updated_device: row.get(21)?,
+        // 第 22 列：JSON 数组文本。解析失败不当"没有标签"处理 —— 那等于**静默丢掉用户的链接**，
+        // 而且下一次写回就把空集落库了（一次读侧的宽容变成永久的数据丢失）。让它红。
+        tag_ids: {
+            let raw: String = row.get(22)?;
+            serde_json::from_str::<Vec<String>>(&raw).map_err(|e| {
+                into_sql(StoreError::Constraint(format!(
+                    "notes.tag_ids 不是合法 JSON 数组: {e}"
+                )))
+            })?
+        },
     })
 }
 

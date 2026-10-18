@@ -86,6 +86,7 @@ impl Device {
             .store()
             .list_notes(&notera_store::NoteQuery {
                 folder: None,
+                tag: None,
                 trash: false,
                 limit: 50,
                 offset: 0,
