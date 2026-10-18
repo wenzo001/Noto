@@ -89,8 +89,11 @@
   我没有擅自生成 keystore、也没把签名塞进 CI。
 - **v0.0.145 的远程状态记在这里**：`release.yml` 对 `866f66b` **success**（六件产物 + `SHA256SUMS.txt` 已在 draft 上）、
   `audit.yml` 对 tag 与分支两条 push 均 **success**；`ci.yml` 那一条对 `866f66b` 是 **cancelled**
-  —— 被本批之前的 `daaeb0d` 推送取消（它的 concurrency 组按 ref 且 `cancel-in-progress: true`），
-  **所以"CI 整条绿"这句此刻只对 `daaeb0d` 及之后的 tip 成立**，不许写成对 `866f66b` 成立。
+  —— 被本批之前的 `daaeb0d` 推送取消（它的 concurrency 组按 ref 且 `cancel-in-progress: true`）。
+  **补上后来的那一遍（同批之内，不另起批）**：`ci.yml` 对 tip **`8af5f76` 整条 success**（21 步全过，含第 12 步 fmt、
+  第 14 步 Rust 全量串行、第 15 步前端全量、第 19 步 cargo-audit 全量、第 21 步"产物一致性"那次 release 构建）
+  —— 这一棵树含第一百三十六到一百三十八批的全部改动，所以**当前可以引用的那句是"main 的 tip 整条绿"**，
+  而对 `866f66b` 那一个 commit 单独说"CI 绿"仍然不成立（那遍被取消，没跑完）。
 
 
 ### 工装（2026-10-18 第一百三十七批：#8 关掉 —— `clean-scratch` 对没听见的参数不再沉默，可逆证明从此不算残骸；只动工装 ⇒ 不升版本）
