@@ -64,7 +64,10 @@ impl Bundle {
     }
 }
 
-fn write_options() -> zip::write::FileOptions<'static, ()> {
+/// zip 9 的 `FileOptions` 多了第二个生命周期（`'k`/`'n`，装的是注释/密码那类借用）。
+/// 这里每次都造一份返回值而不是复用同一个 `opts` —— zip 9 起它不再是 `Copy`，
+/// 而"每条目现取一份"本来就没有成本（`Deflated` 是常量）。
+fn write_options() -> zip::write::FileOptions<'static, 'static, ()> {
     zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated)
 }
 
@@ -74,7 +77,6 @@ pub fn write_bundle(path: &Path, bundle: &Bundle) -> Result<(), ImportError> {
         source: e,
     })?;
     let mut zip = zip::ZipWriter::new(file);
-    let opts = write_options();
 
     let manifest = bundle.manifest.clone().unwrap_or(Manifest {
         format: BUNDLE_FORMAT,
@@ -86,15 +88,20 @@ pub fn write_bundle(path: &Path, bundle: &Bundle) -> Result<(), ImportError> {
         // 调用方没给 manifest 时合成的这份 = 整库，不是子树
         partial: false,
     });
-    write_json(&mut zip, &opts, MANIFEST, &manifest)?;
-    write_json(&mut zip, &opts, FOLDERS, &bundle.folders)?;
-    write_json(&mut zip, &opts, TOMBSTONES, &bundle.tombstones)?;
+    write_json(&mut zip, write_options(), MANIFEST, &manifest)?;
+    write_json(&mut zip, write_options(), FOLDERS, &bundle.folders)?;
+    write_json(&mut zip, write_options(), TOMBSTONES, &bundle.tombstones)?;
     for note in &bundle.notes {
         let id = note_id(note)?;
-        write_json(&mut zip, &opts, &format!("{NOTES_PREFIX}{id}.json"), note)?;
+        write_json(
+            &mut zip,
+            write_options(),
+            &format!("{NOTES_PREFIX}{id}.json"),
+            note,
+        )?;
     }
     for (sha, bytes) in &bundle.attachments {
-        zip.start_file(format!("{ATTACH_PREFIX}{sha}"), opts)
+        zip.start_file(format!("{ATTACH_PREFIX}{sha}"), write_options())
             .map_err(|e| ImportError::Bundle(e.to_string()))?;
         zip.write_all(bytes)
             .map_err(|e| ImportError::Bundle(e.to_string()))?;
@@ -106,12 +113,12 @@ pub fn write_bundle(path: &Path, bundle: &Bundle) -> Result<(), ImportError> {
 
 fn write_json<T: Serialize>(
     zip: &mut zip::ZipWriter<std::fs::File>,
-    opts: &zip::write::FileOptions<'_, ()>,
+    opts: zip::write::FileOptions<'_, '_, ()>,
     name: &str,
     value: &T,
 ) -> Result<(), ImportError> {
     let body = serde_json::to_vec_pretty(value).map_err(|e| ImportError::Bundle(e.to_string()))?;
-    zip.start_file(name, *opts)
+    zip.start_file(name, opts)
         .map_err(|e| ImportError::Bundle(e.to_string()))?;
     zip.write_all(&body)
         .map_err(|e| ImportError::Bundle(e.to_string()))?;
@@ -132,7 +139,12 @@ pub fn read_bundle(path: &Path) -> Result<Bundle, ImportError> {
         let mut entry = zip
             .by_index(index)
             .map_err(|e| ImportError::Bundle(e.to_string()))?;
-        let name = entry.name().to_string();
+        // zip 9 起 `name()` 回 `Result<Cow<str>, ZipError>`（名字可能不是合法 UTF-8），
+        // 而且它借用 entry ⇒ 取完立刻落成 owned String，下面才敢 `read_to_end`。
+        let name = entry
+            .name()
+            .map_err(|e| ImportError::Bundle(format!("条目名字读不出来: {e}")))?
+            .to_string();
         let mut buf = Vec::new();
         entry
             .read_to_end(&mut buf)

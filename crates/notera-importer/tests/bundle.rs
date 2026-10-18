@@ -93,7 +93,7 @@ fn a_bundle_written_before_the_partial_flag_still_reads_back_as_a_full_library()
     .unwrap();
     let file = std::fs::File::create(&path).unwrap();
     let mut zip = zip::ZipWriter::new(file);
-    let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+    let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
     zip.start_file("manifest.json", opts).unwrap();
     std::io::Write::write_all(&mut zip, &body).unwrap();
     zip.start_file("folders.json", opts).unwrap();
@@ -132,7 +132,7 @@ fn a_real_zip_tool_can_locate_and_read_each_note() {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
     let want = format!("notes/{}.json", id.as_str());
     let names = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
         .collect::<Vec<_>>();
     assert!(
         names.contains(&want),
@@ -214,7 +214,7 @@ fn missing_manifest_is_not_treated_as_an_empty_bundle() {
     let no_manifest = tmp.path().join("silent.zip");
     let file = std::fs::File::create(&no_manifest).unwrap();
     let mut zip = zip::ZipWriter::new(file);
-    let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default();
+    let opts: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
     zip.start_file("folders.json", opts).unwrap();
     std::io::Write::write_all(&mut zip, b"[]").unwrap();
     zip.finish().unwrap();

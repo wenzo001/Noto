@@ -49,6 +49,31 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 修复与依赖（2026-10-18 第一百二十五批：#98 关掉 —— zip 2 → 9，产品依赖变更 0.0.141）
+- **为什么这次非修不可**：远程 CI 已经红在唯一一步上（run 39092577635 的步骤表：1–18 全 `success`，
+  第 19 步「Rust 依赖漏洞审计 · 全量（阻断）」`failure`），而那一条就是挂了两周的 **zip**（`zip 2.4.2` 整条 2.x/3.x 被作者 yank）。
+  台账里从前写"这是用户的路"，但这一轮用户要的是**远程干净 + 一个能装的版本** ⇒ 走真修法（升级到未 yank 的 9.x），
+  不走豁免：`zip` 被 `crates/notera-importer` 用来写/读**备份包（bundle）**，而那个 crate 在 `notera-host` 与 `notera-cli` 里都编进了产品 ——
+  一条躺在出货二进制里的 yank 依赖，不是一条可以用注释打发的噪音。`--deny warnings` 一个字节没放宽。
+- **改了什么**（`cargo +stable-x86_64-pc-windows-gnu`，全部按"从包里真源码读，不靠记忆"）：
+  - `crates/notera-importer/Cargo.toml`：`zip = "2"` → `"9"`（锁里解到 **9.0.5**）；
+  - `src/bundle.rs` 三处 API 差异：`write::FileOptions` 从 zip 9 起有**两个生命周期**（`'k`/`'n`，源码 `write/options.rs:51`）；
+    `ZipArchive::name()` 现在回 `Result<Cow<str>, ZipError>`（名字可能不是合法 UTF-8）⇒ 读取侧**改成显式报错**
+    `条目名字读不出来`，而不是从前 `&str` 那种静默有损；因为它是借用 entry，取完立刻落成 owned `String` 才敢 `read_to_end`；
+  - 写入侧顺手去掉共享的 `let opts`（`FileOptions` 从包里第 50 行看**仍是 `Copy`**，所以这不是被迫的，是"每条目现取一份"更清楚）；
+  - `tests/bundle.rs` 同步两处生命周期与一处 `name().unwrap()`。
+- **读数**：`cargo fmt --all --check` 0；`clippy -p notera-importer -p notera-host --all-targets -- -D warnings` **rc=0**；
+  `cargo test -p notera-importer` 三个二进制 **56 + 6 + 25 全过** —— 其中 `bundle_round_trips_every_entry_kind` 是真把包写出来再读回，
+  `a_bundle_written_before_the_partial_flag_still_reads_back_as_a_full_library` 守的是**老包还能读回来**（这条是这次升级最该担心的方向）。
+  ⚠ 本机跑不了审计脚本本身（`api.osv.dev` 在这台机器上 `UND_ERR_CONNECT_TIMEOUT`）⇒ **zip 这一发到底绿不绿，只有远程那次 run 算数**，
+  我不拿"本地编得过"冒充"审计通过"。
+- **一处行为收紧要说明**：读取侧对非法 UTF-8 条目名从"有损转换"改成"报错"。方向是更严不是更松；
+  我们自己的写侧只写 ASCII 名字（`manifest.json`/`folders.json`/`notes/<id>.json`/`attachments/<sha>`），
+  所以正常包不受影响。
+- **版本**：产品依赖变了 ⇒ 按口径升 patch **0.0.140 → 0.0.141**（`check-versions: 一致`，含移动壳两处 conf）。
+- **发版**：这一版是用户点名要的"可发可使用的版本"。tag `v0.0.141` 在 CI 第 19 步落回绿之后打，
+  `release.yml` 出 Windows（nsis + msi）/ macOS（dmg + app + app.zip）/ Android 三件产物，按 §13 D3 的既有口径**留草稿**（本机无签名证书）。
+
 ### 新增（2026-10-18 第一百十九批：D21 方案 A 的最后一格 —— 表外那发 `Ctrl+F` 0.0.140）
 - **拍板是 2026-10-17 给的（D21 = A「应用内那张键位表是唯一权威」），但那条口径当时只落了一半**：
   G131 那两条跨表判据钉的是「原生菜单 ⇄ `SHORTCUTS`」（`crates/notera-host/src/platform.rs:353`
