@@ -114,6 +114,15 @@ node scripts/prepush-gates.mjs --list   # 只看解析结果（毫秒级，arch-
 node scripts/prepush-gates.mjs          # 真跑（独占机器；读数记在 CHANGELOG 当批那一格）
 ```
 
+**本机跑「Rust 全量」这一条要带 `CARGO_BUILD_JOBS=2`**（第一百五十一批现场，2026-10-19）：
+不带的那一遍红在**编译**而不是产品 —— 报错形状是 `only metadata stub found for dylib dependency std`、
+`cannot resolve a prelude import`、`linking with x86_64-w64-mingw32-gcc failed`、栈顶 `handle_alloc_error`；
+同一棵树把并发降到 2 之后 14/14 全过（那一步 303s、101 个 `test result: ok`、0 FAILED）。
+机制（**强假说，没做反向复现** —— 要清 `target/` 重编才算证）：本机 12 核 ⇒ cargo 默认并发 12 个 rustc/链接器，
+而 Windows 卡的是**提交额度**（当时 `FreeVirtualMemory` 只剩 4.85 GB，物理 31.8 GB 不是瓶颈）。
+CI 的 runner 内存更大且没有这个约束，所以**不改 `ci.yml`**，只把旋钮记在本地这一侧 ——
+这条与 §"独占机器"那条同源：**本地台面的职责是复现 CI 的判据，不是复现 CI 的硬件**。
+
 **只有远程能跑的，显式标出来并写明原因**，不写成"应该会过"：在步骤块**内**（缩进 ≥8 空格）加
 `# ci-only: <原因>`，台面跳过它并把原因打出来。今天有两条：
 

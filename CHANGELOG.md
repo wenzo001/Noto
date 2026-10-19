@@ -112,6 +112,16 @@
   （第一百五十批欠的那一格，到这里才闭上）。
   ⚠ **归因**：这一遍跑在**提交前的树**上（`LANE_ALLOW_DIRTY=1`，合法理由只有一条：`scripts/verify-layout.mjs` 自己就是被测对象）——
   所以它证明的是"这一批的代码是对的"，**不证明 commit 号**；干净树上的复跑读数写进下一条。
+- **推送前那一遍本地台面（`prepush-gates`）抓到两条，一条真、一条是现场**：
+  ① **真的**：我新加的那条 Rust 测试没按 `rustfmt` 的形状写，而 `cargo fmt --all --check` 在 CI 里是阻断步 ——
+  本机以前从没跑过这一步（第一百四十批立这台 runner 就是为了这个）。已 `cargo fmt --all`（只动那一个文件，
+  49 条照旧全过、`--check` 退出 0），单独提交 `246ab38`。
+  ② **现场的**：`Rust 全量` 退出 101，但红的是**编译**不是产品 —— `only metadata stub found for dylib dependency std`
+  / `cannot resolve a prelude import` / `linking ... failed` / 栈顶 `handle_alloc_error`。
+  同一棵树把并发降到 `CARGO_BUILD_JOBS=2` 之后 **14/14 全过**（那一步 303s、101 个 `test result: ok`、0 FAILED）。
+  机制记成**强假说**：12 核 ⇒ cargo 默认并发 12 个链接器，而本机卡的是**提交额度**（当时只剩 4.85 GB，物理 31.8 GB 不是瓶颈）；
+  **没做反向复现**（要清 `target/` 重编才算证），所以 `ci.yml` 一个字没改 —— 本地台面的职责是复现 CI 的**判据**，不是复现 CI 的硬件。
+  旋钮与理由写进 `docs/CI-CD.md` 那一节。
 - **→ 0.0.152**（状态条多了用户看得见的字，且"字数"口径改了 ⇒ 改产品，升 patch）。
 
 ### 查找（2026-10-19 第一百五十批：**文内查找落地** —— A 档采纳项第一条（Joplin 的 `showLocalSearch`）；只读、零新依赖，键位另拍 D23）
