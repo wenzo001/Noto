@@ -329,6 +329,34 @@ idle
   `outcome = Cancelled` 是独立一态，徽标落"没跟上"那一格（静止那一格绝不转圈），
   也不写"上一次成功"（`syncLastSuccess` 那一族钉的就是这句要是真的）。
 
+### 6.3.2 一轮拒收了哪几条：`rejected_items`（2026-10-19 补记，第一百四十三批欠下的文档账）
+
+* **这一格的语义换过一次**：`ApplyReport.rejected` 从前填的是存储层的 `skipped` —— 那是"**合法的无事可做**"
+  （幂等重放、本地已比远端新），把这两类混进"拒收"里，界面上那句"有 N 条被拒"就是在对用户撒谎。
+  第一百四十三批把它改回字面意思：**具名拒收** —— 这条记录我认不下来，或这个 `t` 根本不走落库那一边。
+* **产出点在 host 的 `apply`**（不在引擎里）：`crates/notera-host/src/lib.rs` 的 `kind_slot` 三个臂各自计数并
+  带一句有界的原因 —— `NotAnEntity(why)`（附件与那两枚记号没有"upsert 成一条实体"这条路）、
+  `Unknown`（清单里的 `t` 我不认识，**不当笔记写、也不静默丢掉**）、`Entity(Attachment)`（穷尽用的那一臂，
+  附件不走 upsert 这一边）。每一条落成一枚 `SyncEvent::Rejected{kind, id, reason}`。
+  这一族与 §4.4 那句"每轮一次具名拒收、一个请求，不风暴"是同一条纪律的两半：**拒收要说得出名字，
+  但不许变成每轮重放的噪音**。
+* **名单是"本轮"的，整份替换**：`run_round` 收尾 `*self.inner.rejected.lock() = rejected`。
+  这一轮干净了，上一轮那几笔旧账就不该继续挂在界面上 —— 累积式的名单会把一次性的形状问题说成"一直有问题"。
+* **身份要在事件被消费之前摘出来**：`apply_sync_event` 只负责把徽标折出来（并把原因原文进日志），
+  名单留给下一发 `sync_status`。对外读数是 `SyncStatusDto.rejected_items`，每条
+  `{kind, id, title, reason}`。
+* **`title` 那一格是"说不出就照实说说不出"**：本地还留着这条记录 ⇒ 用 `kind` 找回标题；
+  已经删了、是附件、或 `id` 为空 ⇒ `title = null`。界面按这条折成一句话
+  （`apps/desktop/src/stores/sync.ts` 的 `rejectedLine`）：先报条数，最多点**三**条名字，
+  四条以上折成"等 N 条"，而**有名字的那几条与说不出来的那几条分开算** —— 一条都说不出来时说的是
+  "另有 N 条说不出是哪几条"，不是把条数藏起来。
+* **证人**：`stores/syncRejected.spec.ts`（四臂：空名单不出现这句话、三条以内逐条点名、四条折成"等 N 条"、
+  说不出身份那一臂）+ `notera-host` 的 `a_rejection_is_named_by_title_when_we_can_and_stays_silent_when_we_cannot`
+  + `notera-sync/tests/engine.rs` 里那两条（单条带 `kind/id`、墓碑那一批带空 `id` —— **同一枚事件在两种
+  来源下的身份差别**，所以两边都要有断言）。
+* **这一节为什么今天才补**：代码账在 ADR-0022 D7 ① 与 ADR-0021 D3 里当时就写了，但那一批改的是
+  **同步的对外读数**，同步文档没跟 —— 按 §45 记在这儿而不是悄悄补一段当"一直都有"。
+
 ---
 
 ## 7. 计划判定表（完整枚举）
