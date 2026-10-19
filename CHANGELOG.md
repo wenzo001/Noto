@@ -115,7 +115,9 @@
 - **推送前那一遍本地台面（`prepush-gates`）抓到两条，一条真、一条是现场**：
   ① **真的**：我新加的那条 Rust 测试没按 `rustfmt` 的形状写，而 `cargo fmt --all --check` 在 CI 里是阻断步 ——
   本机以前从没跑过这一步（第一百四十批立这台 runner 就是为了这个）。已 `cargo fmt --all`（只动那一个文件，
-  49 条照旧全过、`--check` 退出 0），单独提交 `246ab38`。
+  49 条照旧全过、`--check` 退出 0），单独提交 `c292a77`
+  （这里先前写的是 `246ab38` —— 那条消息我改过一次，**改消息会把 commit 号换掉**，
+  于是账上那个号当场失效：§8 那条"报告不许钉住它自己会重写的读数"的同族，这次是我自己踩的）。
   ② **现场的**：`Rust 全量` 退出 101，但红的是**编译**不是产品 —— `only metadata stub found for dylib dependency std`
   / `cannot resolve a prelude import` / `linking ... failed` / 栈顶 `handle_alloc_error`。
   同一棵树把并发降到 `CARGO_BUILD_JOBS=2` 之后 **14/14 全过**（那一步 303s、101 个 `test result: ok`、0 FAILED）。
