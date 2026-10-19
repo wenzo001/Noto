@@ -376,6 +376,7 @@ function createFrom(tpl: NoteTemplate): void {
                 class="btn btn--quiet btn--icon"
                 :aria-label="t('list.moveToTrash')"
                 :title="t('list.moveToTrash')"
+                :data-testid="`trash-note-${entry.id}`"
                 @click.stop="notes.moveToTrash(entry.id)"
               >
                 <AppIcon :size="18" name="trash" />

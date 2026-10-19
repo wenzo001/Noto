@@ -453,6 +453,10 @@ const MESSAGES: Record<MessageKey, string> = {
   'link.timeout': '本地服务响应超时，可以再试一次。',
   'state.inTrash': '这条在"最近删除"里，恢复后才能继续编辑。',
   'state.movedToTrash': '已移到「最近删除」，30 天内可以恢复。',
+  // 那句"30 天"由 `edge:trash-ttl-copy-matches-core` 钉着与核心 `TRASH_TTL_DAYS` 同源，别手抄天数。
+  // 「撤销」是那句话的**出口**（第一百五十二批）：光说"可以恢复"而不给一颗点得动的颗，
+  // 用户要自己找到回收站、找到那一行、再点恢复 —— 那一句承诺的代价全在他身上。
+  'state.undo': '撤销',
   'conflict.resolvedNow': '这一条已处理好。',
   'error.fallback': '操作没有成功，可以稍后再试。',
   'error.offline': '当前离线，改动已保存在本机，恢复联网后会自动继续。',

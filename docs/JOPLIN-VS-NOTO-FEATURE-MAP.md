@@ -78,7 +78,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 | 编辑器/查看器/分栏三态切换，`Ctrl+E`/`Ctrl+L` 切外部编辑与布局 | `gui/MenuBar.tsx:578-1026`、`builtInMetadata.ts:1104-1115` | 打开笔记即 `contenteditable`，无需点编辑（`RichEditor.vue:848`） | **❌ 不抄三态**。这正是你说要避开的毛病；抄过来等于把它请回来 |
 | 标题是独立输入框 | `gui/NoteTitleBar.tsx:123` | 标题即第一个标题块（`notera-richtext/src/extract.rs:92`） | ✔ 保持 |
 | 新建笔记为**草稿态**（provisional），切走时自动丢弃，列表里淡化显示 | `commands/newNote.ts:34-53`、`lib/components/shared/reduxSharedMiddleware.ts:76-83`、`gui/NoteList/style.scss:51` | 无 —— `Ctrl+N` 建的就是真笔记，误按会留垃圾 | ✅ **采纳**（A 档，用户能直接感觉到） |
-| 删除后弹**可撤销**的回收站通知 | `gui/TrashNotification/TrashNotification.tsx:50-57` | 有回收站与恢复，但删除那一刻不给撤销窗口 | ✅ **采纳** |
+| 删除后弹**可撤销**的回收站通知 | `gui/TrashNotification/TrashNotification.tsx:50-57` | **已落（第一百五十二批，0.0.153）**：`moveToTrash` 推的那条 toast 带一颗「撤销」（`ToastAction`），点了走 `restore_note` 且**认的是刚删的那一篇的 id**，不是"当前选中"。两条出口各自分明：「撤销」= 撤条 + 跑动作，「知道了」= 只撤条。带动作的那一族**不自动消失**（§4.9 已补这一句），无动作那一族照旧 4500ms | ✅ **采纳** —— 已落 |
 | 编辑器后端 4 套并存（CM5 / CM6 / ProseMirror / TinyMCE 遗留 / 纯文本） | `gui/NoteEditor/`、`packages/editor/ProseMirror` | 一套自有块模型（`editor/model.ts:12-22`） | ❌ 不抄（多编辑器就是体积与内存的来源） |
 | 表格编辑、代码语言高亮、数学公式 | `editor.tableEditing`、markdownPlugins 23 项 | 表格在前端只是"未知块"JSON；无高亮/公式 | 🔶 **1.0 不做**（C 档）。表格可先做"只读渲染 + 逐格文本编辑"的轻版 |
 | 拼写检查与语言子菜单 | `builtInMetadata.ts:1953`、`commands/showSpellCheckerOptions.ts` | 无 | ❌ 依赖 Chromium 拼写栈，收益/风险不划算，1.0 不收 |

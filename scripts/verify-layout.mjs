@@ -280,6 +280,7 @@ const FIXTURE_MARKS = [
   // 腿 77（标签那一族）的夹具：崩在半路也不许把标签与笔记留成下一遍的现场。
   '标签腿夹具',
   '查找腿夹具',
+  '撤销腿夹具',
   // 第 49 刀那条字号腿的夹具。
   '字号夹具',
   // 第 50 批那条 toast 时限腿的夹具。
@@ -9572,8 +9573,107 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 79（状态条的数字）：1440「${readA?.text}」/ 390「${geo?.text}」· 这一排 ${geo?.rowH}px（${geo?.kids.length} 颗，一颗都没折字）`);
 }
 
-// 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。
-await browser.close();
+/**
+ * 80 删除那一刻的「撤销」在真浏览器里点得动，而且那条不自己溜走（A 档，Joplin 的 `TrashNotification`）。
+ *
+ * 为什么 jsdom 那八条不够：它们跑在假核心与假定时器上 —— 证明不了**真列表真少一行、真核心真不再投影它、
+ * 真时间过去 4.5 秒之后那条提示还在不在**（"4.5s 自动消失"是设计稿点名的数，而这一族故意不走它）。
+ * 量五格，每格都带对照：
+ *  ① 前置：那一行在屏幕上、核心 `list_notes` 里也有它（不然下面"消失"与"回来"都是空判据）；
+ *  ② 点行上那颗删除：屏幕上少一行 **且** 核心那一侧也不再投影（两侧对撞，不是只读 DOM）；
+ *  ③ toast 上那颗「撤销」：文字对、**声明矩形 ≥44**、旁边那颗「知道了」也还在（两条出口各自在场）；
+ *  ④ **等 6 秒它还在** —— 这一格是这一批的新行为差别，量的是渲染结果，不是 CSS 里那句话；
+ *  ⑤ 点「撤销」→ 那条消失、那一行回到屏幕、核心又读出同一个 id；
+ *  ⑥ 反向出口：再删一次、这次点「知道了」→ 提示走了而笔记**仍在回收站**
+ *     （"读过了"不等于"我反悔了"；两族出口串起来就是数据被用户没要的动作改回去）。
+ */
+{
+  const MARK80 = '撤销腿夹具';
+  const stamp80 = Date.now();
+  const nt80 = await cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [{ id: `v${String(stamp80).slice(-6)}`, type: 'paragraph', content: [{ type: 'text', text: `${MARK80}${'一段正文用来认它'}` }] }],
+    },
+  });
+  const err80 = [];
+  const c80 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p80 = await c80.newPage();
+  p80.on('console', (m) => { if (m.type() === 'error') err80.push(m.text()); });
+  await p80.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p80.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p80.waitForTimeout(800);
+  const rowSel = `[data-testid="note-row-${nt80.id}"]`;
+  const coreActive = async () => (((await cmd('list_notes', { folderId: null, trash: false })) ?? []))
+    .filter((x) => (x.title ?? '').includes(MARK80)).map((x) => x.id);
+  const coreTrash = async () => (((await cmd('list_notes', { folderId: null, trash: true })) ?? []))
+    .filter((x) => (x.title ?? '').includes(MARK80)).map((x) => x.id);
+  check('80 前置：那一行在屏幕上，核心活动列表里也有它（不然下面"消失/回来"全是空判据）',
+    (await p80.locator(rowSel).count()) === 1 && (await coreActive()).length === 1,
+    JSON.stringify({ 屏幕: await p80.locator(rowSel).count(), 核心: await coreActive() }));
+
+  await p80.locator(`[data-testid="trash-note-${nt80.id}"]`).first().dispatchEvent('click');
+  await p80.waitForTimeout(900);
+  check('80 ② 点行上那颗删除：屏幕上少一行，**且核心也不再投影它**（两侧对撞，不是只读 DOM）',
+    (await p80.locator(rowSel).count()) === 0 && (await coreActive()).length === 0 && (await coreTrash()).length === 1,
+    JSON.stringify({ 屏幕: await p80.locator(rowSel).count(), 活动: await coreActive(), 回收站: await coreTrash() }));
+
+  const bar = await p80.evaluate(() => {
+    const act = document.querySelector('[data-testid="toast-action"]');
+    const ack = document.querySelector('[data-testid="toast-ack"]');
+    const host = document.querySelector('.toast-host');
+    const r = act?.getBoundingClientRect();
+    return {
+      actionText: act ? (act.innerText ?? '').trim() : null,
+      actionW: r ? Math.round(r.width) : 0,
+      actionH: r ? Math.round(r.height) : 0,
+      ackText: ack ? (ack.innerText ?? '').trim() : null,
+      toastText: host ? (host.innerText ?? '').replace(/\s+/g, ' ').trim() : null,
+    };
+  });
+  check('80 ③ toast 上那颗「撤销」：文字对、旁边那颗「知道了」也还在（两条出口各自在场）',
+    bar.actionText === '撤销' && bar.ackText === '知道了' && (bar.toastText ?? '').includes('已移到「最近删除」'),
+    JSON.stringify(bar));
+  check('80 ③b 那颗的声明矩形 ≥44（§5 的命中区；涂装小与命中小是两件事，这里量渲染出来的那颗）',
+    bar.actionW >= 44 && bar.actionH >= 44, JSON.stringify({ 宽: bar.actionW, 高: bar.actionH }));
+
+  await p80.waitForTimeout(6000);
+  const still = await p80.evaluate(() => document.querySelector('[data-testid="toast-action"]') !== null);
+  check('80 ④ 过了 6 秒（> 设计稿那 4.5s）它**还在** —— 带动作的那一族不许自己把出口溜走',
+    still === true, JSON.stringify({ 六秒后还在: still }));
+
+  await p80.locator('[data-testid="toast-action"]').first().click();
+  await p80.waitForTimeout(1200);
+  check('80 ⑤ 点「撤销」：那条走了、那一行回到屏幕、核心又读出同一个 id',
+    (await p80.locator('[data-testid="toast-action"]').count()) === 0
+      && (await p80.locator(rowSel).count()) === 1
+      && (await coreActive()).length === 1 && (await coreTrash()).length === 0,
+    JSON.stringify({ 那条: await p80.locator('[data-testid="toast-action"]').count(), 行: await p80.locator(rowSel).count(), 活动: await coreActive(), 回收站: await coreTrash() }));
+
+  await p80.locator(`[data-testid="trash-note-${nt80.id}"]`).first().dispatchEvent('click');
+  await p80.waitForTimeout(900);
+  await p80.locator('[data-testid="toast-ack"]').first().click();
+  await p80.waitForTimeout(1200);
+  check('80 ⑥ 反向出口：点「知道了」只把提示带走，笔记**仍在回收站**（读过了不等于反悔）',
+    (await p80.locator('[data-testid="toast-ack"]').count()) === 0
+      && (await p80.locator(rowSel).count()) === 0
+      && (await coreTrash()).length === 1 && (await coreActive()).length === 0,
+    JSON.stringify({ 提示: await p80.locator('[data-testid="toast-ack"]').count(), 行: await p80.locator(rowSel).count(), 回收站: await coreTrash(), 活动: await coreActive() }));
+
+  check('80 这一腿 console error 为零', err80.length === 0, err80.slice(0, 3).join(' | '));
+  await p80.screenshot({ path: `${OUT}/80-undo-toast-1440.png` });
+  await p80.close();
+  await c80.close();
+  await cmd('restore_note', { id: nt80.id });
+  await cmd('delete_note', { id: nt80.id });
+  await cmd('purge_note', { id: nt80.id });
+  const left80 = [...await coreActive(), ...await coreTrash()];
+  check('80 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left80.length === 0, JSON.stringify({ 剩下: left80.length }));
+  notes.push(`     腿 80（删除后的撤销）：撤销那颗 ${bar.actionW}×${bar.actionH}、六秒后 ${still ? '还在' : '走了'}；两条出口各自落到"回来 / 留在回收站"`);
+}
+
+// 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
 
 /**
  * **收尾残骸自检**（G121 那一条的泛化形状）：崩在半路的那一轮永远执行不到每腿自己的收尾，

@@ -388,7 +388,14 @@ export const useNoteStore = defineStore('notes', () => {
       // §4.9「每条 Toast 要说清没有丢什么」。这一行从列表里消失是**读模型**的行为（软删之后不再投影，
       // 缺口 G63 那一族），于是用户看到的只有"它没了"。恢复这条路是真的存在（`restore_note`），
       // 所以这句话不是安慰，是事实陈述。
-      useToastStore().pushText(t('state.movedToTrash'), 'info');
+      // 第一百五十二批（A 档「删除后可撤销」，Joplin 的 `TrashNotification`）：光陈述不够，
+      // 要给一颗**点得动的**撤销 —— 而且这一条不自动消失（带动作的那一族，见 `stores/toasts.ts`）。
+      useToastStore().pushText(t('state.movedToTrash'), 'info', {
+        label: t('state.undo'),
+        run: () => {
+          void restore(id);
+        },
+      });
     } catch (error) {
       errorKey.value = asBridgeError(error).messageKey;
     }
