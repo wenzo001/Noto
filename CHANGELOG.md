@@ -49,6 +49,34 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 门禁（2026-10-19 第一百四十八批：整跑的证据图默认**不再写进版本库** —— 缺口 #9 关掉，工作树从"恒脏"变成"跑完还是干净的"）
+
+- **病灶是一行默认值**：`verify-layout.mjs` 从前写 `OUT = process.env.OUT_DIR || 'D:/code/Notes/docs/evidence/uat'`。
+  那个默认落点**在版本库里**，于是整跑那 42 处 `screenshot` 每跑一遍就把 `docs/evidence/uat` 重拍一次。
+  三件实打实的后果，都不是"难看"级别：① 工作树恒脏 ⇒ 一批真改动被自己的仪器噪声淹在 `git diff` 里；
+  ② 整跑自己那道"脏树归因闸"因此每遍都要 `LANE_ALLOW_DIRTY=1` 绕开 —— **一道常年被绕开的闸等于没有闸**；
+  ③ `tag-release.mjs --push` 的前置是干净树，恒脏就永远打不了 tag，而 tag 正是出 **1.0** 那一格。
+  顺带这条默认值还把**这台机器**写死进了脚本（换机器/CI 上它就不在 `D:/code/Notes` 底下）。
+- **改法**：默认落点搬到**仓库外**（`os.tmpdir()/notera-evidence-uat`，每次覆盖），开局打一行
+  `证据图落点：<绝对路径>` 并标明是不是默认；`OUT_DIR` 那一半**照旧生效** —— 交付一批
+  `docs(evidence)` 提交是**人的决定**，不是每次跑动的副作用：
+  `OUT_DIR=docs/evidence/uat node scripts/verify-layout.mjs`。
+  截图本身仍是判据的一部分（有几类形状只有看图能抓到，`§1.5` 那批就是这么抓的），**只是不再默认落进版本库**。
+- **新腿 `hygiene:lane-evidence-outside-repo-by-default`（arch-check 第 35 条，50/50）**：两个方向都要有，
+  只钉一边会把它修成恒真 —— 默认不许指向 `docs/`、不许是指向仓库里的另一个目录、必须走临时目录；
+  同时 `OUT_DIR` 的覆盖那一半必须还读 `process.env.OUT_DIR`，否则有人会把"默认在仓库外"过修成"只能在仓库外"，
+  把交付那条路一起堵死。那一行整个改名也要红（判据不许静默空转）。
+  **五把刀当日各红一次（49/50）**：默认落点写回 `docs/evidence/uat` / 删掉 `OUT_DIR` 覆盖 /
+  覆盖那一半改读 `process.env.EVID` / 默认换成 `D:/code/Notes/.scratch` / 把 `const OUT` 改名成 `const OUTx`。
+- **结果侧的正证（这条才是 #9 的关闭条件）**：整跑一遍之后 ——
+  `git status --porcelain -- docs` ⇒ **0 条**；`docs/evidence/uat` 里最后两张图的 mtime 还是**这一批修复之前**那
+  一遍留下的（`65-focus-ring-390.png 10-19 09:52`、`75-focus-after-restore-1440.png 09:42`），这一遍**没碰过它们**；
+  而仓库外那个目录这一遍收了 **72 张**图。整跑本身 **805 PASS / 0 FAIL / 0 SKIP、`LANE_RC=0`** ——
+  与第一百四十五批认证那一遍**同一条数**，所以这次搬迁没有让任何一条判据少跑。
+  跑的时候树上只有这两个 `scripts/` 文件是脏的（被测的就是它们自己），归因闸按 `LANE_ALLOW_DIRTY=1` 放行 ——
+  这是"改动本身即被测对象"的正当情形，不是又一次绕闸。
+- **不升版本**：只动 `scripts/`，产品代码一字未改。
+
 ### 门禁（2026-10-19 第一百四十七批：本地台面改成**直接解析 `ci.yml`** —— 远程连红七次那一族的根治；只动工装与排版，不改产品行为 ⇒ 不升版本）
 
 - **归因先说清**：从第一百四十批那次推送起，远程 `PR 门禁` **连着红了 7 次**，而我每一批本地都记"全绿"。

@@ -12,6 +12,20 @@ nohup pnpm --dir apps/desktop dev >/dev/null 2>&1 &                             
 nohup ./target/debug/notera-cli.exe --data-dir .logs/g131-data serve --port 17323 &   # 桥；**数据目录用干净的**（2026-10-17 量到的：`g102-data` 那种跑过很多遍的老目录会让新 exe 静默不监听 —— 0 字节日志、端口不 LISTENING，而干净目录秒起。按仓内既有做法**换名继续、不修旧库**）；Rust 侧改动不在同一棵树上时先重编，否则整跑读数不算同一棵树
 ```
 桥若是旧的，先 `cargo +stable-x86_64-pc-windows-gnu build -p notera-cli` 再起（Rust 侧改动不在同一棵树上时，整跑读数不算同一棵树）。
+
+**两条今天（2026-10-19）补的现场读法，都能省一整遍**：
+
+* **老库不是"不监听"，是"要等"**：把桥起在跑过很多遍的 `g102-data`（28 MB 库 + **17 MB `-wal`**）上，
+  `/health` 在前 35 秒是 `curl` 退出码 7、进程活着（38 MB RSS）、日志一个字没打 —— 长得和上面那句"静默不监听"一模一样。
+  **第 50 秒它开始监听**。所以判"这个目录跑不动"之前先按条件等到 60 秒（`curl /health` 读到 200 为准），
+  别照旧做法急着换目录、更别把这一次读成"库坏了"；换干净目录仍然是正解，但它省的是等待，不是修东西。
+* **证据图默认落在仓库外**（第一百四十八批）：`verify-layout.mjs` 的 `OUT` 不再默认指 `docs/evidence/uat`，
+  而是 `%TMP%/notera-evidence-uat`（每次覆盖），开局打一行落点。跑完 `git status --porcelain -- docs` 应为 **0** ——
+  这一条现在是整跑的**结果判据**，树不再因为跑一遍就脏，于是 `LANE_ALLOW_DIRTY=1` 只剩一种正当用途：
+  **被测的就是 `scripts/` 自己**。要随批交付截图才指回来：
+  `OUT_DIR=docs/evidence/uat node scripts/verify-layout.mjs`（这是人的决定，不是每次跑动的副作用）。
+  看守在 `arch-check` 的 `hygiene:lane-evidence-outside-repo-by-default`：默认指回 `docs/` 会红，
+  把 `OUT_DIR` 那一半删掉（过修）同样会红。
 跑 lane 期间**不要有任何本地负载**（自己连跑 `vitest`、开 `gh run watch` 轮询都算 —— 会把 lane 挤挂在 0 条真 FAIL 上，那种读数不是证人）。
 
 ## 顺序（每步都是一次"改前 / 改后"的整跑对读，**782** 条读数逐条 diff —— 2026-10-17 前写的 776 已过期）

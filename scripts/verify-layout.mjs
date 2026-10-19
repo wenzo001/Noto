@@ -72,9 +72,26 @@ const PW = process.env.PW_CORE || 'file:///C:/Users/lhcz-fu/node_modules/playwri
 const CHROME = process.env.CHROME || 'C:/Users/lhcz-fu/AppData/Local/ms-playwright/chromium-1243/chrome-win64/chrome.exe';
 const URL_BASE = process.env.APP_URL || 'http://127.0.0.1:5173';
 const WIDTHS = [900, 1100, 1440, 1800];
-const OUT = process.env.OUT_DIR || 'D:/code/Notes/docs/evidence/uat';
 
 const fs = await import('node:fs').then((m) => m.default);
+const os = await import('node:os').then((m) => m.default);
+const path = await import('node:path').then((m) => m.default);
+
+/**
+ * 证据图的落点 —— **默认写到仓库外面**（缺口 #9，2026-10-19）。
+ * 以前这一行是 `process.env.OUT_DIR || 'D:/code/Notes/docs/evidence/uat'`，也就是**版本库里的目录**，
+ * 于是每跑一遍整跑，那 42 处截图就把 `docs/evidence/uat` 重拍一次。后果不是"难看"，是三件实打实的：
+ *  ① 工作树恒脏 ⇒ `git diff` 的自查被自己的仪器噪声淹没（一批真正的改动混在几十张二进制图里）；
+ *  ② 整跑自己的"脏树归因闸"因此每遍都要 `LANE_ALLOW_DIRTY=1` 绕开 —— 一道常年被绕开的闸等于没有闸；
+ *  ③ `tag-release.mjs --push` 的前置是**干净树**，恒脏就永远打不了 tag，而 tag 正是出 1.0 那一格。
+ * 截图本身仍是判据的一部分（有几类形状只有看图能抓到，`§1.5` 那批就是这么抓到的），
+ * 改的只是**它不再默认落进版本库**。要出一批 `docs(evidence)` 提交时显式指回来：
+ *   `OUT_DIR=docs/evidence/uat node scripts/verify-layout.mjs`
+ * 那条命令是**人的决定**，不是每次跑动的副作用 —— 与 §8"报告不许钉住它自己会重写的读数"同一条纪律。
+ */
+const OUT = path.resolve(process.env.OUT_DIR || path.join(os.tmpdir(), 'notera-evidence-uat'));
+fs.mkdirSync(OUT, { recursive: true });
+console.log(`证据图落点：${OUT}${process.env.OUT_DIR ? '' : '（仓库外；要随批交付用 OUT_DIR=docs/evidence/uat）'}`);
 const { chromium } = await (await import(PW)).default;
 
 const BRIDGE = process.env.BRIDGE || 'http://127.0.0.1:17323';

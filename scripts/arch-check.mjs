@@ -1245,6 +1245,51 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     problems, problems.join('\n    '));
 }
 
+
+// ------------------------- 35. 整跑的证据图不许默认写进版本库（缺口 #9）---
+// 起因：`verify-layout.mjs` 从前那行是 `OUT = process.env.OUT_DIR || 'D:/code/Notes/docs/evidence/uat'` ——
+// **默认落点是版本库里的目录**。后果不是难看，是三件实事：每跑一遍整跑就重拍 42 张图 ⇒ 工作树恒脏
+// ⇒ ① 一批真改动被自己的仪器噪声淹在 `git diff` 里，② 整跑那道"脏树归因闸"常年靠 `LANE_ALLOW_DIRTY=1`
+// 绕开（一道常年被绕开的闸等于没有闸），③ `tag-release --push` 要干净树，恒脏就打不了 tag —— 而 tag
+// 正是出 1.0 那一格。修法是把默认落点搬到仓库外，交付那一批图变成**显式的决定**。
+// 这条腿守两件事，两个方向都要有（只钉一边会把它修成恒真）：
+//  · **默认**不许指向 `docs/`（拿回去就红）；
+//  · `OUT_DIR` 那一半**必须照旧生效** —— 否则有人会把"默认在仓库外"修成"只能在仓库外"，
+//    把交付 `docs(evidence)` 那条路一起堵死（这是同一格上最容易犯的过修）。
+{
+  const problems = [];
+  const lanePath = join(ROOT, 'scripts', 'verify-layout.mjs');
+  const lane = existsSync(lanePath) ? readFileSync(lanePath, 'utf8') : null;
+  if (lane === null) {
+    problems.push('读不到 scripts/verify-layout.mjs —— 本条在空转');
+  } else {
+    const m = /\nconst OUT = ([^\n]*);\n/.exec(lane);
+    if (!m) {
+      problems.push('整跑里找不到 `const OUT = ...` 那一行 —— 证据图的落点换了写法，这条判据要跟着改（不许删）');
+    } else {
+      const expr = m[1];
+      const barAt = expr.indexOf('||');
+      if (barAt < 0) {
+        problems.push(`OUT 的默认值不再受 OUT_DIR 覆盖（「${expr.trim()}」）—— 交付那一批证据图的路被堵死了`);
+      } else {
+        const override = expr.slice(0, barAt);
+        const fallback = expr.slice(barAt + 2);
+        if (!/process\.env\.OUT_DIR/.test(override)) {
+          problems.push(`OUT 的覆盖那一半读的不是 process.env.OUT_DIR（「${override.trim()}」）—— 交付入口是假的`);
+        }
+        if (/docs\s*\/|["'`][^"'`]*docs\//.test(fallback)) {
+          problems.push(`OUT 的**默认**落点指回版本库里的 docs/（「${fallback.trim()}」）—— 整跑又会每遍重拍一遍证据图，工作树恒脏`);
+        }
+        if (!/tmpdir/.test(fallback)) {
+          problems.push(`OUT 的默认落点没走临时目录（「${fallback.trim()}」）—— 要的是"仓库外、每次覆盖"，不是另一个常驻目录`);
+        }
+      }
+    }
+  }
+  check('hygiene:lane-evidence-outside-repo-by-default', 'ARCHITECTURE-MAP §8 / 缺口 #9（仪器不许把每次跑动都变成一次交付）',
+    problems, problems.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;
