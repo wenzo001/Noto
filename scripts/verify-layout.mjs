@@ -1453,6 +1453,11 @@ for (const width of WIDTHS) {
 {
   const OVERLAYS = [
     { label: '快捷新建模板', trigger: '[data-testid="new-note-templates"]', panel: '[data-testid="app-popover-panel"]' },
+    // 排序档那一格（第一百五十三批新加的浮层）。第一百五十六批把它加进名单的理由很直白：
+    // 那一刻面板从 x=163 展开、越过列表栏自己那一条边，选项的中心命中读回来是 `div.app-body` ——
+    // 而当时只有"click 超时 30 秒"这一种表现（腿 81），红法完全不像几何问题。
+    // 这一条按**几何**报：面板出界或某颗选项点不着，当场说出是哪一格、落在哪个区间。
+    { label: '列表排序档', trigger: '[data-testid="list-sort"]', panel: '[data-testid="app-popover-panel"]' },
     { label: '编辑器文件夹下拉', trigger: '[data-testid="editor-pane"] .app-select', panel: '[data-testid="app-select-panel"]' },
     { label: '设置页 TLS 下拉', trigger: '[data-testid="account-tls"]', panel: '[data-testid="app-select-panel"]', needSettings: true },
   ];
@@ -7828,6 +7833,29 @@ function contrastRatio(fg, bg) {
   if (made?.id) await cmd('delete_folder', { id: made.id });
 }
 
+/**
+ * "这颗控件被**每一层滚动容器**装得下" —— 唯一一份定义（腿 63 的悬停扫描与 `pressSweep` 共用）。
+ *
+ * 两把尺原来各写各的，而两边都只比**窗口**边界。窗口挡不住的是"跑到屏幕外"那一档；
+ * 装在窗口里、却掉在 `.pane-body` 底边之外那一档它看不见 —— 仪器于是把 hover / 按下打在别人身上
+ * （命中的是列表脚 `p.list-foot` 或整行），然后报成产品缺陷："这颗按钮没有悬停反馈"、
+ * "按下去 `:active` 成立而计算值没变"。两句都是仪器在说自己的事，不是产品的事。
+ * 第一百五十五批（腿 63）与第一百五十六批（腿 67）各红过一次，两次都是这一族。
+ *
+ * 传法用的是 Playwright 支持的"函数当参数"（函数体随 args 序列化进页面），而不是自己 `new Function`
+ * 拼字符串 —— 那一层是代码生成，能被禁就禁（两处共用同一个引用，效果一样且没有生成代码）。
+ */
+const fitsInScrollers = (el, r) => {
+  const SCROLLISH = /auto|scroll|hidden|overlay/;
+  for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+    const cs = getComputedStyle(n);
+    if (!SCROLLISH.test(cs.overflowX) && !SCROLLISH.test(cs.overflowY)) continue;
+    const b = n.getBoundingClientRect();
+    if (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5 || r.left < b.left - 0.5 || r.right > b.right + 0.5) return false;
+  }
+  return true;
+};
+
 {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const p = await ctx.newPage();
@@ -7836,7 +7864,7 @@ function contrastRatio(fg, bg) {
   await p.goto(URL_BASE, { waitUntil: 'networkidle' });
   await p.waitForTimeout(900);
 
-  const targets = await p.evaluate(() => {
+  const targets = await p.evaluate(({ fits }) => {
     const out = [];
     const shown = (el) => {
       for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
@@ -7862,15 +7890,7 @@ function contrastRatio(fg, bg) {
      * 报成"这颗按钮没有悬停反馈"。那是仪器在说自己的事，不是产品的事（[[press-target-must-be-in-the-controls-own-shape]] 同族）。
      * 只收紧"看得见"的定义，判据本身一条没松：凡进集合的，每一颗都要真量到 hover 差。
      */
-    const fullyInside = (el, r) => {
-      for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
-        const cs = getComputedStyle(n);
-        if (!/(auto|scroll|hidden|overlay)/.test(cs.overflowX) && !/(auto|scroll|hidden|overlay)/.test(cs.overflowY)) continue;
-        const b = n.getBoundingClientRect();
-        if (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5 || r.left < b.left - 0.5 || r.right > b.right + 0.5) return false;
-      }
-      return true;
-    };
+    const fullyInside = fits;
     let clipped = 0;
     for (const el of document.querySelectorAll('button, [role="button"], input[type="button"]')) {
       const r = el.getBoundingClientRect();
@@ -7914,7 +7934,7 @@ function contrastRatio(fg, bg) {
       return el ? { ...t, ...diag(el, t.box) } : t;
     });
     return { list: withDiag, injected: Boolean(victim), clipped };
-  });
+  }, { fits: fitsInScrollers });
   const list = targets.list;
 
   const clipOf = (b) => ({ x: b.x, y: b.y, width: b.width, height: b.height });
@@ -8119,10 +8139,17 @@ function contrastRatio(fg, bg) {
  * 只返回读数，不 return 判据：这样每一臂的判据都能被单独变异、单独记分。
  */
 async function pressSweep(p) {
-  await p.evaluate(() => {
+  /**
+   * 人群按**同一把尺**筛（与腿 63 共用 `fitsInScrollers`）：只比窗口会收进"卡在滚动容器底边之外"那一档 ——
+   * 第一百五十六批腿 67 的红就是这么来的（`trash-note-… :active 成立而计算值没变`）：
+   * 那一颗自己的中心点在容器之外，按下落到了别人身上，而 `:active` 会**沿祖先链成立**，
+   * 于是仪器读到"进了按下态却没有变化"。同一颗按钮整颗在屏内时按下实测会变
+   * （`transform: none → matrix(0.97,…)`、底色 `→ rgb(239,240,241)`，见 `.logs/probe-press2.log`）⇒ 产品没坏，是尺子。
+   */
+  const scan = await p.evaluate(({ fits }) => {
     const stop = (e) => { e.stopPropagation(); e.preventDefault(); };
     for (const t of ['click', 'dragstart']) window.addEventListener(t, stop, true);
-    let n = 0, injected = false;
+    let n = 0, injected = false, clipped = 0;
     for (const el of document.querySelectorAll('[data-testid]')) {
       if (!(el instanceof HTMLButtonElement) && el.getAttribute('role') !== 'button') continue;
       const r = el.getBoundingClientRect();
@@ -8133,6 +8160,10 @@ async function pressSweep(p) {
         if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) { vis = false; break; }
       }
       if (!vis) continue;
+      if (!fits(el, r)) {
+        clipped += 1;
+        continue;
+      }
       let pe = 'auto';
       for (let x = el; x && x !== document.documentElement; x = x.parentElement) {
         if (getComputedStyle(x).pointerEvents === 'none') { pe = 'none'; break; }
@@ -8142,7 +8173,8 @@ async function pressSweep(p) {
       el.setAttribute('data-press-scan', String(n));
       n += 1;
     }
-  });
+    return { clipped, scanned: n };
+  }, { fits: fitsInScrollers });
 
   const list = await p.evaluate(() => [...document.querySelectorAll('[data-press-scan]')].map((el) => {
     const r = el.getBoundingClientRect();
@@ -8276,7 +8308,7 @@ async function pressSweep(p) {
     if (still.length > 0) notRecovered.push(`${t.id} 第 ${still.join('/')} 根轴停在按下值 ${JSON.stringify(still.map((i) => c.axes[i]))}`);
   }
 
-  return { list, byPane, measured, actives, noDelta, notRecovered, unreadable, disabledChanged, unstable, unreachable, activeMissed };
+  return { list, byPane, measured, actives, noDelta, notRecovered, unreadable, disabledChanged, unstable, unreachable, activeMissed, clipped: scan.clipped };
 }
 
 /**
@@ -8561,7 +8593,7 @@ async function pressSweep(p) {
   check('67 仪器自检：基线两拍逐字节相同、每一颗都点得着且都真进入了 :active，注入的禁用载荷在场',
     s.unstable.length === 0 && s.unreachable.length === 0 && s.unreadable.length === 0
       && s.activeMissed.length === 0 && s.list.some((t) => t.injected) === true,
-    JSON.stringify({ 没进入: s.activeMissed.slice(0, 4), 基线不稳: s.unstable.slice(0, 4), 点不着: s.unreachable.slice(0, 4), 读不到: s.unreadable.slice(0, 4), 注入: s.list.filter((t) => t.injected).length }));
+    JSON.stringify({ 没进入: s.activeMissed.slice(0, 4), 基线不稳: s.unstable.slice(0, 4), 点不着: s.unreachable.slice(0, 4), 读不到: s.unreadable.slice(0, 4), 注入: s.list.filter((t) => t.injected).length, 被滚动容器裁掉: s.clipped }));
   check('67 §4.9 按下（390 触摸档）：每一颗可见可用的按钮按下去必须有计算值变化 —— 全局那条规则要在这一屏也真画上',
     s.noDelta.length === 0, JSON.stringify(s.noDelta.slice(0, 10)));
   check('67 §4.9 松手要回位（390 触摸档）：按下时变了的那几根轴，抬起之后必须回到未按时的同一值',

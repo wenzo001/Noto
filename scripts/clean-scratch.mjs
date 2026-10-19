@@ -379,7 +379,13 @@ if (isCli) {
   const r = sweep(BUDGET, { dryRun: checking });
   console.log(`${checking ? '预算检查' : '清理'}：${r.files} 项 ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份，常驻拷贝清掉 ${r.copiesRemoved} 份）`);
   console.log(`  残骸 ${r.afterMb} MB / 上界 ${BUDGET.logsMaxMb} MB ·（另有常驻现场 ${r.residentMb} MB，不计入这本账）· 总量 ${r.totalMb} MB / 上界 ${BUDGET.totalMaxMb} MB`);
-  if (r.copiesOver > 0) console.log(`  ⚠ 常驻目录里的拷贝超档 ${r.copiesOver} 份（每族只留最新一份，可回收约 ${r.copiesMb} MB）—— 族名见 BUDGET.residentCopies`);
+  /**
+   * 这一句在**真扫过一遍之后**不许再报"超档 N 份" —— 那一份正是这次删掉的，
+   * 报出来就等于让工具去钉它自己刚重写的那个读数（下一条 `清理：… 常驻拷贝清掉 1 份` 说的才是真事）。
+   * `--check` 那一臂仍然报，因为那一臂什么都不删、"能删的没删完"就是它要说的话。
+   */
+  if (checking && r.copiesOver > 0) console.log(`  ⚠ 常驻目录里的拷贝超档 ${r.copiesOver} 份（每族只留最新一份，可回收约 ${r.copiesMb} MB）—— 族名见 BUDGET.residentCopies`);
+  else if (r.copiesRemoved > 0) console.log(`  已按族收掉常驻拷贝 ${r.copiesRemoved} 份（约 ${r.copiesMb} MB）—— 每族留最新那一份`);
   for (const l of r.leftovers) console.log(`  带不走（下次再收）：${l}`);
   for (const n of r.staleResident) console.log(`  豁免名单过期：${n} 不在盘上 —— 要么把它加回来，要么把这一格从名单里删掉`);
   if (r.overBudget) console.log(`  ⚠ 残骸砍完仍超预算（${r.afterMb} MB > ${BUDGET.logsMaxMb} MB）—— 只剩"最近 ${BUDGET.logsKeepNewest} 项"那一形，请人工看`);

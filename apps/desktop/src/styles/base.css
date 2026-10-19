@@ -217,6 +217,14 @@ button {
    * 这颗该不该缩成图标、或搬到搜索框那一行 —— 视觉取舍登记成 **D26**，等用户拍。
    */
   flex-wrap: wrap;
+  /**
+   * 折行之后，**每一行**里的动作都要贴右 —— 不然折上来那一颗会贴着左边，
+   * 而它那颗右对齐展开的浮层会从栏目左边界往外跑 90px（`AppPopover` 的面板是 `position: absolute`，
+   * 宿主越界 ⇒ 选项被别的层挡住，Playwright 读回 `<div class="app-body"> intercepts pointer events`）。
+   * 与下面 `.pane-title` 上的 `margin-right: auto` 配合：自动边距把第一行的剩余空间全吃掉（标题贴左、按钮贴右），
+   * 第二行没有自动边距 ⇒ 由这一条贴右。两句合起来才是"标题靠左、动作靠右"在折行时还成立。
+   */
+  justify-content: flex-end;
   row-gap: var(--sp-1);
   min-height: var(--touch);
   padding: var(--sp-2) var(--sp-4);
@@ -231,6 +239,14 @@ button {
   /* 基准是**内容宽**而不是 0：有余量就先给它自己的宽度（`flex: 1` 的旧写法把 0 当基准，
      于是同排多一颗东西就先无声无息吃掉标题），真放不下才走下面那三行（省略号 + `title` 全文）。 */
   flex: 0 1 auto;
+  /**
+   * "标题靠左、动作靠右"这句话原来是由 `flex: 1`（把剩余空间全给标题）**顺带**做到的。
+   * 换成 `flex: 0 1 auto` 之后必须把这半句显式写回来，否则折上来那一行的那颗会**贴着左边**，
+   * 而它的浮层是右对齐展开的（AppPopover 的落点），208 宽的面板会从 x=269 那格往左跑到 x=163 ——
+   * 越过 `.pane--list` 自己的边界，于是选项被 `div.app-body` 挡住、点不着
+   * （第一百五十六批修完 wrap 之后整跑腿 81 就是这么红的，Playwright 那句 `intercepts pointer events` 是当场读数）。
+   */
+  margin-right: auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
