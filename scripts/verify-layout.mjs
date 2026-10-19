@@ -298,6 +298,13 @@ const FIXTURE_MARKS = [
   '条位夹具',
 ];
 for (const mark of FIXTURE_MARKS) await purgeByTitle(mark);
+/**
+ * 排序偏好**也是现场**（第一百五十三批第一次跑就学到）。
+ * 它存在本机那张作用域偏好表里、开机被读回来 ⇒ 上一遍（或腿 81 自己）改过它，下一遍那些
+ * "刚建的笔记在列表最前"的假设就碎：碎形是 `waitForSelector(note-row-…)` 超时、0 条 FAIL、退出 1 ——
+ * 与"产品红了"长得完全不一样，而查下去是现场。跑前把它按回默认那一档，和 `purgeByTitle` 同一类动作。
+ */
+await cmd('set_pref', { key: 'sorts', value: {} });
 
 /**
  * 可见偏好也要**钉回基准**（第 30 刀之后新加的一条）。
@@ -9803,6 +9810,13 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   check('81 ⑤ 换「标题 Z→A」：窗口照旧按那一档递增，且这一段序列与正序**不是同一条**（两档不是彼此的别名）',
     desc.n >= 5 && desc.monotonic && desc.window.join() !== asc.window.join(),
     JSON.stringify({ 正: asc.window.slice(0, 4), 反: desc.window.slice(0, 4), 窗口: desc.n, 递增: desc.monotonic }));
+
+  // 自己造的现场自己收：这一档是**跟着这台机器**的偏好，不留回默认，下一遍那些
+  // "新笔记在列表最前"的腿就会碎（跑前的 `set_pref` 已经兜住一层，但腿自己也不该往外漏）。
+  await p81.click('[data-testid="list-sort"]');
+  await p81.waitForSelector('[data-testid="app-popover-panel"]', { timeout: 6000 });
+  await p81.click('[data-testid="sort-updated_desc"]');
+  await p81.waitForTimeout(700);
 
   check('81 ⑥ 换个看法不该弄脏任何一篇：全程零次 `edit_note`',
     edits81.length === 0, JSON.stringify({ 次数: edits81.length, 样本: edits81.slice(0, 2) }));
