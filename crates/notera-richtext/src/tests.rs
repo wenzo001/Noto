@@ -515,17 +515,16 @@ fn char_count_uses_the_same_fixture_as_the_ui_side() {
     // 两边各自断言同一个数 ⇒ 谁改口径谁红（第一百五十一批：界面侧曾经按 UTF-16 码元且把空白算进去，
     // 于是侧栏的"字数"与编辑器角上的"字数"对同一篇笔记报两个数）。
     let a = extract(
-        &parse(
-            &doc(vec![para("p7a0001", "中文 与 English 混排 \u{1D410}")]).to_string(),
-        )
-        .unwrap(),
+        &parse(&doc(vec![para("p7a0001", "中文 与 English 混排 \u{1D410}")]).to_string()).unwrap(),
     );
     // 13 = 中文(2) + 与(1) + English(7) + 混排(2) + U+1D410(1)；三个空格不进。
-    assert_eq!(a.char_count, 13, "混排必须按码点且去空白：{:?}", a.plain_text);
-
-    let b = extract(
-        &parse(&doc(vec![para("p7a0002", "a b\tc\nd e")]).to_string()).unwrap(),
+    assert_eq!(
+        a.char_count, 13,
+        "混排必须按码点且去空白：{:?}",
+        a.plain_text
     );
+
+    let b = extract(&parse(&doc(vec![para("p7a0002", "a b\tc\nd e")]).to_string()).unwrap());
     // 5 = a b c d e；\t 与 \n 都不进（界面侧用的是 /\s/，与这里的 is_whitespace 同族）。
     assert_eq!(b.char_count, 5, "空白不进字数：{:?}", b.plain_text);
 }
