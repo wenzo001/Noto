@@ -49,6 +49,24 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 平台通知（2026-10-19 第一百四十六批：`notice_for` 去掉 `_ =>` 通配 —— 新增事件种类必须当场表态"要不要响一声"）
+
+- **接着 145 批那一格往下收**：`BusEvent::TagsChanged` 加进来之后，它是**顺着 `platform.rs` 里那句
+  `_ => None` 静默落进"安静"的** —— 结果对（改个标签名不该弹系统通知），但**那不是判定，是默认**。
+  这一族在这个仓里被反复抓到过：徽标、词汇表、DTO 键集，凡是"新情况落进通配符"的地方，
+  下一次加东西时就会有一格没人看过。
+- **改法**：`notice_for` 的 `match` 抬成穷尽 —— `NotesChanged | TagsChanged | Toast => None` 各点名，
+  以后 `BusEvent` 再加一臂，这个函数**编译不过**，必须当场决定响不响。
+  测试补那一格的断言（"改了标签名不许响"），文档 `IMPLEMENTATION-STATUS.md` 那行同步改名并写明
+  "这份安静是逐臂判定的，没有通配"。
+- **读数**：`cargo test --workspace -- --test-threads=1` **763 / 0 / 7**、
+  `cargo clippy --workspace --all-targets -- -D warnings` **0 条**、`arch-check` **48/48**。
+  没有浏览器可见的变化 ⇒ 不重跑整跑（那条 lane 量的不是这一格）；也**不改产品行为** ⇒ 按"只有改产品的
+  commit 才升 patch"那条决定，**不升版本、不打 tag**。
+- **顺手记一条仪器教训**：我先用 `cargo test --lib notice` 去找那条测试，`0 passed; 64 filtered out`
+  —— 名字里根本没有 "notice"，那一次"绿"是过滤器把测试全筛掉了。与 143 批那把下歪的刀同一族：
+  **过滤跑必须先确认它筛到了谁**，`0 passed` 不是通过。
+
 ### 同步可控性（2026-10-19 第一百四十五批：**标签那一族有了自己的事件** —— 只改标签名不动笔记的那一台，侧栏不用再等下一次笔记变化或重启）
 
 - **→ 0.0.149**（新事件 + 界面接线变了 ⇒ 改产品，升 patch）。

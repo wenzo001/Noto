@@ -142,7 +142,11 @@ pub fn notice_for(ev: &BusEvent) -> Option<Notice> {
                 _ => None,
             }
         }
-        _ => None,
+        // 剩下这三类**各自表态**，不写 `_ => None`：这一份枚举以后再加一臂，
+        // 这里必须当场决定"要不要响一声"，而不是顺着通配符静默默认成"安静"。
+        // （`BusEvent::TagsChanged` 就是这一格买回来的第一个例子：它落进来是因为我们判定
+        //  "对面改了个标签名"不该弹系统通知 —— 但那是一次判定，不是一个默认。）
+        BusEvent::NotesChanged { .. } | BusEvent::TagsChanged | BusEvent::Toast { .. } => None,
     }
 }
 
@@ -624,6 +628,10 @@ mod tests {
             error_code: None
         })
         .is_none());
+        assert!(
+            notice_for(&BusEvent::TagsChanged).is_none(),
+            "对面改了个标签名不该弹系统通知 —— 而且这一格现在是**显式判定**，不是通配符默认"
+        );
         assert!(notice_for(&BusEvent::NotesChanged {
             ids: vec!["x".into()]
         })
