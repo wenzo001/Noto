@@ -76,15 +76,21 @@ describe('偏好过桥（§6 第 6 格）', () => {
     expect(service.callsOf('set_pref').length, '读失败之后不许顺手写回去').toBe(0);
   });
 
-  it('改主题 ⇒ 合并窗口之后真发一次 set_pref，键与值是那一格', async () => {
+  it('改主题 ⇒ 合并窗口之后真发，键值各自对得上，且「动过名单」这一格必须一起落库', async () => {
     const service = stubLocalService({ get_prefs: () => ({}), set_pref: () => null });
     const settings = useSettingsStore();
     settings.setTheme('dark');
     expect(service.callsOf('set_pref').length, '还没到合并窗口就不该写库').toBe(0);
     await settle();
     const sent = service.callsOf('set_pref');
-    expect(sent.length).toBe(1);
-    expect(sent[0].args).toEqual({ key: 'theme', value: 'dark' });
+    // 两格：`theme` 是他选的值，`explicit` 是"这个键他动过"的那份名单。
+    // 少发后者，默认值迁移就只剩 localStorage 那一半 —— 而 §6 第 6 格的口径是**库是权威**：
+    // profile 被重置之后，"他从没设过字号"这件事如果只活在浏览器身上，下一次启动就把他当成设过的人。
+    // 按键名找、不按位置（[[assert-by-identity-not-position]]）。
+    expect(sent.map((c) => c.args.key).sort()).toEqual(['explicit', 'theme']);
+    const argFor = (key: string) => sent.find((c) => c.args.key === key)?.args;
+    expect(argFor('theme')).toEqual({ key: 'theme', value: 'dark' });
+    expect(argFor('explicit')).toEqual({ key: 'explicit', value: ['theme'] });
   });
 
   it('拖字号连发五下（跨五帧，像真拖） ⇒ 一次写事务，不是一帧一次', async () => {
@@ -109,6 +115,9 @@ describe('偏好过桥（§6 第 6 格）', () => {
     const settings = useSettingsStore();
     settings.setTheme('dark');
     await settle();
+    // 这一条只发得出 `theme`，与上一条差一格不是矛盾：这里的本机记录是**第一百五十五批之前**写的，
+    // 没有 `explicit` 那一格 ⇒ 归一化按"盘上有的键都算他动过"补名单，`theme` 本就在里面，
+    // 这一次没有真的变 ⇒ 按"只发变了的"就该被省掉。少的那一格不是漏发，是它确实没变。
     expect(service.callsOf('set_pref').map((c) => c.args.key)).toEqual(['theme']);
   });
 

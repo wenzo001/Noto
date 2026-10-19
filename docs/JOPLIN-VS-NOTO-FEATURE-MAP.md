@@ -120,7 +120,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 |---|---|---|---|
 | 声明式设置元数据（type/section/appTypes/secure/min/max/storage） | `models/settings/builtInMetadata.ts`（2604 行、约 280 键、161 public） | `notera-config` 有校验但**没有 schema 驱动的 UI**，字段级校验缺失（`styles/base.css:403` 自认） | ✅ **采纳"一份声明生成一屏 UI + 字段级校验"**：这是消除"改一处设置要动三个文件"的根因，属 A 档 |
 | 三模存储：DB 行 / `settings.json` / 系统钥匙串（写失败退回 DB） | `models/Setting.ts:954-964,1136-1153` | 偏好只在本机持久（已拍板不上传），凭据 Windows 钥匙串 + 会话内存退路（G38 选 B） | 🔶 参考它的"钥匙串失败退回"，其余不动 |
-| **默认值迁移**：改了默认值不覆盖"从没设过"的用户 | `Setting.ts:77-120` | 无对应机制 | ✅ **采纳** —— 1.0 之后必然改默认值，这条防的是"升级把用户设置洗掉" |
+| **默认值迁移**：改了默认值不覆盖"从没设过"的用户 | `Setting.ts:77-120` | **已落（第一百五十五批，0.0.155）**：偏好里多一份"用户动过哪些键"的名单（`UiPrefs.explicit`，与值一起落本机库），`normalizePrefs(input, defaults)` 只把名单里的键认成他的值，其余跟随默认；老记录没名单 ⇒ 盘上有的键一律算动过（不让这次改动自己变成数据丢失） | ✅ 已采纳并实现，判据在 `defaultMigration.spec.ts`（8 把刀各自红过）——顺带抓出一条真缺陷：`theme` 以前只认 `light`/`dark`，"跟随系统"是靠它正好等于默认值才没露馅 |
 | 只同步**精选** `info.json`（E2EE 开关、主密钥、`revisionService.*`），且默认值打时间戳 0 | `syncInfoUtils.ts:99-121` | 偏好明确**不同步**（2026-10-08 拍板） | ✔ 一致，无需改 |
 | 16 个设置分栏 + 键盘快捷键可录 | `Setting.ts:1287-1390`、`gui/KeymapConfig/ShortcutRecorder.tsx` | 7 张卡 + **只读快捷键表** | 🔶 采纳"快捷键可改"，分栏数按我们自己的字段数定 |
 | 主题 8 套 + 自定义 CSS（userchrome/userstyle）+ 字号 + 缩放 + 滚动条档 | `builtInMetadata.ts` appearance 17 键 | 浅/深/系统 + 字号 0.85~1.60（`stores/settings.ts:37-38`），无字体/宽度/自定义 CSS | 🔶 采纳**内容宽度**与**行高**两格（读长文用得上），自定义 CSS 不收（等于放弃设计系统守卫） |

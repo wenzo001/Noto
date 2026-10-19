@@ -23,6 +23,12 @@ import { useShellStore } from './shell';
 import { useToastStore } from './toasts';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
+/**
+ * 三个都算"合法选择"。第一百五十五批之前这里只认 `light` / `dark`，`system` 是靠"它正好也是默认值"
+ * 才没露馅的 —— 一旦默认值不再是 `system`，**明确选了跟随系统**的人就会被新默认改掉。
+ * 名单机制的目的正是"他选过的每一格都保住"，这一格不能例外（`defaultMigration.spec.ts` 那条腿抓到的就是这个）。
+ */
+const THEME_MODES: readonly string[] = ['system', 'light', 'dark'];
 
 /** `import_files` 的回报。`notices` 是"没坏但用户该知道"的那部分，必须显示出来。 */
 export interface ImportFilesReport {
@@ -59,16 +65,24 @@ export interface UiPrefs {
    * 把它同步过去等于让一台手机改动另一台电脑的视图。
    */
   sorts: Record<string, NoteSortKey>;
+  /**
+   * 用户**动过**的那些键（第一百五十五批：默认值迁移的那半条命）。
+   * 值相同不代表没动过 —— 明确选了"标准"的人和从没打开过设置页的人，盘上写着同一个 `1`；
+   * 只有这一份名单分得开他们。没动过的键跟着默认值走，动过的键永远是他那一份。
+   */
+  explicit: string[];
 }
 
-const DEFAULT_PREFS: UiPrefs = {
+/** 导出去是给"默认值迁移"那两条判据当基准用（测试里另给一份改过的默认，见 `defaultMigration.spec.ts`）。 */
+export const DEFAULT_PREFS: UiPrefs = {
   theme: 'system',
   fontScale: 1,
   transparency: true,
   trayHint: false,
   sorts: {},
+  explicit: [],
 };
-const PREF_KEYS: readonly (keyof UiPrefs)[] = ['theme', 'fontScale', 'transparency', 'trayHint', 'sorts'];
+const PREF_KEYS: readonly (keyof UiPrefs)[] = ['theme', 'fontScale', 'transparency', 'trayHint', 'sorts', 'explicit'];
 
 function clampScale(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -78,15 +92,36 @@ function clampScale(value: number): number {
 /**
  * 一份归一化，两条来路共用（localStorage 与核心的作用域偏好表）。
  * 写第二份解析早晚漂移 —— 而这里漂一次就是"屏幕上深浅两套同时存在"那种形状。
+ *
+ * **默认值迁移**（第一百五十五批，A 档：Joplin 的 `Setting.ts:77-120`）：
+ * 只有被用户**动过**的键才保留他的值；没动过的键**跟着默认值走**。
+ * 不这么做的话，"把默认字号从 1 改成 1.15"这一件以后一定会做的事，会盖掉那些**从没打开过设置页**的人 ——
+ * 他们唯一的错是没用过这个功能。反过来，明确选了"标准"的人必须留在"标准"，
+ * 哪怕新默认不再是"标准"（这一格只有 `explicit` 那一份名单能分得开：值相同不代表没动过）。
+ *
+ * `defaults` 是参数不是常量引用：判据要能拿一份"改过的默认"喂进来验两侧，
+ * 否则"迁移"这句话在测试里永远演不出来（§43 同族：期望值不许由被测常量算出，这里也不许由它算）。
  */
-export function normalizePrefs(input: unknown): UiPrefs {
+export function normalizePrefs(input: unknown, defaults: UiPrefs = DEFAULT_PREFS): UiPrefs {
   const raw = (input ?? {}) as Record<string, unknown>;
+  const known = PREF_KEYS.filter((k) => k !== 'sorts');
+  /**
+   * 老记录（这一批之前写的）没有 `explicit` 那一格 —— 那种情况下**盘上有的键就算他动过**。
+   * 反过来（一律当没动过）会把这批改动之前设过深色主题的人直接抹掉：
+   * 一次"修默认值传播"的改动自己变成了数据丢失，那一刀不能落。
+   */
+  const explicit = Array.isArray(raw.explicit)
+    ? new Set(raw.explicit.filter((k) => typeof k === 'string') as string[])
+    : new Set(known.filter((k) => raw[k] !== undefined));
+  const kept = <K extends keyof UiPrefs>(key: K): UiPrefs[K] => (explicit.has(key) ? raw[key] : undefined) as UiPrefs[K];
   return {
-    theme: raw.theme === 'light' || raw.theme === 'dark' ? raw.theme : 'system',
-    fontScale: clampScale(typeof raw.fontScale === 'number' ? raw.fontScale : 1),
-    transparency: raw.transparency !== false,
-    trayHint: raw.trayHint === true,
+    theme: THEME_MODES.includes(String(kept('theme'))) ? (kept('theme') as ThemeMode) : defaults.theme,
+    fontScale: clampScale(typeof kept('fontScale') === 'number' ? kept('fontScale') : defaults.fontScale),
+    transparency: explicit.has('transparency') ? raw.transparency !== false : defaults.transparency,
+    trayHint: explicit.has('trayHint') ? raw.trayHint === true : defaults.trayHint,
+    // `sorts` 里每一条都是"用户点过的某一档"（不存在"默认写进去的一条"）⇒ 整格按显式处理。
     sorts: normalizeSorts(raw.sorts),
+    explicit: [...explicit].filter((k) => (known as readonly string[]).includes(k)).sort(),
   };
 }
 
@@ -283,17 +318,30 @@ export const useSettingsStore = defineStore('settings', () => {
     return () => undefined;
   }
 
+  /**
+   * 写一个键 = 同时记下"这个键用户动过"。默认值迁移全靠这一格：
+   * 下一次启动时没被动过的键会跟着新的默认值走，动过的永远是他那一份（`normalizePrefs` 那一头）。
+   */
+  function setPref<K extends keyof UiPrefs>(key: K, value: UiPrefs[K]): void {
+    prefs.value = { ...prefs.value, [key]: value } as UiPrefs;
+    if (key === 'sorts' || key === 'explicit') return;
+    const name = String(key);
+    if (!prefs.value.explicit.includes(name)) {
+      prefs.value = { ...prefs.value, explicit: [...prefs.value.explicit, name].sort() };
+    }
+  }
+
   function setTheme(mode: ThemeMode): void {
-    prefs.value = { ...prefs.value, theme: mode };
+    setPref('theme', mode);
   }
 
   function setFontScale(value: number): void {
-    prefs.value = { ...prefs.value, fontScale: clampScale(value) };
+    setPref('fontScale', clampScale(value));
   }
 
   /** 某一档列表的排序（第一百五十三批）。键由 `notes.ts` 的 `listKey` 给，值只认 `NOTE_SORTS`。 */
   function setListSort(listKey: string, sort: NoteSortKey): void {
-    prefs.value = { ...prefs.value, sorts: { ...prefs.value.sorts, [listKey]: sort } };
+    setPref('sorts', { ...prefs.value.sorts, [listKey]: sort });
   }
 
   function setCaps(next: unknown): void {
