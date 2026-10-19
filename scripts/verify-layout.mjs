@@ -7332,7 +7332,11 @@ function contrastRatio(fg, bg) {
     JSON.stringify({ emptyText }));
   await box.fill('');
 
-  // ② Toast 自动消失：拿「移到最近删除」触发一条（与 ㉖ 同一条路）
+  // ② Toast 自动消失：**无动作那一族**（§4.9 的 4.5s）。
+  // 第一百五十二批把这一格的触发器从「移到最近删除」换成「插一个空文件」—— 因为删除那条现在
+  // **带一颗动作**，而带动作的那一族按切族后的口径就是不自动消失（那一侧由腿 80④ 量：等 6 秒还在）。
+  // 拿带动作的那条去量"4.5s 自己走"会把一条正确的产品行为读成红 —— **那是判据跟错了族，不是产品坏了**
+  // （[[moved-owner-repoints-cross-node-judgements]]：语义换了主人，重指而不是删掉）。
   const FIX = '时限夹具';
   await purgeByTitle(FIX);
   const made = await cmd('create_note', {
@@ -7342,9 +7346,9 @@ function contrastRatio(fg, bg) {
   await p.reload({ waitUntil: 'networkidle' });
   await p.waitForSelector(`[data-testid="note-row-${made.id}"]`, { timeout: 15000 });
   await p.click(`[data-testid="note-row-${made.id}"]`);
-  await p.waitForSelector('[data-testid="trash-note"]', { timeout: 8000 });
+  await p.waitForSelector('.editor-file-input', { timeout: 8000 });
   const t0 = Date.now();
-  await p.click('[data-testid="trash-note"]');
+  await p.locator('.editor-file-input').setInputFiles({ name: '空的.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(0) });
   const hasToast = () => p.evaluate(() => Boolean(document.querySelector('.toast')));
   let appeared = false;
   for (let i = 0; i < 20 && !appeared; i++) {
