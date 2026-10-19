@@ -7842,17 +7842,22 @@ function contrastRatio(fg, bg) {
  * "按下去 `:active` 成立而计算值没变"。两句都是仪器在说自己的事，不是产品的事。
  * 第一百五十五批（腿 63）与第一百五十六批（腿 67）各红过一次，两次都是这一族。
  *
- * 传法用的是 Playwright 支持的"函数当参数"（函数体随 args 序列化进页面），而不是自己 `new Function`
- * 拼字符串 —— 那一层是代码生成，能被禁就禁（两处共用同一个引用，效果一样且没有生成代码）。
+ * 传法：这台 Playwright（core 1.x）**不许把函数塞进 evaluate 的 args**（实测红在
+ * `Attempting to serialize unexpected value at position "fits"`），所以改成"每个页面先装一次、
+ * 两处都调 `window.__fitsInScrollers`"——仍然是一处定义两份消费，而且没往页面里塞生成代码。
+ * 没装就调会当场抛（不是回退成"全都算可见"）：仪器坏必须红着说，不许静默放行。
  */
-const fitsInScrollers = (el, r) => {
-  const SCROLLISH = /auto|scroll|hidden|overlay/;
-  for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
-    const cs = getComputedStyle(n);
-    if (!SCROLLISH.test(cs.overflowX) && !SCROLLISH.test(cs.overflowY)) continue;
-    const b = n.getBoundingClientRect();
-    if (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5 || r.left < b.left - 0.5 || r.right > b.right + 0.5) return false;
-  }
+const fitsInScrollers = () => {
+  window.__fitsInScrollers = (el, r) => {
+    const SCROLLISH = /auto|scroll|hidden|overlay/;
+    for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+      const cs = getComputedStyle(n);
+      if (!SCROLLISH.test(cs.overflowX) && !SCROLLISH.test(cs.overflowY)) continue;
+      const b = n.getBoundingClientRect();
+      if (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5 || r.left < b.left - 0.5 || r.right > b.right + 0.5) return false;
+    }
+    return true;
+  };
   return true;
 };
 
@@ -7864,7 +7869,8 @@ const fitsInScrollers = (el, r) => {
   await p.goto(URL_BASE, { waitUntil: 'networkidle' });
   await p.waitForTimeout(900);
 
-  const targets = await p.evaluate(({ fits }) => {
+  await p.evaluate(fitsInScrollers);
+  const targets = await p.evaluate(() => {
     const out = [];
     const shown = (el) => {
       for (let n = el; n && n !== document.documentElement; n = n.parentElement) {
@@ -7890,7 +7896,9 @@ const fitsInScrollers = (el, r) => {
      * 报成"这颗按钮没有悬停反馈"。那是仪器在说自己的事，不是产品的事（[[press-target-must-be-in-the-controls-own-shape]] 同族）。
      * 只收紧"看得见"的定义，判据本身一条没松：凡进集合的，每一颗都要真量到 hover 差。
      */
-    const fullyInside = fits;
+    const fitsFn = window.__fitsInScrollers;
+    if (typeof fitsFn !== 'function') throw new Error('腿 63：fitsInScrollers 没装到这一页（宁可崩，不许退成"全都算可见"）');
+    const fullyInside = fitsFn;
     let clipped = 0;
     for (const el of document.querySelectorAll('button, [role="button"], input[type="button"]')) {
       const r = el.getBoundingClientRect();
@@ -7934,7 +7942,7 @@ const fitsInScrollers = (el, r) => {
       return el ? { ...t, ...diag(el, t.box) } : t;
     });
     return { list: withDiag, injected: Boolean(victim), clipped };
-  }, { fits: fitsInScrollers });
+  });
   const list = targets.list;
 
   const clipOf = (b) => ({ x: b.x, y: b.y, width: b.width, height: b.height });
@@ -8139,6 +8147,7 @@ const fitsInScrollers = (el, r) => {
  * 只返回读数，不 return 判据：这样每一臂的判据都能被单独变异、单独记分。
  */
 async function pressSweep(p) {
+  await p.evaluate(fitsInScrollers);
   /**
    * 人群按**同一把尺**筛（与腿 63 共用 `fitsInScrollers`）：只比窗口会收进"卡在滚动容器底边之外"那一档 ——
    * 第一百五十六批腿 67 的红就是这么来的（`trash-note-… :active 成立而计算值没变`）：
@@ -8146,7 +8155,9 @@ async function pressSweep(p) {
    * 于是仪器读到"进了按下态却没有变化"。同一颗按钮整颗在屏内时按下实测会变
    * （`transform: none → matrix(0.97,…)`、底色 `→ rgb(239,240,241)`，见 `.logs/probe-press2.log`）⇒ 产品没坏，是尺子。
    */
-  const scan = await p.evaluate(({ fits }) => {
+  const scan = await p.evaluate(() => {
+    const fitsFn = window.__fitsInScrollers;
+    if (typeof fitsFn !== 'function') throw new Error('pressSweep：fitsInScrollers 没装到这一页（宁可崩，不许退成"全都算可见"）');
     const stop = (e) => { e.stopPropagation(); e.preventDefault(); };
     for (const t of ['click', 'dragstart']) window.addEventListener(t, stop, true);
     let n = 0, injected = false, clipped = 0;
@@ -8160,7 +8171,7 @@ async function pressSweep(p) {
         if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) { vis = false; break; }
       }
       if (!vis) continue;
-      if (!fits(el, r)) {
+      if (!fitsFn(el, r)) {
         clipped += 1;
         continue;
       }
@@ -8174,7 +8185,7 @@ async function pressSweep(p) {
       n += 1;
     }
     return { clipped, scanned: n };
-  }, { fits: fitsInScrollers });
+  });
 
   const list = await p.evaluate(() => [...document.querySelectorAll('[data-press-scan]')].map((el) => {
     const r = el.getBoundingClientRect();
@@ -9161,11 +9172,20 @@ async function pressSweep(p) {
 }
 
 /** 按标题前缀清夹具（跑之前清一次、跑完再清一次 —— 中途崩了也不许把开发库堆脏）。 */
-async function purgeByTitle(prefix) {
+async function purgeByTitle(marker) {
+  /**
+   * 认**标题里出现过这串**，不是"以这串开头"（第一百五十六批那一遍教的）。
+   *
+   * 名单里其实早就有 `排序腿夹具`，但腿 81 那三篇的标题故意写成 `0 排序腿夹具0`
+   * （ASCII 数字开头，好在 `title_asc` 下排在中文之前、保证落在首屏窗口里）⇒ `startsWith` 整批漏掉，
+   * 残骸活到下一遍，把 ㊶"列表第一行必须是精准那条"点成红 —— 与当年 `标记色腿的现场` 那一次**同一族**，
+   * 而那一次的处置只是"把前缀加进名单"，没管"名单与标题形状怎么对上"。
+   * 收尾残骸自检（下面那条）也一起按同一把尺扫，所以这里改一处、两处同口径。
+   */
   for (const trash of [false, true]) {
     const rows = await cmd('list_notes', { folderId: null, trash });
     for (const n of Array.isArray(rows) ? rows : []) {
-      if ((n.title ?? '').startsWith(prefix)) await cmd('purge_note', { id: n.id });
+      if ((n.title ?? '').includes(marker)) await cmd('purge_note', { id: n.id });
     }
   }
 }
@@ -9896,14 +9916,16 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
  */
 {
   const marks = [...FIXTURE_MARKS, '牺牲品'];
+  /** 与 `purgeByTitle` 同一把尺：认"标题里出现过这串"。两处口径不一致，残骸就会从差集里漏出去。 */
+  const hit = (title) => marks.some((m) => (title ?? '').includes(m));
   const rows = await cmd('list_notes', { folderId: null, trash: false });
   const items = Array.isArray(rows) ? rows : (rows?.items ?? []);
-  const leaked = items.filter((n) => marks.some((m) => (n.title ?? '').startsWith(m))).map((n) => n.title);
+  const leaked = items.filter((n) => hit(n.title)).map((n) => n.title);
   const trashed = await cmd('list_notes', { folderId: null, trash: true });
   const tItems = Array.isArray(trashed) ? trashed : (trashed?.items ?? []);
-  const leakedTrash = tItems.filter((n) => marks.some((m) => (n.title ?? '').startsWith(m))).map((n) => n.title);
+  const leakedTrash = tItems.filter((n) => hit(n.title)).map((n) => n.title);
   for (const n of [...items, ...tItems]) {
-    if (marks.some((m) => (n.title ?? '').startsWith(m))) await cmd('purge_note', { id: n.id });
+    if (hit(n.title)) await cmd('purge_note', { id: n.id });
   }
   check('收尾 残骸自检：跑完不许把夹具笔记留给下一遍（残骸会变成下一遍的现场）',
     leaked.length === 0 && leakedTrash.length === 0,
