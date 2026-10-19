@@ -80,6 +80,13 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.findPrev': '上一处',
   'editor.findNext': '下一处',
   'editor.findClose': '关闭查找',
+  // 状态条那一格：字数（与核心 `char_count` 同口径）、段数、阅读时长。
+  // "行"这个词**故意不用** —— 一行占多宽取决于视口与排版，这里量不到（见 `editor/textStats.ts` 的头注释）。
+  // 分隔点**不写在文案里**：窄档会把后两句整颗藏起来（`.editor-corner__stats-wide`），
+  // 点在模板里就会留下"326 字 ·"这种半句话；分隔符归排版，文案只说自己那一句。
+  'editor.statChars': '{count} 字',
+  'editor.statBlocks': '{count} 段',
+  'editor.statMinutes': '约 {minutes} 分钟',
   // §4.1 保存四格的文案（措辞按规范原话：说清"东西在哪、稳不稳"，不用"已保存"这种状态词糊过去）
   'editor.saved': '已存在本机',
   // 设计稿编辑器角上第三那句（`已存在本机` `412 字` `改于 14:22`）。时间由 `formatModified` 给，

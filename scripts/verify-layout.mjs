@@ -9434,6 +9434,144 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 78（文内查找）：三颗动作 ${JSON.stringify(bar.hits)} · 跳过去那一处 ${jumped.rect?.top ?? '没有'}px · edit_note ${editCalls.length} 次`);
 }
 
+/**
+ * 79 状态条那一串数字要说得对，而且加了它之后那一排不许变坏（A 档「字数统计」那一行）。
+ *
+ * 为什么还要一条浏览器腿：纯函数那 10 条只证明"算得对"，证明不了**屏幕上那一格真长出来了、
+ * 而且没把同行的东西挤坏**。第一百五十一批的实测就是这个形状：这一排在 390 档的自然宽是 359
+ * 而可用只有 358 —— 本来就贴着边，所以多一句"字数"之后坏的不是那一句，是**每一颗各自折行**
+ * （「删除这一块」折成四行、整排 61⇒95）。没有一条判据读得到这件事：㊸④ 只量横向溢出
+ * （那一排是靠折自己的文字"不溢出"的），㊻ 只抓被裁的那一颗。所以这一腿量四格：
+ *  ① 已知正文 ⇒ 角上就是 `325 字 · 1 段 · 约 2 分钟`。数字**手算**：
+ *     `计数腿夹具`(5) + `一二三四五六七八九十`×32(320) = 325 个码位（核心口径 = 码位去空白），
+ *     一段，325 ÷ 300 向上取整 = 2 分钟；同一格再量一次"`title` 与看得见的一字不差"
+ *     （㊻ 真裁到时认的就是这一条，两处用同一个不变量互相对撞）；
+ *  ② 390 档：这一排**每一颗都只有一行高**（46 那一档：44 的触摸上界 + 2 —— 折了字的颗是 47 与 78）、
+ *     这一排自己横向不溢出、字数那一格**没被裁**（`scrollWidth − clientWidth`，量渲染结果不是 CSS 里那句话）；
+ *  ③ 窄档只留字数那一句，而藏起来那两句**还在 `title` 里**（§5「不许静默裁掉」要的出口）；
+ *  ④ 空正文 ⇒ "0 字"说得出口、而"约 0 分钟"那一段整条不渲染（不足一分钟说的是"约 1 分钟"，
+ *     把没把握的话说成有把握是另一回事）。
+ * ④ 那一格用 `try/finally` 收尾：那篇的标题是空的，跑前的按前缀清捞不到它，崩在半路只能靠 finally 清。
+ */
+{
+  const MARK79 = '计数腿夹具';
+  const stamp79 = Date.now();
+  const TEN = '一二三四五六七八九十';
+  const para = (id, text) => ({ id, type: 'paragraph', content: text.length ? [{ type: 'text', text }] : [] });
+  const docOf = (block) => ({ v: 1, content: [block] });
+  // 5 + 320 = 325（无空白 ⇒ 码位数就是字符个数）
+  const ntA = await cmd('create_note', { folderId: null, doc: docOf(para(`a${String(stamp79).slice(-6)}`, `${MARK79}${TEN.repeat(32)}`)) });
+  // `计数腿夹具乙` = 6 个码位 + 一个尾空格（空格不进字数）
+  const ntB = await cmd('create_note', { folderId: null, doc: docOf(para(`b${String(stamp79).slice(-6)}`, `${MARK79}乙 `)) });
+  // 一个空段：0 字、0 词 ⇒ minutes 走 0 那一支
+  const ntC = await cmd('create_note', { folderId: null, doc: docOf(para(`c${String(stamp79).slice(-6)}`, '')) });
+
+  const err79 = [];
+  const wide = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const pW = await wide.newPage();
+  pW.on('console', (m) => { if (m.type() === 'error') err79.push(m.text()); });
+  await pW.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pW.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  const openWide = async (id) => {
+    await pW.locator(`[data-testid="note-row-${id}"]`).first().click({ timeout: 6000 });
+    await pW.waitForTimeout(900);
+    return pW.evaluate(() => {
+      const s = document.querySelector('[data-testid="editor-stats"]');
+      if (!s) return null;
+      return {
+        text: s.innerText.replace(/\s+/g, ' ').trim(),
+        title: s.getAttribute('title') ?? '',
+        blocks: document.querySelector('[data-testid="editor-stat-blocks"]') !== null,
+        minutes: document.querySelector('[data-testid="editor-stat-minutes"]') !== null,
+      };
+    });
+  };
+  const readA = await openWide(ntA.id);
+  check('79 前置：那一格真挂在屏幕上（读不到就是选择器过期，下面全是空判据）',
+    readA !== null, JSON.stringify({ 读数: readA }));
+  check('79 ① 已知 325 个码位的正文 ⇒ 角上就是"325 字 · 1 段 · 约 2 分钟"（数字手算，不取自被测）',
+    readA !== null && readA.text === '325 字 · 1 段 · 约 2 分钟', JSON.stringify({ 角上: readA?.text }));
+  check('79 ①b 宽档没有东西被藏起来 ⇒ `title` 与看见的那句一字不差（㊻ 真裁到时认的就是这一条）',
+    readA !== null && readA.title === readA.text, JSON.stringify({ title: readA?.title, 看见: readA?.text }));
+  const readB = await openWide(ntB.id);
+  check('79 ② 六个码位 + 一个尾空格 ⇒ 数 6（空格不进字数，与核心 `char_count` 同口径）',
+    readB !== null && readB.text.startsWith('6 字'), JSON.stringify({ 角上: readB?.text }));
+  check('79 ②b 不足一分钟说的是"约 1 分钟"，不是"约 0 分钟"（向上取整、最少 1）',
+    readB !== null && readB.minutes === true && readB.text.includes('约 1 分钟'), JSON.stringify({ 角上: readB?.text, 那一段: readB?.minutes }));
+  let readC = null;
+  try {
+    readC = await openWide(ntC.id);
+  } finally {
+    // 空标题的笔记：跑前那条按前缀的清捞不到它，只能在这里保证清掉。
+    await cmd('purge_note', { id: ntC.id }).catch(() => undefined);
+  }
+  check('79 ③ 空正文 ⇒ "0 字"说得出口，而"约 0 分钟"那一段整条不渲染',
+    readC !== null && readC.text === '0 字 · 1 段' && readC.minutes === false, JSON.stringify({ 角上: readC?.text, 那一段: readC?.minutes }));
+  await pW.close();
+  await wide.close();
+
+  const narrow = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  const pN = await narrow.newPage();
+  pN.on('console', (m) => { if (m.type() === 'error') err79.push(m.text()); });
+  await pN.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pN.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await pN.locator(`[data-testid="note-row-${ntA.id}"]`).first().click({ timeout: 6000 });
+  await pN.waitForTimeout(1200);
+  const geo = await pN.evaluate(() => {
+    const row = document.querySelector('.editor-corner');
+    const stats = document.querySelector('[data-testid="editor-stats"]');
+    if (!row || !stats) return null;
+    const kids = Array.from(row.children).map((el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        who: el.getAttribute('data-testid') || (typeof el.className === 'string' ? el.className.slice(0, 20) : ''),
+        h: Math.round(r.height),
+        over: Math.round(el.scrollWidth - el.clientWidth),
+        left: Math.round(r.left),
+        right: Math.round(r.right),
+      };
+    });
+    return {
+      rowH: Math.round(row.getBoundingClientRect().height),
+      rowOver: Math.round(row.scrollWidth - row.clientWidth),
+      vw: Math.round(window.innerWidth),
+      kids,
+      text: stats.innerText.replace(/\s+/g, ' ').trim(),
+      title: stats.getAttribute('title') ?? '',
+      statsOver: Math.round(stats.scrollWidth - stats.clientWidth),
+      wideDisplays: Array.from(stats.querySelectorAll('.editor-corner__stats-wide')).map((n) => getComputedStyle(n).display),
+    };
+  });
+  check('79 前置（窄档）：这一排与那一格都读得到', geo !== null, JSON.stringify({ 读数: geo }));
+  const folded = (geo?.kids ?? []).filter((k) => k.h > 46);
+  check('79 ④ 这一排每一颗都只有一行高（46 = 44 的触摸上界 + 2）—— 不许任何一颗把自己的文字折开'
+    + '（第一百五十一批实测的坏形状：改于/本机改的 47、删除这一块 78）',
+    (geo?.kids.length ?? 0) >= 5 && folded.length === 0, JSON.stringify({ 折开的: folded, 全部: geo?.kids }));
+  check('79 ④b 这一排自己横向不溢出（颗与颗之间换行，不是压着窗口边裁）',
+    (geo?.rowOver ?? 99) <= 1, JSON.stringify({ 溢出: geo?.rowOver, 行高: geo?.rowH }));
+  const escaped = (geo?.kids ?? []).filter((k) => k.left < 0 || k.right > (geo?.vw ?? 0));
+  check('79 ④b2 每一颗的矩形整个在窗口里 —— 这一排是 `justify-content: flex-end`，装不下时溢出的是**左边**，'
+    + '而上一条那个 `scrollWidth − clientWidth` 看不见往左跑出去的那一段'
+    + '（第 2 刀实测：摘掉换行之后搜索那颗落在 −28..16，而 `rowOver` 照样读 0）',
+    (geo?.kids.length ?? 0) >= 5 && escaped.length === 0, JSON.stringify({ 出界的: escaped, 窗口: geo?.vw }));
+  check('79 ④c 字数那一格没被裁（量渲染出来的 `scrollWidth − clientWidth`，不是 CSS 里那句话）',
+    (geo?.statsOver ?? 99) <= 1, JSON.stringify({ 裁掉: geo?.statsOver, 看见: geo?.text }));
+  check('79 ⑤ 窄档只留字数那一句，而藏起来那两句还在 `title` 里（§5「不许静默裁掉」的那条出口）',
+    geo !== null && geo.text === '325 字' && geo.title.includes('1 段') && geo.title.includes('约 2 分钟')
+      && geo.wideDisplays.length === 2 && geo.wideDisplays.every((d) => d === 'none'),
+    JSON.stringify({ 看见: geo?.text, title: geo?.title, 那两颗: geo?.wideDisplays }));
+  check('79 这一腿 console error 为零', err79.length === 0, err79.slice(0, 3).join(' | '));
+  await pN.screenshot({ path: `${OUT}/79-editor-stats-390.png` });
+  await pN.close();
+  await narrow.close();
+  await cmd('purge_note', { id: ntA.id });
+  await cmd('purge_note', { id: ntB.id });
+  const left79 = ((await cmd('list_notes', { folderId: null, trash: false })) ?? [])
+    .filter((x) => (x.title ?? '').includes(MARK79));
+  check('79 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left79.length === 0, JSON.stringify({ 剩下: left79.length }));
+  notes.push(`     腿 79（状态条的数字）：1440「${readA?.text}」/ 390「${geo?.text}」· 这一排 ${geo?.rowH}px（${geo?.kids.length} 颗，一颗都没折字）`);
+}
+
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。
 await browser.close();
 

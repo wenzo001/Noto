@@ -470,9 +470,25 @@ export function deriveTitle(blocks: readonly EditorBlock[]): string {
   return '';
 }
 
+/**
+ * 字数 —— **口径必须与核心的派生列一字不差**：Unicode 码点 + 去掉空白
+ * （权威在 `crates/notera-richtext/src/extract.rs` 的 `char_count`，那份的模块头还写着
+ *  "不允许 UI 侧另算一份"）。
+ *
+ * 从前这里是 `blockText(b).replace(/\n/g, '').length`：**UTF-16 码元**、只去换行、**空格照算** ——
+ * 于是同一篇笔记两个地方两个数：侧栏与列表行读核心那一列（码点、不含空白），
+ * 编辑器角上读这里（码元、含空格）。emoji 与扩展区汉字每字多算 1，一句带空格的话再多算 N 个。
+ * 这里保留一份 UI 侧计算是**必要的**（打字途中要实时变，核心那一列还没落库），
+ * 但必要不等于可以不一样 —— 所以两边算成同一个数，判据在 `model.spec.ts` 的"字数口径"那一条。
+ */
 export function docCharCount(blocks: readonly EditorBlock[]): number {
   let total = 0;
-  for (const block of blocks) total += blockText(block).replace(/\n/g, '').length;
+  for (const block of blocks) {
+    // `for...of` 走的是码点（不是 `.length` 的码元），空白与 Rust 的 `is_whitespace` 同族
+    for (const ch of blockText(block)) {
+      if (!/\s/.test(ch)) total += 1;
+    }
+  }
   return total;
 }
 

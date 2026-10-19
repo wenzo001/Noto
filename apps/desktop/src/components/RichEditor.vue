@@ -9,6 +9,7 @@ import FindBar from './FindBar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
 import { applySelection, caretInView, measureEditable, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
 import { findMatches, nextIndex, prevIndex } from '../editor/findInNote';
+import { textStatsOf } from '../editor/textStats';
 import { placeBar, type Box } from '../editor/selectionBar';
 import { MARK_BUTTONS } from '../editor/marks';
 import { applySlash, filterSlash, markdownShortcut, slashQuery, type SlashItem } from '../editor/quickInsert';
@@ -31,7 +32,6 @@ import {
 } from '../editor/commands';
 import {
   blockText,
-  docCharCount,
   hasMarkInRange,
   headingLevel,
   indentOf,
@@ -95,7 +95,27 @@ const range = ref({ start: 0, end: 0 });
 const activeMarks = ref<string[]>([]);
 const activeFontSize = ref<string | null>(null);
 const activeColor = ref<string | null>(null);
-const charCount = computed(() => docCharCount(blocks.value));
+/**
+ * 状态条那一格的全部数字：字数走 `textStatsOf` ⇒ 它内部再调 `docCharCount`（与核心 `char_count` 同口径）。
+ * 名字**不叫 `stats`** —— 这一带的 `stats` 是核心那份 `StatsDto`（`settings.stats`），
+ * 而 `arch-check` 的 `edge:stats-dto-covers-ui-reads` 正是按 `stats.value.<键>` 认"界面在读核心的哪一位"；
+ * 同名会让本地这串数字被读成一次跨语言契约（第一百五十一批实测：它把 `chars/blocks/minutes` 三格点红了）。
+ */
+const docStats = computed(() => textStatsOf(blocks.value));
+/**
+ * 窄档会把"段 / 约 N 分钟"藏起来（见 `.editor-corner__stats-wide` 那条媒体查询）——
+ * 藏起来的那几句**必须还在 `title` 里**：§5 那句"文本不许静默裁掉"要的就是
+ * "要么滚得动、要么把全文给回来"，否则整跑㊻ 那条门就是红的（第一百五十一批实测撞出来过一次）。
+ */
+const statsFull = computed(() =>
+  [
+    t('editor.statChars', { count: docStats.value.chars }),
+    t('editor.statBlocks', { count: docStats.value.blocks }),
+    docStats.value.minutes > 0 ? t('editor.statMinutes', { minutes: docStats.value.minutes }) : '',
+  ]
+    .filter((x) => x.length > 0)
+    .join(' · '),
+);
 
 /**
  * 文内查找（A 档，Joplin 的 `showLocalSearch`）。**全程只读**：命中靠选区，
@@ -989,7 +1009,15 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
       >
         <AppIcon name="search" :size="18" />
       </button>
-      <span class="text-sm text-muted">{{ charCount }}</span>
+      <span
+        class="text-sm text-muted editor-corner__stats"
+        data-testid="editor-stats"
+        :title="statsFull"
+      >
+        {{ t('editor.statChars', { count: docStats.chars }) }}
+        <span class="editor-corner__stats-wide" data-testid="editor-stat-blocks"> · {{ t('editor.statBlocks', { count: docStats.blocks }) }}</span>
+        <span v-if="docStats.minutes > 0" class="editor-corner__stats-wide" data-testid="editor-stat-minutes"> · {{ t('editor.statMinutes', { minutes: docStats.minutes }) }}</span>
+      </span>
       <span
         v-if="store.saveKind"
         class="editor-corner__save"
@@ -1004,18 +1032,18 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
         />
         <span class="text-sm">{{ store.saveLabel }}</span>
       </span>
-      <span v-if="modifiedAt" class="text-sm text-muted" data-testid="editor-modified">{{ t('editor.modifiedAt', { time: modifiedAt }) }}</span>
+      <span v-if="modifiedAt" class="text-sm text-muted editor-corner__meta" data-testid="editor-modified">{{ t('editor.modifiedAt', { time: modifiedAt }) }}</span>
       <!-- §6 第 12 格：这一篇是哪台设备改的。另一台设备时短 id 在话里、全文在 `title` 里
            （只给短 id 会让"到底是哪台"核不了；只给全文这一行塞不下）。 -->
       <span
         v-if="device"
-        class="text-sm text-muted"
+        class="text-sm text-muted editor-corner__meta"
         :title="device.kind === 'other' ? device.full : undefined"
         data-testid="editor-device"
       >{{ device.kind === 'this' ? t('editor.deviceThis') : t('editor.deviceOther', { id: device.short }) }}</span>
       <!-- §6「版本历史浏览」：紧挨着那行"改于"，因为那行本来就在说"这是哪一版"。 -->
       <VersionHistory v-if="store.noteId" :note-id="store.noteId" />
-      <button v-if="!readOnly && currentBlock" type="button" class="btn btn--quiet text-sm" :title="t('editor.deleteBlock')" @click="onDeleteBlock">
+      <button v-if="!readOnly && currentBlock" type="button" class="btn btn--quiet text-sm editor-corner__action" :title="t('editor.deleteBlock')" @click="onDeleteBlock">
         {{ t('editor.deleteBlock') }}
       </button>
     </div>
@@ -1095,13 +1123,51 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
 
 .editor-corner {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--sp-3);
+  column-gap: var(--sp-3);
+  row-gap: var(--sp-1);
   padding: var(--sp-2) var(--sp-4);
   border-top: 1px solid var(--line);
   background: var(--canvas);
   min-height: var(--touch);
+}
+
+/**
+ * 这一排的读数与那颗按钮**各自不许把自己的文字折开**（第一百五十一批整跑量出来的：390 档这一排
+ * 的自然宽是 359 而可用只有 358 —— 本来就贴着边，所以多一句"字数"之后坏的不是那一句，
+ * 是**每一颗各自折行**：「改于 14:02」「本机改的」各折成两行、「删除这一块」折成四行、整排 61⇒95）。
+ * 换行只许发生在**颗与颗之间**（上面的 `flex-wrap: wrap` + 这一条的 `nowrap` / 不许被压短）。
+ *
+ * 为什么点名三类而不是 `.editor-corner > *`：这一排的直系子里有 `AppPopover` 与那颗按钮，
+ * `white-space` 是**会继承**的 —— 从那一族的根上撒下去，版本历史面板里那些长标题会变成一行、
+ * 在 `overflow-y: auto` 的面板里横向溢出，那正是 ㊻ 抓的形状。所以只许管自己这三类。
+ * 那一颗会说整句原因的保存格也不在这里：它那句本来就该折行
+ * （「服务器空间不足，同步暂停，本机内容不受影响。」压成一行会把这一排撑出窗口）。
+ */
+.editor-corner__stats,
+.editor-corner__meta,
+.editor-corner__action {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 状态条里那串数字：宽档三句（字数 / 段 / 时长），窄档只留字数（下面那条媒体查询），
+   藏起来的那两句在 `title` 里。字号数字用等宽，免得字数一变这一排就跟着抖。 */
+.editor-corner__stats {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 单栏那一档（§3.1 的 820 以下）：这一排装不下三句数字，先把"段 / 约 N 分钟"收起来。
+   宽度**不在这里再判一次** —— 壳把 §3.1 那一档算成 `shell.isCompact` 并挂在 `.app-shell[data-compact]`
+   上（`base.css` 的 `.dock` / `.app-body` 用的是同一位），这里只跟着读。
+   `layoutBreakpoints.spec.ts` 扫的是**文件原文**（连注释一起扫）："§3.1 之外不许再有宽度断点"
+   那一格里 820 只许有一个方向的那一枚，所以这里连提都不能提那个写法（第一百五十一批实测：
+   注释里复述了一遍，它就把这条判据点红了 —— 门没有误判，是我把被禁的串写进了它扫得到的地方）。
+   收起来不等于没说 —— `statsFull` 把三句都写进 `title`，§5「文本不许静默裁掉」要的就是这一句。 */
+.app-shell[data-compact='true'] .editor-corner__stats-wide {
+  display: none;
 }
 
 .editor-corner [data-save-state='saving'] {
