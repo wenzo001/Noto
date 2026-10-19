@@ -107,7 +107,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 | 用墙上时钟 `updated_time` 判新旧 | `Synchronizer.ts:682-721` | Lamport `sync_rev` + 共同祖先，**禁止 mtime** | ✔ 我们更好（时钟偏移会静默选错边） |
 | **90% 大删除熔断** | `file-api.ts:660`（`sync.wipeOutFailSafe`） | 已有同类：清单不可信绝不"以空清单继续"（`notera-sync/src/lib.rs:579`）+ 发散闸门那条判据 `divergence_gate_blocks_mass_deletion_inference`（`:819`） | ✔ 已有等价物 |
 | **单项停同步 `sync_disabled` + 原因 + 通知横幅** | `BaseItem.ts:966`、`checkDisabledSyncItemsNotification.ts` | 附件有 quarantine 台账（`SettingsView.vue:838-910`），**但同步 outbox 没有"毒丸项隔离"** | 🔶 **值得采纳**：一条永久被服务器拒的记录不该拖住整条队列 |
-| 同步进行中可**取消** | `gui/Sidebar/Sidebar.tsx:27-106`（`QuitSyncDialog`） | 无取消，一轮跑完才停 | ✅ 采纳（用户能感觉到"我按了有用"） |
+| 同步进行中可**取消** | `gui/Sidebar/Sidebar.tsx:27-106`（`QuitSyncDialog`） | **已落**：徽标上那颗 `sync-cancel`（`components/SyncBadge.vue:82`）走 `sync_cancel`（`stores/sync.ts:304`），第一百五十二批之前那一批还把它做到了"停在**一件事**的粒度"（一轮中途结清当前项再停）；判据 `stores/syncCancel.spec.ts` | ✅ 已采纳并实现（这一行的"无取消，一轮跑完才停"是旧状态，2026-10-19 按实更正） |
 | 同步状态屏（逐项报告 + Retry / Retry All / Ignore） | `gui/StatusScreen`、Help ▸ Synchronisation Status | 只有徽标 + 统计行，**无逐项报告视图** | ✅ 采纳轻版（A 档，但要看并发数不炸内存） |
 | 打字即同步（15 s / 移动端 1 s） | `registry.ts:72-79` | 写完立即起一轮 + 25 s tick（`notera-host/src/lib.rs:3166-3263`） | ✔ 等价 |
 | 冲突：非笔记类**静默让远端覆盖**；笔记类复制本地为 `is_conflict` 笔记 + 虚拟冲突夹 | `handleConflictAction.ts:31-50,95-125,197-210` | 块级三方合并，失败保留双方 + 冲突副本，永不静默覆盖 | ✔ 我们更保守 |
@@ -125,7 +125,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 | 16 个设置分栏 + 键盘快捷键可录 | `Setting.ts:1287-1390`、`gui/KeymapConfig/ShortcutRecorder.tsx` | 7 张卡 + **只读快捷键表** | 🔶 采纳"快捷键可改"，分栏数按我们自己的字段数定 |
 | 主题 8 套 + 自定义 CSS（userchrome/userstyle）+ 字号 + 缩放 + 滚动条档 | `builtInMetadata.ts` appearance 17 键 | 浅/深/系统 + 字号 0.85~1.60（`stores/settings.ts:37-38`），无字体/宽度/自定义 CSS | 🔶 采纳**内容宽度**与**行高**两格（读长文用得上），自定义 CSS 不收（等于放弃设计系统守卫） |
 | 语言 | `locale` 全量 | 仅简中，无设置项 | 🔶 取决于发布对象，等你定 |
-| 回收站自动清理天数 | `trash.autoDeletionEnabled`/`trash.ttlDays` | 回收站**永不过期**（`docs/design/...v2.md:440`） | ✅ 采纳（"永不"会让库只增不减；默认建议 30 天，值待拍） |
+| 回收站自动清理天数 | `trash.autoDeletionEnabled`/`trash.ttlDays` | **已落（A13，0.0.14x 一批）**：核心 `TRASH_TTL_DAYS = 30`（`crates/notera-host/src/lib.rs:1067`），到期按 `cutoff_after(now, 30)` 清；界面那句"30 天内可以恢复"由 `arch-check` 的 `edge:trash-ttl-copy-matches-core` 钉住与核心同源，不许两处各抄一个数 | ✅ 已采纳并实现（这一行从前写"回收站永不过期，值待拍"，那是被 A13 推翻的旧口径，2026-10-19 按实更正） |
 | 历史版本 TTL | `revisionService.ttlDays` 默认 90 | 有历史面板，保留口径本轮未核实到具体数（标 `(?)`） | 🔶 先把我们的口径写进文档再决定 |
 
 ### 3.5 各端页面布局（你说要"完全参考"的那部分）
