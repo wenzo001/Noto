@@ -36,9 +36,10 @@ pub use crate::syncml::SyncStateRow;
 pub use crate::types::{
     ApplyOp, ApplyReport, Attachment, AttachmentInventoryRow, AttachmentJob, ConflictRecord,
     ConflictRow, ConflictState, DirtyEntity, DirtyWhy, Folder, MatchKind, Note, NoteListRow,
-    NoteQuery, OpKind, OpState, ReclaimedTotals, RemoteIndexEntry, RevOrigin, RevisionMeta,
-    SearchHit, SearchPath, SearchQuery, StorePaths, StoreStats, SyncOperation, TombstoneRow,
-    DEFAULT_FOLDER_ID, DEFAULT_FOLDER_NAME, LOCAL_ACCOUNT_ID, SUPPORTED_SCHEMA_VERSION,
+    NoteQuery, NoteSort, OpKind, OpState, ReclaimedTotals, RemoteIndexEntry, RevOrigin,
+    RevisionMeta, SearchHit, SearchPath, SearchQuery, StorePaths, StoreStats, SyncOperation,
+    TombstoneRow, DEFAULT_FOLDER_ID, DEFAULT_FOLDER_NAME, LOCAL_ACCOUNT_ID,
+    SUPPORTED_SCHEMA_VERSION,
 };
 
 pub use crate::store::Store;

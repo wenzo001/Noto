@@ -16,6 +16,23 @@ import { t, messageFor } from '../i18n';
 import { formatWhen } from '../util/format';
 import { plainText } from '../util/plainText';
 import { MARK_SWATCHES, MARK_DOT_SHAPE as DOT_SHAPE, dotStyle } from '../util/markColors';
+import { NOTE_SORTS, type NoteSortKey } from '../stores/settings';
+
+/**
+ * 排序那一族（第一百五十三批）。**名单是从事实派生的**：项与序都来自 `NOTE_SORTS`，
+ * 这里只给每一档一句人话 —— 少写一句标签 `Record` 就编译不过，多写一句是废键（TS 也拦）。
+ * 而 `NOTE_SORTS` 本身与核心 `NoteSort::as_wire` 由 `arch-check` 的
+ * `static:note-sort-vocabulary-matches-core` 双向对账 ⇒ 不会出现"下拉里有第六项而核心不认"那种形状。
+ */
+const SORT_LABELS: Record<NoteSortKey, string> = {
+  updated_desc: 'list.sortUpdatedDesc',
+  updated_asc: 'list.sortUpdatedAsc',
+  created_desc: 'list.sortCreatedDesc',
+  created_asc: 'list.sortCreatedAsc',
+  title_asc: 'list.sortTitleAsc',
+  title_desc: 'list.sortTitleDesc',
+};
+const SORT_CHOICES = NOTE_SORTS.map((key) => ({ key, label: SORT_LABELS[key] }));
 import type { NoteListRow, SearchHit } from '../api/types';
 
 /**
@@ -230,6 +247,25 @@ function createFrom(tpl: NoteTemplate): void {
       <button type="button" class="btn btn--quiet" data-testid="daily-note" :title="t('list.dailyNote')" :aria-label="t('list.dailyNote')" @click="notes.openToday()">
         {{ t('list.dailyNote') }}
       </button>
+      <!-- 排序（第一百五十三批）。触发那颗**直接写着当前这一档**（"最近修改"…），
+           因为"现在是怎么排的"必须不点开也看得见 —— 点开才知道的开关，用户读不到自己的状态。
+           每"一档列表"各记各的（键在 `notes.listKey`），且这份记忆只在本机（2026-10-08 那条拍板）。 -->
+      <AppPopover testid="list-sort" :label="t('list.sort')">
+        <template #glyph>{{ t(SORT_LABELS[notes.currentSort]) }}</template>
+        <template #default="{ close }">
+          <button
+            v-for="opt in SORT_CHOICES"
+            :key="opt.key"
+            type="button"
+            class="btn btn--block"
+            :aria-pressed="notes.currentSort === opt.key ? 'true' : 'false'"
+            :data-testid="`sort-${opt.key}`"
+            @click="close(); notes.setSort(opt.key)"
+          >
+            {{ t(opt.label) }}
+          </button>
+        </template>
+      </AppPopover>
     </div>
 
     <SearchField ref="searchField" />

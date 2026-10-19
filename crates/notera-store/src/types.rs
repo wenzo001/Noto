@@ -135,6 +135,50 @@ pub struct Attachment {
     pub position: i64,
 }
 
+/// 列表的排序档（第一百五十三批：每文件夹记忆排序）。
+///
+/// 为什么是一个**封闭枚举**而不是把列名传进来：`ORDER BY` 是 SQL 里唯一不能参数化的那段，
+/// 拼字符串就是把注入面开在"看起来只是个下拉框"的地方。这里每一档对应**一条写死的常量串**
+/// （`store.rs::order_clause`），编译器保证"新加一档 = 必须写一条常量"，不会有第三条路。
+///
+/// `UpdatedDesc` 就是这一族**改了之前**的写死顺序 ⇒ 不传 sort 的旧调用方逐字不变。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoteSort {
+    #[default]
+    UpdatedDesc,
+    UpdatedAsc,
+    CreatedDesc,
+    CreatedAsc,
+    TitleAsc,
+    TitleDesc,
+}
+
+impl NoteSort {
+    /// 命令面上那一个字符串 ⇄ 这一档的**唯一**一处映射（界面、核心、判据都读它，不各抄一份）。
+    pub fn parse(wire: &str) -> Option<Self> {
+        Some(match wire {
+            "updated_desc" => Self::UpdatedDesc,
+            "updated_asc" => Self::UpdatedAsc,
+            "created_desc" => Self::CreatedDesc,
+            "created_asc" => Self::CreatedAsc,
+            "title_asc" => Self::TitleAsc,
+            "title_desc" => Self::TitleDesc,
+            _ => return None,
+        })
+    }
+
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::UpdatedDesc => "updated_desc",
+            Self::UpdatedAsc => "updated_asc",
+            Self::CreatedDesc => "created_desc",
+            Self::CreatedAsc => "created_asc",
+            Self::TitleAsc => "title_asc",
+            Self::TitleDesc => "title_desc",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteQuery {
     pub folder: Option<EntityId>,

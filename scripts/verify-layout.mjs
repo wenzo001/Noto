@@ -281,6 +281,7 @@ const FIXTURE_MARKS = [
   '标签腿夹具',
   '查找腿夹具',
   '撤销腿夹具',
+  '排序腿夹具',
   // 第 49 刀那条字号腿的夹具。
   '字号夹具',
   // 第 50 批那条 toast 时限腿的夹具。
@@ -9675,6 +9676,145 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   const left80 = [...await coreActive(), ...await coreTrash()];
   check('80 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left80.length === 0, JSON.stringify({ 剩下: left80.length }));
   notes.push(`     腿 80（删除后的撤销）：撤销那颗 ${bar.actionW}×${bar.actionH}、六秒后 ${still ? '还在' : '走了'}；两条出口各自落到"回来 / 留在回收站"`);
+}
+
+/**
+ * 81 排序那一档在真浏览器里真的改了先后，而且**跨刷新还在**（第一百五十三批，A 档「每文件夹记忆排序」）。
+ *
+ * 为什么单测不够：`sortMemory.spec.ts` 跑在假核心上，它证明的是"界面把那一位发出去了"；
+ * 证明不了**真 SQLite 真按那一档排、虚拟列表真把新顺序画出来、偏好真活过一次刷新**。
+ * 屏幕上的顺序还有一层坑：列表是**虚拟**的，我这三篇不一定同时可见（彩排实测就是不可见 ——
+ * 窗口里全是置顶与英文标题那几篇）⇒ 判据不打在"我这几篇的先后"，改打在
+ * "**屏幕上这一段，在核心同一档读回来的那份顺序里严格递增**"（按身份配对 + 样本量下限；
+ * [[assert-by-identity-not-position]]、[[gate-fixtures-must-respect-product-limits]] 同一族）。
+ * 六格：
+ *  ① 触发那颗平时就写着当前这一档（不点开也读得到自己的状态）；
+ *  ② 面板里六个选项、每颗命中区 ≥44、`aria-pressed` 只有一颗是真的；
+ *  ③ 选「标题 A→Z」⇒ 屏幕上那一段在核心 `sort=title_asc` 那份里严格递增，触发那颗跟着改字；
+ *  ④ **刷新一次还在**（这一格才是"记忆"两个字的证人，缺它就等于只做了个下拉框）；
+ *  ⑤ 换「标题 Z→A」⇒ 窗口照旧按那一档递增，且**首行换了人**（两档不是同一个顺序的别名）；
+ *  ⑥ 全程零次 `edit_note`（换个看法不该把任何一篇弄脏 —— 与腿 78 同一把尺）+ console 零 error + 夹具清干净。
+ */
+{
+  const MARK81 = '排序腿夹具';
+  const stamp81 = Date.now();
+  const mk = (n) => cmd('create_note', {
+    folderId: null,
+    doc: {
+      v: 1,
+      content: [{ id: `w${String(stamp81).slice(-6)}${n}`, type: 'paragraph', content: [{ type: 'text', text: `${n} ${MARK81}${n}` }] }],
+    },
+  });
+  // 标题故意以 ASCII 数字开头：`COLLATE NOCASE` 下它们排在所有中文标题之前 ⇒ 三篇一定在首屏里
+  const n0 = await mk('0');
+  const n1 = await mk('1');
+  const n2 = await mk('2');
+  const mine = [n0.id, n1.id, n2.id];
+
+  const err81 = [];
+  const edits81 = [];
+  const c81 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p81 = await c81.newPage();
+  p81.on('console', (m) => { if (m.type() === 'error') err81.push(m.text()); });
+  p81.on('request', (r) => { if (r.url().includes('/cmd/edit_note')) edits81.push(r.url()); });
+  await p81.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p81.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p81.waitForTimeout(900);
+
+  const triggerText = () => p81.evaluate(() =>
+    (document.querySelector('[data-testid="list-sort"]')?.innerText ?? '').replace(/\s+/g, ' ').trim());
+  /**
+   * 起点自己摆：偏好是**跟着这台机器**的（localStorage + 本机那张作用域偏好表），
+   * 上一遍留下的那一档会活到这一遍 —— 这不是 bug，正是"记忆"的定义。
+   * 所以这一腿不能假设"进来就是默认档"：先把这一档按回默认，再断言读得到它。
+   * （彩排第一次就是被这个假设绊到的：① 读到的是上一遍留下的「标题 Z→A」。）
+   */
+  await p81.click('[data-testid="list-sort"]');
+  await p81.waitForSelector('[data-testid="app-popover-panel"]', { timeout: 6000 });
+  await p81.click('[data-testid="sort-updated_desc"]');
+  await p81.waitForTimeout(900);
+  check('81 ① 触发那颗平时就写着当前这一档（摆回默认后读得到"最近修改"）',
+    (await triggerText()) === '最近修改', JSON.stringify({ 那颗: await triggerText() }));
+
+  await p81.click('[data-testid="list-sort"]');
+  await p81.waitForSelector('[data-testid="app-popover-panel"]', { timeout: 6000 });
+  const opts = await p81.evaluate(() => Array.from(
+    document.querySelectorAll('[data-testid^="sort-"]'),
+  ).map((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      id: (el.getAttribute('data-testid') ?? '').replace('sort-', ''),
+      text: (el.innerText ?? '').trim(),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      pressed: el.getAttribute('aria-pressed'),
+    };
+  }));
+  check('81 ② 面板里六个选项各自在场、文字是人话（不是线上那个 snake_case）',
+    opts.length === 6 && opts.every((o) => o.text.length > 1 && !/[a-z_]/.test(o.text)),
+    JSON.stringify(opts.map((o) => `${o.id}=${o.text}`)));
+  check('81 ②b 每颗命中区 ≥44（§5），且 `aria-pressed` 只有一颗是真的',
+    opts.every((o) => o.w >= 44 && o.h >= 44) && opts.filter((o) => o.pressed === 'true').length === 1,
+    JSON.stringify({ 小的: opts.filter((o) => o.w < 44 || o.h < 44).map((o) => o.id), 按下: opts.filter((o) => o.pressed === 'true').map((o) => o.id) }));
+
+  const domOrder = () => p81.evaluate(() => Array.from(
+    document.querySelectorAll('[data-testid^="note-row-"]'),
+  ).map((el) => (el.getAttribute('data-testid') ?? '').replace('note-row-', '')));
+  const coreOrder = async (sort) => ((await cmd('list_notes', { folderId: null, trash: false, limit: 200, offset: 0, sort })) ?? [])
+    .map((r) => r.id);
+  /**
+   * 判据的形状（彩排时改过一次，这里记下来免得有人再猜）：列表是**虚拟**的，
+   * 我那三篇不一定落在渲染窗口里 ⇒ "屏幕上我这几篇的先后"量不到，硬要量就是空判据。
+   * 换成一条更强也更稳的：**屏幕上这一段，在核心同一档读回来的那份顺序里必须严格递增**
+   * —— 也就是"画出来的这一段真的按这一档排"，与哪几篇落进窗口无关。样本量下限挡住"窗口是空的"。
+   */
+  const windowSortedBy = async (sort) => {
+    const dom = await domOrder();
+    const core = await coreOrder(sort);
+    const at = new Map(core.map((id, i) => [id, i]));
+    const missing = dom.filter((id) => !at.has(id));
+    let monotonic = missing.length === 0;
+    for (let i = 1; monotonic && i < dom.length; i += 1) {
+      if (at.get(dom[i - 1]) >= at.get(dom[i])) monotonic = false;
+    }
+    return { n: dom.length, window: dom, monotonic, missing: missing.slice(0, 3), first: dom[0] ?? null };
+  };
+
+  await p81.click('[data-testid="sort-title_asc"]');
+  await p81.waitForTimeout(1200);
+  const asc = await windowSortedBy('title_asc');
+  check('81 ③ 选「标题 A→Z」：屏幕上这一段在核心同一档里严格递增（画出来的就是这一档），触发那颗跟着改字',
+    asc.n >= 5 && asc.monotonic && (await triggerText()) === '标题 A→Z',
+    JSON.stringify({ ...asc, 那颗: await triggerText() }));
+
+  await p81.reload({ waitUntil: 'networkidle' });
+  await p81.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p81.waitForTimeout(900);
+  const again = await windowSortedBy('title_asc');
+  check('81 ④ 刷新一次还在（这一格才是"记忆"两个字的证人 —— 缺它就是个下拉框）',
+    (await triggerText()) === '标题 A→Z' && again.n >= 5 && again.monotonic && again.first === asc.first,
+    JSON.stringify({ 那颗: await triggerText(), 窗口: again.n, 递增: again.monotonic, 首行同: again.first === asc.first }));
+
+  await p81.click('[data-testid="list-sort"]');
+  await p81.waitForSelector('[data-testid="app-popover-panel"]', { timeout: 6000 });
+  await p81.click('[data-testid="sort-title_desc"]');
+  await p81.waitForTimeout(1200);
+  const desc = await windowSortedBy('title_desc');
+  check('81 ⑤ 换「标题 Z→A」：窗口照旧按那一档递增，且这一段序列与正序**不是同一条**（两档不是彼此的别名）',
+    desc.n >= 5 && desc.monotonic && desc.window.join() !== asc.window.join(),
+    JSON.stringify({ 正: asc.window.slice(0, 4), 反: desc.window.slice(0, 4), 窗口: desc.n, 递增: desc.monotonic }));
+
+  check('81 ⑥ 换个看法不该弄脏任何一篇：全程零次 `edit_note`',
+    edits81.length === 0, JSON.stringify({ 次数: edits81.length, 样本: edits81.slice(0, 2) }));
+  check('81 这一腿 console error 为零', err81.length === 0, err81.slice(0, 3).join(' | '));
+  await p81.screenshot({ path: `${OUT}/81-list-sort-1440.png` });
+  await p81.close();
+  await c81.close();
+  for (const id of mine) await cmd('purge_note', { id });
+  const left81 = ((await cmd('list_notes', { folderId: null, trash: false })) ?? [])
+    .filter((x) => (x.title ?? '').includes(MARK81));
+  check('81 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left81.length === 0, JSON.stringify({ 剩下: left81.length }));
+  notes.push(`     腿 81（排序那一档）：正序窗口 ${asc.n} 行按核心递增、首行 ${String(asc.first).slice(-6)}；刷新后还在；反序首行 ${String(desc.first).slice(-6)} · edit_note ${edits81.length} 次`);
 }
 
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();

@@ -39,15 +39,36 @@ export const FONT_SCALE_MAX = 1.6;
 /** 字号是滑杆，一拖就是几十次变化 ⇒ 落库要合并成一次（每帧一次写事务不是"持久"，是负担）。 */
 export const PREFS_PERSIST_MS = 300;
 
+/**
+ * 排序档的**界面侧名单**（第一百五十三批）。这一串不是随便起的名字：它是命令面上的词汇，
+ * 权威在 `crates/notera-store/src/types.rs` 的 `NoteSort::as_wire`，两边必须逐字相等 ——
+ * `arch-check` 的 `static:note-sort-vocabulary-matches-core` 双向对这张表
+ * （多一个、少一个、改一个名字都会红；[[cross-table-link-belongs-in-production]] 同族）。
+ */
+export const NOTE_SORTS = ['updated_desc', 'updated_asc', 'created_desc', 'created_asc', 'title_asc', 'title_desc'] as const;
+export type NoteSortKey = (typeof NOTE_SORTS)[number];
+
 export interface UiPrefs {
   theme: ThemeMode;
   fontScale: number;
   transparency: boolean;
   trayHint: boolean;
+  /**
+   * 每"一档列表"记住的排序（键 = `all` / `folder:<id>` / `trash` / `tag:<id>`）。
+   * 2026-10-08 那条拍板：偏好只做**本机**持久，不上传 —— 排序是"我怎么看法"，不是笔记的内容，
+   * 把它同步过去等于让一台手机改动另一台电脑的视图。
+   */
+  sorts: Record<string, NoteSortKey>;
 }
 
-const DEFAULT_PREFS: UiPrefs = { theme: 'system', fontScale: 1, transparency: true, trayHint: false };
-const PREF_KEYS: readonly (keyof UiPrefs)[] = ['theme', 'fontScale', 'transparency', 'trayHint'];
+const DEFAULT_PREFS: UiPrefs = {
+  theme: 'system',
+  fontScale: 1,
+  transparency: true,
+  trayHint: false,
+  sorts: {},
+};
+const PREF_KEYS: readonly (keyof UiPrefs)[] = ['theme', 'fontScale', 'transparency', 'trayHint', 'sorts'];
 
 function clampScale(value: number): number {
   if (!Number.isFinite(value)) return 1;
@@ -65,7 +86,18 @@ export function normalizePrefs(input: unknown): UiPrefs {
     fontScale: clampScale(typeof raw.fontScale === 'number' ? raw.fontScale : 1),
     transparency: raw.transparency !== false,
     trayHint: raw.trayHint === true,
+    sorts: normalizeSorts(raw.sorts),
   };
+}
+
+/** 只认名单里那六个值；脏值**丢掉**而不是原样带过去（带过去就是发给核心一次 `bad_sort`）。 */
+function normalizeSorts(input: unknown): Record<string, NoteSortKey> {
+  const out: Record<string, NoteSortKey> = {};
+  if (typeof input !== 'object' || input === null) return out;
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if ((NOTE_SORTS as readonly string[]).includes(value as string)) out[key] = value as NoteSortKey;
+  }
+  return out;
 }
 
 /** 库里一条我们写过的键都没有 ⇒ 别拿默认值盖掉本机这一份（第一次启动的那位用户没做错什么）。 */
@@ -257,6 +289,11 @@ export const useSettingsStore = defineStore('settings', () => {
 
   function setFontScale(value: number): void {
     prefs.value = { ...prefs.value, fontScale: clampScale(value) };
+  }
+
+  /** 某一档列表的排序（第一百五十三批）。键由 `notes.ts` 的 `listKey` 给，值只认 `NOTE_SORTS`。 */
+  function setListSort(listKey: string, sort: NoteSortKey): void {
+    prefs.value = { ...prefs.value, sorts: { ...prefs.value.sorts, [listKey]: sort } };
   }
 
   function setCaps(next: unknown): void {
@@ -568,6 +605,7 @@ export const useSettingsStore = defineStore('settings', () => {
     trackSystemTheme,
     setTheme,
     setFontScale,
+    setListSort,
     setCaps,
     loadAccount,
     saveAccount,

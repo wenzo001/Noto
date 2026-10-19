@@ -160,7 +160,10 @@ describe('列表与回收站', () => {
     await notes.load();
     expect(notes.rows).toHaveLength(2);
     expect(notes.pinnedRows.map((item) => item.id)).toEqual(['note-1']);
-    expect(service.callsOf('list_notes')[0]?.args).toEqual({ limit: 200, offset: 0, trash: false });
+    // 第一百五十三批：这一排现在**总是**带 `sort`（没记过就是 `updated_desc`，也就是这一批之前
+    // 那句写死的顺序）。这两条是 `toEqual` 全对象比对 ⇒ 命令面上多一位它们就会红，
+    // 这正是我要的：wire 的形状变了，账上必须看得见（[[verify-cross-language-contracts-with-real-payload]]）。
+    expect(service.callsOf('list_notes')[0]?.args).toEqual({ limit: 200, offset: 0, trash: false, sort: 'updated_desc' });
     expect(service.callsOf('get_note')).toHaveLength(0);
   });
 
@@ -168,7 +171,7 @@ describe('列表与回收站', () => {
     const service = stubLocalService({ list_notes: () => [row('note-9', '被删的')] });
     const notes = useNoteStore();
     await notes.setMode({ kind: 'trash' });
-    expect(service.callsOf('list_notes')[0]?.args).toEqual({ limit: 200, offset: 0, trash: true });
+    expect(service.callsOf('list_notes')[0]?.args).toEqual({ limit: 200, offset: 0, trash: true, sort: 'updated_desc' });
     await notes.restore('note-9');
     await notes.purge('note-9');
     expect(service.callsOf('restore_note')[0]?.args).toEqual({ id: 'note-9' });

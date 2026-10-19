@@ -14,6 +14,7 @@ import { asBridgeError } from '../util/errors';
 import { emptyDoc } from '../editor/model';
 import { useEditorStore } from './editor';
 import { useSettingsStore } from './settings';
+import type { NoteSortKey } from './settings';
 import { useToastStore } from './toasts';
 import { t, type MessageKey } from '../i18n';
 
@@ -65,6 +66,27 @@ export const useNoteStore = defineStore('notes', () => {
   const tagIdsByNote = ref<Record<string, string[]>>({});
 
   const inTrash = computed(() => mode.value.kind === 'trash');
+
+  /**
+   * 这一档列表在偏好里的键（第一百五十三批"每文件夹记一次排序"）。
+   * `folder` 那一档的 `folderId` 为 null 时算 `folder:default`（内置本），**不与 `all` 共用一个键** ——
+   * "全部"和"某一个本子里"是两件事，共用就会让一次改动串到另一处（同族教训见
+   * [[cross-table-link-belongs-in-production]]：能共用的不是同一个东西，就别共用那张表）。
+   */
+  const listKey = computed(() => {
+    const m = mode.value;
+    if (m.kind === 'folder') return `folder:${m.folderId ?? 'default'}`;
+    if (m.kind === 'tag') return `tag:${m.tagId}`;
+    return m.kind;
+  });
+  const settingsStore = useSettingsStore();
+  /** 没记过 = `updated_desc`，也就是这一批之前那句写死的顺序（旧行为是默认值，不是一条特例）。 */
+  const currentSort = computed<NoteSortKey>(() => settingsStore.prefs.sorts[listKey.value] ?? 'updated_desc');
+
+  function setSort(sort: NoteSortKey): void {
+    settingsStore.setListSort(listKey.value, sort);
+    void load();
+  }
   const searching_ = computed(() => query.value.trim().length > 0);
   const visibleRows = computed(() => rows.value);
   const pinnedRows = computed(() => rows.value.filter((row) => row.pinned === true));
@@ -99,6 +121,8 @@ export const useNoteStore = defineStore('notes', () => {
 
   function listArgs(offset: number): Record<string, unknown> {
     const args: Record<string, unknown> = { limit: PAGE_SIZE, offset };
+    // 排序：每"一档列表"各记各的（第一百五十三批）。不传 = 核心那一档默认 = 这一批之前的写死顺序。
+    args.sort = currentSort.value;
     if (mode.value.kind === 'trash') args.trash = true;
     else {
       args.trash = false;
@@ -507,6 +531,9 @@ export const useNoteStore = defineStore('notes', () => {
     moveTo,
     moveToTrash,
     restore,
+    listKey,
+    currentSort,
+    setSort,
     purge,
     applyNoteUpdate,
     rowById,

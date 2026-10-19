@@ -447,6 +447,13 @@ pub struct ListNotesCmd {
     pub tag_id: Option<String>,
     #[serde(default)]
     pub trash: bool,
+    /// 排序档（第一百五十三批：每文件夹记忆排序）。**不给就是今天那一串** ——
+    /// `NoteSort::default()` 逐字等于这一批之前写死的 `pinned DESC, updated_at DESC, id`，
+    /// 所以旧调用方（含全部既有测试）不会因为这一格换顺序。
+    /// 值只认 `notera_store::NoteSort::parse` 那六个；认不出来是**具名拒绝**，不是悄悄退回默认
+    /// （悄悄退回会把"界面写错了一个字符串"读成"排序没生效"，那一族最难查）。
+    #[serde(default)]
+    pub sort: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: u32,
     #[serde(default)]

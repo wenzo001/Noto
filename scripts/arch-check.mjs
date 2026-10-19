@@ -1339,6 +1339,48 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     problems, problems.join('\n    '));
 }
 
+/**
+ * 排序档的词汇表：核心 ⇄ 界面（第一百五十三批）。
+ *
+ * 为什么要有这一条而不是"信任 TS 类型"：`NoteSort` 的线上值是一段**跨语言契约**
+ * （Rust 的 `as_wire` / `parse` 与 `settings.ts` 的 `NOTE_SORTS`），
+ * 三处各抄一份早晚会漂 —— 漂一次的形状是"下拉里有第六项而核心回 `bad_sort`"，
+ * 或"核心加了一档而界面永远选不到它"（两种都是静默的，用户只看到"排序没生效"）。
+ * 所以这里做**双向差集**，并且要求三张表自洽：`as_wire` 的六个、`parse` 认的六个、界面那六个。
+ * 扫到 0 项不算通过 —— 那说明正则跟源码脱钩了，判据在空转（§43 那一族）。
+ */
+{
+  const problems = [];
+  const rust = read(join(ROOT, 'crates/notera-store/src/types.rs'));
+  const ts = read(join(ROOT, 'apps/desktop/src/stores/settings.ts'));
+
+  const wireBlock = /pub fn as_wire\(self\) -> &'static str \{([\s\S]*?)\n    \}/.exec(rust);
+  const parseBlock = /pub fn parse\(wire: &str\) -> Option<Self> \{([\s\S]*?)\n    \}/.exec(rust);
+  const uiBlock = /export const NOTE_SORTS = \[([\s\S]*?)\] as const/.exec(ts);
+
+  const grab = (body, re) => new Set([...(body ?? '').matchAll(re)].map((m) => m[1]));
+  const wire = wireBlock ? grab(wireBlock[1], /=>\s*"([a-z_]+)"/g) : new Set();
+  const parsed = parseBlock ? grab(parseBlock[1], /"([a-z_]+)"\s*=>/g) : new Set();
+  const ui = uiBlock ? grab(uiBlock[1], /'([a-z_]+)'/g) : new Set();
+
+  if (!wireBlock) problems.push('没找到 NoteSort::as_wire 那一段 ⇒ 这条判据空转（核心换了写法要改这条，不许删）');
+  if (!parseBlock) problems.push('没找到 NoteSort::parse 那一段 ⇒ 这条判据空转');
+  if (!uiBlock) problems.push('没找到 settings.ts 的 NOTE_SORTS ⇒ 这条判据空转');
+  if (wire.size === 0 || parsed.size === 0 || ui.size === 0) {
+    problems.push(`有一张表是空的（as_wire ${wire.size} / parse ${parsed.size} / 界面 ${ui.size}）—— 空表不算相等`);
+  }
+  const diff = (a, b, nameA, nameB) => {
+    const only = [...a].filter((x) => !b.has(x));
+    if (only.length) problems.push(`只在 ${nameA} 里有、${nameB} 里没有：${only.join(', ')} —— 漂了的这一档要么选不到、要么被核心拒`);
+  };
+  diff(wire, parsed, 'as_wire', 'parse');
+  diff(parsed, wire, 'parse', 'as_wire');
+  diff(ui, wire, '界面 NOTE_SORTS', 'as_wire');
+  diff(wire, ui, 'as_wire', '界面 NOTE_SORTS');
+  check('static:note-sort-vocabulary-matches-core', '第一百五十三批（排序档是跨语言契约，三张表必须同集）',
+    problems, problems.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;

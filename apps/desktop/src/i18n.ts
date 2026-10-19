@@ -51,6 +51,16 @@ const MESSAGES: Record<MessageKey, string> = {
   'template.todo': '待办清单',
   'template.meeting': '会议记录',
   'list.dailyNote': '今天',
+  // 排序那一族（第一百五十三批）。这六个标签与 `stores/settings.ts` 的 `NOTE_SORTS` 一一对应，
+  // 而那份名单与核心 `NoteSort::as_wire` 由 `arch-check` 的 `static:note-sort-vocabulary-matches-core`
+  // 双向对账 ⇒ 这里少一句、或多一句，都会红（不会出现"下拉里有第六项而核心不认"那种形状）。
+  'list.sort': '排序方式',
+  'list.sortUpdatedDesc': '最近修改',
+  'list.sortUpdatedAsc': '最早修改',
+  'list.sortCreatedDesc': '最近创建',
+  'list.sortCreatedAsc': '最早创建',
+  'list.sortTitleAsc': '标题 A→Z',
+  'list.sortTitleDesc': '标题 Z→A',
   'list.pin': '固定',
   'list.unpin': '取消固定',
   'list.hasAttachment': '含附件',
@@ -459,6 +469,9 @@ const MESSAGES: Record<MessageKey, string> = {
   'state.undo': '撤销',
   'conflict.resolvedNow': '这一条已处理好。',
   'error.fallback': '操作没有成功，可以稍后再试。',
+  // 排序档认不出来（第一百五十三批）。核心是**具名拒绝**、不悄悄退回默认，所以这句话不能说"已按默认排"——
+  // 那会是一句比 bug 更糟的话：用户以为排序生效了，实际列表没动。
+  'error.bad_sort': '这个排序方式这一版不认识，列表没有重新排；你的笔记没有任何改动。',
   'error.offline': '当前离线，改动已保存在本机，恢复联网后会自动继续。',
   'error.server_unavailable': '暂时连不上你的服务器，已在本机继续工作。',
   'error.auth_required': '登录信息不可用，请在设置里重新填写口令。',

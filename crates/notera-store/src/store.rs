@@ -1626,7 +1626,21 @@ impl Store {
     }
 
     /// 列表投影：SQL 里**不出现 `doc`**（DATA-MODEL §13 性能约束）。
+    ///
+    /// 这一条是"今天怎么排"的那一条 —— 它委托给 [`list_notes_with`] 并交上 `NoteSort::default()`，
+    /// 而默认那一档就是这一批之前**写死**的那一串 ⇒ 不传 sort 的旧调用方（含全部既有测试）逐字不变。
     pub fn list_notes(&self, q: &NoteQuery) -> Result<Vec<NoteListRow>, StoreError> {
+        self.list_notes_with(q, crate::types::NoteSort::default())
+    }
+
+    /// 同上，但排序由调用方给（第一百五十三批）。**顺序是列表这一族契约的一部分**：
+    /// 每一档都以 `n.pinned DESC` 开头（置顶不参与排序，这是既有行为）、以 `n.id` 收尾
+    /// （同一时刻的两篇必须有确定的先后，否则两次读同一份库可以给出两个顺序，判据就成了抛硬币）。
+    pub fn list_notes_with(
+        &self,
+        q: &NoteQuery,
+        sort: crate::types::NoteSort,
+    ) -> Result<Vec<NoteListRow>, StoreError> {
         let conn = self.read()?;
         let limit = if q.limit == 0 { 500i64 } else { q.limit as i64 };
         let sql = format!(
@@ -1637,9 +1651,10 @@ impl Store {
                       SELECT 1 FROM json_each(n.tag_ids) j
                       JOIN tags tk ON tk.id = j.value
                       WHERE tk.id = ?5 OR tk.alias_of = ?5))
-              ORDER BY n.pinned DESC, n.updated_at DESC, n.id
+              ORDER BY {}
               LIMIT ?2 OFFSET ?3",
-            rows::LIST_COLS
+            rows::LIST_COLS,
+            order_clause(sort)
         );
         // 绑定值必须是活到 `query_map` 之后的具名局部量（临时值会让 stmt 借用到悬垂引用）。
         let trash = q.trash as i64;
@@ -2288,4 +2303,27 @@ pub(crate) fn write_atomic(target: &Path, bytes: &[u8]) -> Result<(), StoreError
     }
     std::fs::rename(&tmp, target)?;
     Ok(())
+}
+
+/// 每一档排序对应**一条写死的常量串** —— 这是 `ORDER BY` 唯一安全的构造方式（列名不能参数化）。
+/// 新加一档必须在这里多一个 arm，编译器会替我数着：`NoteSort` 加了变体而这里没加 ⇒ 红。
+///
+/// 三个共同点不是随手写的：
+///  · `n.pinned DESC` 永远在最前 —— 置顶是"钉住"，不参与排序（改了它就是今天的行为变了）；
+///  · `n.id` 永远收尾 —— 同一时刻的两篇必须有确定先后，否则两次读同一份库能给出两个顺序，
+///    判据就变成抛硬币（[[assert-by-identity-not-position]] 那一族的根）；
+///  · 标题走 `COLLATE NOCASE`，**中文仍是码位序**（不是拼音序）。要拼音得引 ICU，
+///    而那是几百 KB 的**安装包代价** —— 与本项目"包要小"那条硬约束直接冲突，所以这里不做，
+///    并把这一格登记成待拍（见 `docs/NEEDS-OTHER-MACHINE-TESTING.md`）。
+#[must_use]
+pub(crate) fn order_clause(sort: crate::types::NoteSort) -> &'static str {
+    use crate::types::NoteSort as S;
+    match sort {
+        S::UpdatedDesc => "n.pinned DESC, n.updated_at DESC, n.id",
+        S::UpdatedAsc => "n.pinned DESC, n.updated_at ASC, n.id",
+        S::CreatedDesc => "n.pinned DESC, n.created_at DESC, n.id",
+        S::CreatedAsc => "n.pinned DESC, n.created_at ASC, n.id",
+        S::TitleAsc => "n.pinned DESC, n.title COLLATE NOCASE ASC, n.id",
+        S::TitleDesc => "n.pinned DESC, n.title COLLATE NOCASE DESC, n.id",
+    }
 }

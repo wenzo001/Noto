@@ -438,3 +438,106 @@ fn verify_is_empty_on_a_fresh_store_and_reports_nothing_after_noop() {
     );
     assert!(store.verify().is_empty());
 }
+
+/// 排序这一族（第一百五十三批）。四格，每格都带"不许各抄一份"的那一条：
+///  · **默认那一档必须逐字等于这一批之前写死的顺序** ⇒ `list_notes` 与 `list_notes_with(UpdatedDesc)`
+///    给同一个顺序（旧调用方与全部既有测试不许因为这一批换先后）；
+///  · 置顶不参与排序：钉住的那一篇在任何一档都在最前；
+///  · 标题两档互为逆序（`COLLATE NOCASE` 生效的那一侧），创建时间两档也互为逆序；
+///  · `parse ⇄ as_wire` 对六档**双射**，认不出来的字符串是 `None`（界面写错一个字符串
+///    必须变成一次具名拒绝，不是悄悄退回默认 —— 那样它会读成"排序没生效"）。
+#[test]
+fn list_sort_default_is_the_old_order_and_every_arm_is_deterministic() {
+    let fx = Fix::new();
+    let store = fx.open();
+    let folder = default_folder(&store);
+    let b = create(&store, &folder, "B 乙");
+    let a = create(&store, &folder, "A 甲");
+    let c = create(&store, &folder, "C 丙");
+
+    let ids = |sort| {
+        store
+            .list_notes_with(&NoteQuery::all(), sort)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id.to_string())
+            .collect::<Vec<_>>()
+    };
+    let plain = store
+        .list_notes(&NoteQuery::all())
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id.to_string())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        plain,
+        ids(notera_store::NoteSort::UpdatedDesc),
+        "不传 sort 的旧调用方换了顺序 ⇒ 这一批把默认那一档改写了"
+    );
+
+    // 钉住 c：任何一档它都在最前
+    store.set_note_pinned(&c.id, true).unwrap();
+    for sort in [
+        notera_store::NoteSort::UpdatedDesc,
+        notera_store::NoteSort::UpdatedAsc,
+        notera_store::NoteSort::CreatedDesc,
+        notera_store::NoteSort::CreatedAsc,
+        notera_store::NoteSort::TitleAsc,
+        notera_store::NoteSort::TitleDesc,
+    ] {
+        assert_eq!(
+            ids(sort).first().map(String::as_str),
+            Some(c.id.to_string().as_str()),
+            "{sort:?} 这一档置顶的那一篇不在最前"
+        );
+    }
+    let rest = |v: Vec<String>| v.into_iter().skip(1).collect::<Vec<_>>();
+    assert_eq!(
+        rest(ids(notera_store::NoteSort::TitleAsc)),
+        vec![a.id.to_string(), b.id.to_string()]
+    );
+    let mut title_desc_tail = rest(ids(notera_store::NoteSort::TitleDesc));
+    title_desc_tail.reverse();
+    assert_eq!(
+        title_desc_tail,
+        rest(ids(notera_store::NoteSort::TitleAsc)),
+        "标题两档不是互逆 ⇒ NOCASE 那一侧没生效或某一档漏了 DESC"
+    );
+    let mut created_asc_tail = rest(ids(notera_store::NoteSort::CreatedAsc));
+    created_asc_tail.reverse();
+    assert_eq!(
+        created_asc_tail,
+        rest(ids(notera_store::NoteSort::CreatedDesc)),
+        "创建时间两档不是互逆"
+    );
+
+    // 词汇表：六档双射 + 认不出来是 None
+    for sort in [
+        notera_store::NoteSort::UpdatedDesc,
+        notera_store::NoteSort::UpdatedAsc,
+        notera_store::NoteSort::CreatedDesc,
+        notera_store::NoteSort::CreatedAsc,
+        notera_store::NoteSort::TitleAsc,
+        notera_store::NoteSort::TitleDesc,
+    ] {
+        assert_eq!(
+            notera_store::NoteSort::parse(sort.as_wire()),
+            Some(sort),
+            "{sort:?} 往返不一致"
+        );
+    }
+    assert_eq!(
+        notera_store::NoteSort::parse("updated"),
+        None,
+        "半截的名字不许被当成某一档"
+    );
+    assert_eq!(
+        notera_store::NoteSort::parse("id DESC"),
+        None,
+        "列名 + 方向这种形状必须是拒绝"
+    );
+    assert_eq!(
+        notera_store::NoteSort::default(),
+        notera_store::NoteSort::UpdatedDesc
+    );
+}

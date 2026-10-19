@@ -591,6 +591,18 @@ impl App {
             .transpose()
     }
 
+    /// 命令面上那一个字符串 ⇄ `NoteSort` 的**唯一一处**翻译。
+    /// 不给 = 默认那一档 = 这一批之前写死的顺序；给了但认不出来是**具名拒绝**，
+    /// 不悄悄退回默认（悄悄退回去会把"界面写错一个字符串"读成"排序没生效"，那一族最难查）。
+    fn parse_sort(wire: Option<&str>) -> Result<notera_store::NoteSort, CmdError> {
+        match wire {
+            None => Ok(notera_store::NoteSort::default()),
+            Some(s) => {
+                notera_store::NoteSort::parse(s).ok_or_else(|| CmdError::of("bad_sort", false))
+            }
+        }
+    }
+
     pub fn list_notes(&self, c: ListNotesCmd) -> Result<Vec<serde_json::Value>, CmdError> {
         let q = NoteQuery {
             folder: c
@@ -609,7 +621,10 @@ impl App {
             limit: c.limit,
             offset: c.offset,
         };
-        let rows = self.inner.store.list_notes(&q)?;
+        let rows = self
+            .inner
+            .store
+            .list_notes_with(&q, Self::parse_sort(c.sort.as_deref())?)?;
         rows.iter().map(|r| self.to_list_dto(r)).collect()
     }
 
@@ -5220,6 +5235,7 @@ mod tests {
                 trash: false,
                 limit: 10,
                 offset: 0,
+                sort: None,
             })
             .unwrap();
         let row = rows.first().expect("列表必须有一行");
@@ -6206,6 +6222,7 @@ mod tests {
                 trash: false,
                 limit: 50,
                 offset: 0,
+                sort: None,
             })
             .unwrap();
         let copies: Vec<_> = rows
