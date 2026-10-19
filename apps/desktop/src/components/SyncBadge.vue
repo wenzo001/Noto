@@ -69,6 +69,9 @@ watch(
       <span>{{ sync.label }}</span>
       <span v-if="sync.percent !== null" class="syncbar__progress">{{ t('sync.progress', { done: sync.percent, total: 100 }) }}</span>
     </button>
+    <!-- 「是哪几条没上来」（任务 #4 ②）：核心报 count 的那一格里，能点名的点名、
+         点不出名的照实说点不出。名单为空 ⇒ 整条不渲染（空态是一句断言，没读过就不能说）。 -->
+    <p v-if="sync.rejectedLine" class="syncbar__when" data-testid="sync-rejected">{{ sync.rejectedLine }}</p>
     <p v-if="sync.lastSuccessLine" class="syncbar__when" data-testid="sync-last-success">{{ sync.lastSuccessLine }}</p>
     <!-- 「停」只在真的转着那一格出现：静止的时候没有轮次可停，画一颗按钮就是骗一次点击（§4.9）。
          按下去不改变徽标 —— 停成没停成由核心那一轮自己报（`sync.cancelled`）。 -->

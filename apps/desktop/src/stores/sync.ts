@@ -222,6 +222,39 @@ export const useSyncStore = defineStore('sync', () => {
     return read.openConflicts > 0 ? `${head}${t('sync.backlogConflicts', { count: read.openConflicts })}` : head;
   });
 
+  /** 一条"没同步进来"的账（核心 `sync_status.rejectedItems` 那一份）。
+   *  `title = null` 是**有意的**：批量那一族本来就没有身份，宁可说不清。 */
+  interface RejectedItem {
+    kind: string;
+    id: string;
+    title?: string | null;
+    reason?: string | null;
+  }
+
+  /**
+   * 最近一轮被本机拒收的那几条（核心给的是 `[{kind,id,title,reason}]`，`title` 可以是 `null`）。
+   * 每轮整份替换，所以这一份永远只说"最近一轮"—— 上一轮的旧账不许继续挂着。
+   */
+  const rejected = ref<RejectedItem[]>([]);
+
+  /**
+   * 那句"是哪几条没上来"。三条口径：
+   *  · 名单为空 ⇒ **整句不说**（空态是一句断言，没读过就不能说）；
+   *  · 名字最多点三个，剩下的用"等 N 条"收 —— 这一格长在徽标下面，不给它无限高度；
+   *  · 说不出名字的那部分**单独说一句**，不混进名字里，也不去凑一个 UUID 冒充标题。
+   */
+  const rejectedLine = computed<string | null>(() => {
+    const items = rejected.value;
+    if (items.length === 0) return null;
+    const names = items.map((i) => i.title).filter((x): x is string => typeof x === 'string' && x.length > 0);
+    if (names.length === 0) return t('sync.rejectedNone', { count: items.length });
+    const head = names.slice(0, 3).join('、');
+    const etc = names.length > 3 ? t('sync.rejectedEtc', { count: names.length - 3 }) : '';
+    const more = items.length - names.length;
+    return `${t('sync.rejectedLead', { count: items.length })}${head}${etc}` +
+      (more > 0 ? t('sync.rejectedMore', { count: more }) : '');
+  });
+
   async function refreshStatus(): Promise<void> {
     try {
       const status = await callCommand<{
@@ -229,9 +262,11 @@ export const useSyncStore = defineStore('sync', () => {
         divergenceHeld?: DivergenceHeld | null;
         pendingOps?: number | null;
         openConflicts?: number | null;
+        rejectedItems?: RejectedItem[] | null;
       }>(Commands.syncStatus, {});
       lastSuccessAt.value = status?.lastSuccessAt ?? null;
       divergence.value = status?.divergenceHeld ?? null;
+      rejected.value = Array.isArray(status?.rejectedItems) ? status.rejectedItems : [];
       const pending = status?.pendingOps;
       const conflicts = status?.openConflicts;
       backlog.value = typeof pending === 'number' && typeof conflicts === 'number'
@@ -414,6 +449,8 @@ export const useSyncStore = defineStore('sync', () => {
     lastSuccessLine,
     backlog,
     backlogLine,
+    rejected,
+    rejectedLine,
     refreshStatus,
     acceptDivergence,
     offline,

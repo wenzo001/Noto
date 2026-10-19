@@ -1004,8 +1004,21 @@ async fn a_rejected_local_apply_is_counted_and_not_claimed_as_pulled() {
         .unwrap()
         .insert(path("n", "rej1"), b"{\"rev\":7}".to_vec());
 
-    let (st, _evs) = run(l.clone(), r, None).await;
+    let (st, evs) = run(l.clone(), r, None).await;
     assert_eq!(st.rejections, 1, "本地拒收必须记一笔：{st:?}");
+    // 光有 count 用户还是不知道少的是哪一条（任务 #4 ②）：身份要作为事件出来。
+    let named: Vec<(String, String)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            SyncEvent::Rejected { kind, id, .. } => Some((kind.clone(), id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        named,
+        vec![("n".to_string(), "rej1".to_string())],
+        "单条那一族要带得上是谁：{evs:?}"
+    );
     assert_eq!(st.pulled, 0, "被拒收的那条不许算成已拉取");
     assert!(
         st.last_rejection
@@ -1050,8 +1063,22 @@ async fn a_rejected_remote_delete_is_counted_and_not_claimed_as_applied() {
     m.refresh_checksum();
     r.seed(m);
 
-    let (st, _evs) = run(l.clone(), r, None).await;
+    let (st, evs) = run(l.clone(), r, None).await;
     assert_eq!(st.rejections, 1, "远端删除被本机拒收必须记一笔：{st:?}");
+    // 这一族走的是**一批** `tombstone_ops`，引擎说不出批里是哪一条 ⇒ 身份必须留空。
+    // 宁可"说不出是哪几条"，也不挑一条来背（指错比不指更坏）。
+    let blank: Vec<(String, String)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            SyncEvent::Rejected { kind, id, .. } => Some((kind.clone(), id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        blank,
+        vec![(String::new(), String::new())],
+        "批量那一族要老实承认说不出是谁：{evs:?}"
+    );
     assert!(
         st.last_rejection
             .as_deref()

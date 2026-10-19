@@ -404,10 +404,33 @@ pub enum SyncEvent {
         received_records: usize,
     },
     Completed(RoundOutcome),
+    /// 一条被本机拒收的远端内容，**带着它是谁**（任务 #4 ②）。
+    ///
+    /// 为什么走事件而不是塞进 `RoundStats`：`stats` 里那一份只有 count 与"最后一句原因"，
+    /// 而身份是**每一条**都有的事 —— 折进 stats 就要给那 10 处字面构造各加一个字段，
+    /// 加错一处就是又一处静默。事件面本来就是"引擎对外的唯一出口"。
+    /// `kind`/`id` 为空 = 那一次 apply 是一批（墓碑那一族），引擎说不出批里是哪一条 ——
+    /// **宁可少说，不许瞎指**：指错一条比不指更坏，用户会去查一篇没病的笔记。
+    Rejected {
+        kind: String,
+        id: String,
+        reason: Option<String>,
+    },
     Failed {
         retryable: bool,
         message_key: &'static str,
     },
+}
+
+/// 把"这一处拒了 N 条"展开成 N 条带身份的事件。`who = None` 是批量的那一族。
+fn rejected_events(who: Option<(&str, &str)>, n: usize, reason: Option<String>) -> Vec<SyncEvent> {
+    (0..n)
+        .map(|_| SyncEvent::Rejected {
+            kind: who.map_or_else(String::new, |(k, _)| k.to_string()),
+            id: who.map_or_else(String::new, |(_, i)| i.to_string()),
+            reason: reason.clone(),
+        })
+        .collect()
 }
 
 /// 用户按「停」的那一位。引擎只**读**它；写的人是 host（命令 `sync_cancel`）。
@@ -853,6 +876,11 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     // 密封失败（信封畸形等）**不许上行**。计入拒收并留下原因，
                     // 不能"跳过这一条" —— 那会让用户以为已经同步了。
                     st.rejections += 1;
+                    events.extend(rejected_events(
+                        Some((&l.kind, &l.id)),
+                        1,
+                        Some(e.to_string()),
+                    ));
                     tracing::warn!(kind = %l.kind, id = %l.id, error = %e, "密封失败，这一条不上行");
                     continue;
                 }
@@ -959,23 +987,35 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                 format!("{kind}/{id}: 开封失败（{e}）")
                             };
                             tracing::warn!(kind = %kind, id = %id, error = %e, "下行开封失败，这条拒收");
-                            st.last_rejection = Some(reason);
+                            st.last_rejection = Some(reason.clone());
+                            events.extend(rejected_events(Some((&kind, &id)), 1, Some(reason)));
                             continue;
                         }
                     };
                     // ADR-0021 D3：本地 apply 的拒绝**不许没有去处**。
                     // 以前这里是 `.unwrap_or_default()` —— 一条被拒的远端版本（同 rev 不同内容、
                     // 哈希不符 I6、rev 回退 I2…）连一行痕迹都不留，界面上是"同步正常"而库里少一条。
+                    let who = (kind.clone(), id.clone());
                     match self.local.apply(vec![ApplyOp::Upsert { kind, id, wire }]) {
                         Ok(rep) => {
                             if rep.applied == 1 {
                                 st.pulled += 1;
                             }
                             fold_rejections(&mut st, &rep);
+                            events.extend(rejected_events(
+                                Some((&who.0, &who.1)),
+                                rep.rejected,
+                                rep.reason.clone(),
+                            ));
                         }
                         Err(e) => {
                             st.rejections += 1;
                             st.last_rejection = Some(e.to_string());
+                            events.extend(rejected_events(
+                                Some((&who.0, &who.1)),
+                                1,
+                                Some(e.to_string()),
+                            ));
                         }
                     }
                 }
@@ -1076,10 +1116,20 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                                             st.pulled += 1;
                                         }
                                         fold_rejections(&mut st, &rep);
+                                        events.extend(rejected_events(
+                                            Some((&l.kind, &l.id)),
+                                            rep.rejected,
+                                            rep.reason.clone(),
+                                        ));
                                     }
                                     Err(e) => {
                                         st.rejections += 1;
                                         st.last_rejection = Some(e.to_string());
+                                        events.extend(rejected_events(
+                                            Some((&l.kind, &l.id)),
+                                            1,
+                                            Some(e.to_string()),
+                                        ));
                                     }
                                 }
                                 let _ = self.local.apply(vec![payload]);
@@ -1116,10 +1166,16 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
             match self.local.apply(tombstone_ops) {
                 // 整批失败之外的另一种形状：批里**单条**被具名拒收（认不出的类型标记）。
                 // 从前那一格算出来了无人读，"远端说删了、本机读不懂、两台都不知道"就藏在这里。
-                Ok(rep) => fold_rejections(&mut st, &rep),
+                Ok(rep) => {
+                    fold_rejections(&mut st, &rep);
+                    // 这一族是**一批**（`tombstone_ops` 里可能有好几条），引擎说不出批里是哪一条 ——
+                    // 身份留空，让界面老实说"有 N 条说不出是哪几条"，而不是挑一条来背。
+                    events.extend(rejected_events(None, rep.rejected, rep.reason.clone()));
+                }
                 Err(e) => {
                     st.rejections += 1;
                     st.last_rejection = Some(e.to_string());
+                    events.extend(rejected_events(None, 1, Some(e.to_string())));
                 }
             }
         }

@@ -305,6 +305,23 @@ pub struct App {
     inner: Arc<Inner>,
 }
 
+/// 拒收名单上的 `id` 换成标题。kind 走 `EntityKind::from_tag` 那**唯一**一道词汇表门，
+/// 不在这里再抄一份 "n"|"note" 的匹配（那是第二份真相的形状）。
+fn rejected_title(store: &notera_store::Store, kind: &str, id: &str) -> Option<String> {
+    if id.is_empty() {
+        return None;
+    }
+    let eid = notera_core::EntityId::parse(id).ok()?;
+    match notera_core::EntityKind::from_tag(kind)? {
+        notera_core::EntityKind::Note => store.get_note(&eid).ok().flatten().map(|n| n.title),
+        notera_core::EntityKind::Folder => store.get_folder(&eid).ok().flatten().map(|f| f.name),
+        notera_core::EntityKind::Tag => store.read_tag(&eid).ok().flatten().map(|t| t.title),
+        // 附件按 sha256 寻址，契约里本来就没有它的 EntityId（见 `sync_surface` 那两条），
+        // 所以这一族本来就指不出"是哪一条"—— 与"批量那一族没有 id"是同一种诚实。
+        notera_core::EntityKind::Attachment => None,
+    }
+}
+
 struct Inner {
     store: Store,
     data_dir: PathBuf,
@@ -325,6 +342,10 @@ struct Inner {
     dirty_ticks: AtomicU64,
     /// 用户按「停」的那一位，与引擎 `EngineConfig.cancel` 是同一枚（clone 共享）。
     cancel: notera_sync::CancelToken,
+    /// 最近一轮被本机拒收的条目 `(kind, id, reason)`，给界面说"是哪几条"用（任务 #4 ②）。
+    /// 每轮**整份替换**：存的是"最近一轮"，不是历史累计 —— 下一轮干净了这一份就空，
+    /// 否则徽标会一直指着几轮之前那笔旧账。
+    rejected: Mutex<Vec<(String, String, Option<String>)>>,
     /// 后台同步监督循环是否已经开起来（`enable_background_sync` 幂等的依据）。
     sync_supervisor: AtomicBool,
 }
@@ -384,6 +405,7 @@ impl App {
                 syncing: AtomicBool::new(false),
                 dirty_ticks: AtomicU64::new(0),
                 cancel: notera_sync::CancelToken::default(),
+                rejected: Mutex::new(Vec::new()),
                 sync_supervisor: AtomicBool::new(false),
             }),
         };
@@ -2176,10 +2198,23 @@ impl App {
         );
         let (st, evs) = engine.run_round(etag.as_deref()).await;
         let yielded = evs.iter().any(|e| matches!(e, SyncEvent::Deferred { .. }));
+        // 拒收的**身份**要在事件被消费之前摘出来：`apply_sync_event` 只管把徽标折出来，
+        // 名单要留给 `sync_status` 那一发（界面读的是"是哪几条"，不是"有几条"）。
+        let rejected: Vec<(String, String, Option<String>)> = evs
+            .iter()
+            .filter_map(|e| match e {
+                SyncEvent::Rejected { kind, id, reason } => {
+                    Some((kind.clone(), id.clone(), reason.clone()))
+                }
+                _ => None,
+            })
+            .collect();
         for e in evs {
             self.apply_sync_event(e);
         }
         self.apply_round_stats(&st, yielded);
+        // 整份替换：这一轮干净了，上一轮那几笔旧账就不该继续挂在界面上。
+        *self.inner.rejected.lock().unwrap() = rejected;
         self.inner.syncing.store(false, Ordering::SeqCst);
         Some(st)
     }
@@ -3434,7 +3469,27 @@ impl App {
                     received_records: h.received_records,
                 }
             }),
+            rejected_items: self.rejected_items(),
         })
+    }
+
+    /// 把最近一轮的拒收换成用户看得懂的话：`id` → 标题。
+    /// 三种"说不清"都照实说不清：批量那一族本来就没有 id、那一行已经被永久删除、
+    /// `kind` 不是认得的四种 —— 一律 `title: None`。**绝不拿一串 UUID 冒充名字**，
+    /// 那串字符对用户没有任何意义，指错一条比不指更坏。
+    fn rejected_items(&self) -> Vec<commands::RejectedItemDto> {
+        self.inner
+            .rejected
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(kind, id, reason)| commands::RejectedItemDto {
+                kind: kind.clone(),
+                id: id.clone(),
+                title: rejected_title(&self.inner.store, kind, id),
+                reason: reason.clone(),
+            })
+            .collect()
     }
 
     /// §4.3 / G87：用户确认"这一版清单"。记下的是这一份的 etag，所以
@@ -3550,6 +3605,12 @@ impl App {
                 message_key: "sync.conflict_attention".into(),
                 level: "warn".into(),
             }),
+            // 一条拒收：徽标由这一轮收尾时统一折（`apply_round_stats` 读的是 count），
+            // 这里只把**原文**落到日志 —— 一条弹一个 toast 会把界面变成刷屏，
+            // 而"是哪几条"那份名单已经由 `run_round` 摘走、走 `sync_status` 给界面。
+            SyncEvent::Rejected { kind, id, reason } => {
+                tracing::warn!(kind = %kind, id = %id, reason = ?reason, "本机拒收了这一条");
+            }
             // §11.4：让路不是失败，但必须看得见 —— "安静地不下公告"就是静默不同步。
             SyncEvent::Deferred { device } => {
                 self.set_sync(|v| {
@@ -4965,6 +5026,35 @@ mod tests {
         let after = app.sync_status().expect("再读一次");
         assert_eq!(after.badge, before.badge, "一次空的按停不许动徽标");
         assert_eq!(after.message_key, before.message_key, "更不许给它编一句'已停止'");
+    }
+
+    /// 拒收名单换成"人话"的那一步（任务 #4 ②）：认得的给标题，认不出的**照实说认不出**。
+    /// 三种"说不清"都要落成 `None` 而不是编一个名字：批量那一族本来没有 id、
+    /// 那一行已经被永久删除、`kind` 是陌生的 —— 拿一串 UUID 冒充名字，用户读到的还是没说。
+    #[test]
+    fn a_rejection_is_named_by_title_when_we_can_and_stays_silent_when_we_cannot() {
+        let app = boot("rejected-title");
+        let store = app.store();
+        let folder = store.list_folders().expect("至少有一个默认本").remove(0).id;
+        let note = store
+            .create_note(&folder, doc("被拒的那一篇"))
+            .expect("create_note");
+        assert_eq!(
+            rejected_title(store, "n", note.id.as_str()).as_deref(),
+            Some("被拒的那一篇"),
+            "认得的这一篇要给标题"
+        );
+        assert_eq!(rejected_title(store, "n", ""), None, "批量那一族没有身份，就不许指认");
+        assert_eq!(
+            rejected_title(store, "n", "00000000-0000-0000-0000-000000000009"),
+            None,
+            "那一行已经不在了 ⇒ 说不清，不是编一个"
+        );
+        assert_eq!(
+            rejected_title(store, "widget", note.id.as_str()),
+            None,
+            "陌生 kind 不许猜"
+        );
     }
 
     fn keys(v: &serde_json::Value) -> Vec<String> {

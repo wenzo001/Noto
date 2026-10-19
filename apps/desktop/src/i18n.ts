@@ -204,6 +204,11 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.retry': '重试',
   // 「停」这一格：按钮说的是"停下这一轮"，不是"关掉同步"（后者是设置里那一格的话）。
   'sync.cancel': '停止这一轮',
+  // 「是哪几条没上来」（任务 #4 ②）。四句拼出来，缺名字的那部分单独说，不混进名字里。
+  'sync.rejectedLead': '有 {count} 条没同步进来：',
+  'sync.rejectedEtc': ' 等 {count} 条',
+  'sync.rejectedMore': '，另有 {count} 条说不出是哪几条',
+  'sync.rejectedNone': '有 {count} 条没同步进来（这一批说不出是哪几条）',
   // 停成之后那一句不在这里加：`sync.cancelled` 早就注册过（下面那一格，随 `RemoteError::Cancelled`），
   // 而 `hygiene:rust-message-keys-registered` 那条门管的正是"核心报出的键必须有文案"这一条边。
   // §4.3「已同步 · 上一次：{时间}」。没拿到时间时这一句**根本不出现**（不写"刚刚"，那是编的）。

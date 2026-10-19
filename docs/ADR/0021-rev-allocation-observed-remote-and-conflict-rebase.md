@@ -148,6 +148,19 @@ A 那台**仍然是已删除**（这条由既有的 `conflict_payload_e2e` 钉�
 引擎落墓碑那一处的 `let _ = self.local.apply(..)` —— 那一格的拒绝同样没有去处，已按 D3 的规矩收口。
 判据：`a_delete_reaches_a_device_that_had_nothing_pending`（G20）、`p11_same_rev` 的三条裁决分支
 （P20）、`a_rejected_remote_delete_is_counted_and_not_claimed_as_applied`（D3 在这一格）。
+
+> **2026-10-18 第一百四十三批补上 D3 的下半句：光有 count 还不够。**
+> 这一条落地后界面上说的是"有东西没同步进来"，用户读到的仍然是"哪一条？"—— 引擎算得出
+> `(kind,id)`（拒收那一刻就在手里），只是从来没人把它带出去：`ApplyReport.rejected` 折成
+> `st.rejections += 1` 之后身份就丢了，`last_rejection` 只留最后一句原因。
+> 现在身份走 `SyncEvent::Rejected { kind, id, reason }`（事件是引擎对外的唯一出口，
+> 不新增一份 `RoundStats` 字段就是不给那 10 处字面构造各加一格的机会），
+> host 每轮整份收进名单，`sync_status.rejectedItems` 把 `id` 换成**标题**给界面。
+> 两条诚实的口径：① 墓碑那一族一次 apply 是一批，引擎说不出批里是哪一条 ⇒ 身份**留空**，
+> 界面说"有 N 条说不出是哪几条"，不挑一条来背；② 那一行已经被永久删除 / kind 陌生 ⇒ `title: null`，
+> **绝不拿 UUID 冒充名字**。证人：`engine.rs` 两条（单条那一族带 `n/rej1`、批量那一族带空串）、
+> `notera-host` 的 `a_rejection_is_named_by_title_when_we_can_and_stays_silent_when_we_cannot`
+> （四格：认得 / 无 id / 行已不在 / 陌生 kind 不许猜）、`stores/syncRejected.spec.ts` 四条。
 变异：M90（host 不补候选行）、M91（快路径退回只看脏行）、M92（P20 规则短路）、M93（副本守卫）、
 M94/M95/M96（三颗按钮各自失效）、M98（载荷键名口径漂移）。**M97 是反向证据**：它要验"为 P20 另加
 一格取载荷"，改掉之后判据照样绿 —— 引擎里本来就有一格会为 `DeleteUpdate` 取载荷，我加的那一半是

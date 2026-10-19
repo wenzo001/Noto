@@ -175,6 +175,20 @@ pub struct SyncStatusDto {
     pub retryable: bool,
     /// §4.3 / G87：这一轮被"远端少了一大截"那道闸门停下的那笔账；没停就是 `null`。
     pub divergence_held: Option<DivergenceHeldDto>,
+    /// 最近一轮被**本机**拒收的那些条目（任务 #4 ②）。`st.rejections` 是真数，
+    /// 这一份是"说得出是谁的那几条" —— 批量那一族没有身份，`title` 就是 `null`，
+    /// 界面必须照实说"说不出是哪几条"，不许拿一串 UUID 冒充名字。
+    pub rejected_items: Vec<RejectedItemDto>,
+}
+
+/// 一条拒收对用户说的那三件事：哪一类、是哪一条（说得出的话）、为什么。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectedItemDto {
+    pub kind: String,
+    pub id: String,
+    pub title: Option<String>,
+    pub reason: Option<String>,
 }
 
 /// 停下时那两个数直接发给界面：原因要说得出"少了多少"，而不是一句"同步已暂停"。
