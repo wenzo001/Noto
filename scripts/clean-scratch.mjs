@@ -60,7 +60,31 @@ export const BUDGET = {
   unprotected: [/-applied\.patch$/],
   backupsDir: '.notera-dev/backups',
   backupsKeep: 1,
+  /**
+   * **常驻目录自己也在长**（第一百五十三批现场：`g102-data` 从设计时的 57 MB 长到 136 MB，
+   * 把 `.logs` 总量顶到 144 MB > 128 ⇒ 那条预算门红了，而红得没人能怪它）。
+   * 长出来的不是"现场"，是布局门禁那几条 restore / migration 腿**每跑一遍各留一份 ~19 MB 的库拷贝**，
+   * 而 `resident` 那一格把整个目录豁免在残骸账外 ⇒ 没有任何东西管着它们。
+   * 所以这里按"族"管：每一族只留最新 `keep` 份，其余是残骸。`--check` 数到超档的就**报红**，
+   * 不喊"请人工看" —— 喊人看的那道门一年后被自己绕开（同一族教训）。
+   */
+  residentCopies: [
+    { dir: '.logs/g102-data', re: /^notera\.sqlite\.pre-(restore|migration)\./, keep: 1, what: '门禁 restore/migration 腿留下的库拷贝' },
+    { dir: '.logs/g102-data/backups', re: /^notera-.*\.sqlite$/, keep: 1, what: '迁移前自动备份' },
+  ],
 };
+
+/**
+ * 纯函数：一族文件里该删哪几份 —— 按 mtime 留最新 `keep` 份，其余全删。
+ * 做成纯函数是为了能被合成序列打到（"扫到 0 项 ≠ 检查过"那条老规矩）：
+ * 三份不同 mtime ⇒ 删 2 留 1；只有一份 ⇒ 删 0（这一臂挡的是"地板 ≥ 总数所以恒真"那个形状的反面 ——
+ * 这里 `keep=1` 配一份时必须**不删**，配三份时必须删两份，两个方向都要有读数）。
+ */
+export function planCopies(files, keep = 1) {
+  const sorted = [...files].sort((x, y) => y.mtimeMs - x.mtimeMs);
+  const doomed = sorted.slice(Math.max(0, keep));
+  return { doomed: doomed.map((f) => f.path), kept: sorted.length - doomed.length, bytes: doomed.reduce((a, f) => a + f.bytes, 0) };
+}
 
 /**
  * 纯函数：什么时候删。输入是"一项东西"的读数（路径、字节、age 天数、是不是 perf 夹具目录），
@@ -173,6 +197,33 @@ export function sweep(b = BUDGET, { dryRun = false, nowMs = Date.now() } = {}) {
       report.backupsRemoved += 1;
     }
   }
+
+  /**
+   * 常驻目录自己长出来的那些拷贝（每族只留最新 `keep` 份）。
+   * 这一族以前**没人管**：`resident` 把整个目录豁免在残骸账外，于是"门禁每跑一遍留一份 19 MB 的库拷贝"
+   * 这件事只会体现为"总量在涨"，而涨到顶了那条门只喊一句"看那几格"—— 不删、也不说哪一族。
+   * 现在按族点名：`--check` 数到超档的就红（与残骸那本账同一个口径：能删的没删完就是没干净）。
+   */
+  report.copiesRemoved = 0;
+  report.copiesOver = 0;
+  let copiesBytes = 0;
+  for (const fam of b.residentCopies ?? []) {
+    const dir = join(ROOT, fam.dir);
+    if (!existsSync(dir)) continue;
+    const files = readdirSync(dir)
+      .filter((name) => fam.re.test(name))
+      .map((name) => ({ path: join(dir, name), name, s: stat(join(dir, name)) }))
+      .filter((f) => f.s && f.s.isFile())
+      .map((f) => ({ path: f.path, bytes: f.s.size, mtimeMs: f.s.mtimeMs }));
+    const plan = planCopies(files, fam.keep);
+    report.copiesOver += plan.doomed.length;
+    copiesBytes += plan.bytes;
+    for (const p of plan.doomed) {
+      if (!dryRun) removeTolerant(p, leftovers);
+      report.copiesRemoved += 1;
+    }
+  }
+  report.copiesMb = mb(copiesBytes);
   return report;
 }
 
@@ -290,7 +341,23 @@ function selfTest() {
     if (!ok) bad += 1;
     console.log(`${ok ? 'ok  ' : 'FAIL'} 参数 ${JSON.stringify(c.in)} ⇒ 期望 ${c.want}，实际 ${got}`);
   }
-  const arms = cases.length + argCases.length;
+  // 常驻目录里那一族拷贝（第一百五十三批补的）：**两臂各挡一种错法** ——
+  // 只测"三份删两份"，把规则写成"逢文件就删"也照样过；只测"一份不删"，把规则写成"永远不删"也照样过。
+  const copyCases = [
+    { name: '同一族三份不同 mtime ⇒ 留最新一份、删两份', files: [
+      { path: 'a', bytes: 19 * MB, mtimeMs: 100 }, { path: 'b', bytes: 19 * MB, mtimeMs: 300 }, { path: 'c', bytes: 19 * MB, mtimeMs: 200 }],
+      keep: 1, want: ['a', 'c'], kept: 1 },
+    { name: '只有一份 ⇒ 一份都不许删（"保护最近 N 项"的地板 ≥ 总数就是恒真那一族）', files: [{ path: 'only', bytes: MB, mtimeMs: 5 }], keep: 1, want: [], kept: 1 },
+    { name: '空族 ⇒ 删 0（扫到 0 项不等于检查过，但也不许凭空报红）', files: [], keep: 1, want: [], kept: 0 },
+  ];
+  for (const c of copyCases) {
+    const plan = planCopies(c.files, c.keep);
+    const norm = (x) => [...x].sort().join('|');
+    const ok = norm(plan.doomed) === norm(c.want) && plan.kept === c.kept;
+    if (!ok) bad += 1;
+    console.log(`${ok ? 'ok  ' : 'FAIL'} ${c.name} ⇒ 该删 ${JSON.stringify(c.want)} / 留 ${c.kept}，实际 ${JSON.stringify(plan.doomed)} / 留 ${plan.kept}`);
+  }
+  const arms = cases.length + argCases.length + copyCases.length;
   console.log(bad === 0 ? `${arms} 臂全过（这条看守自己是活的）` : `${bad} 臂不符 —— 判据坏了，别看磁盘结论`);
   return bad === 0 ? 0 : 1;
 }
@@ -310,11 +377,12 @@ if (isCli) {
   if (args.mode === 'self-test') process.exit(selfTest());
   const checking = args.mode === 'check';
   const r = sweep(BUDGET, { dryRun: checking });
-  console.log(`${checking ? '预算检查' : '清理'}：${r.files} 项 ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份）`);
+  console.log(`${checking ? '预算检查' : '清理'}：${r.files} 项 ⇒ 删 ${r.doomed.length} 项（备份清掉 ${r.backupsRemoved} 份，常驻拷贝清掉 ${r.copiesRemoved} 份）`);
   console.log(`  残骸 ${r.afterMb} MB / 上界 ${BUDGET.logsMaxMb} MB ·（另有常驻现场 ${r.residentMb} MB，不计入这本账）· 总量 ${r.totalMb} MB / 上界 ${BUDGET.totalMaxMb} MB`);
+  if (r.copiesOver > 0) console.log(`  ⚠ 常驻目录里的拷贝超档 ${r.copiesOver} 份（每族只留最新一份，可回收约 ${r.copiesMb} MB）—— 族名见 BUDGET.residentCopies`);
   for (const l of r.leftovers) console.log(`  带不走（下次再收）：${l}`);
   for (const n of r.staleResident) console.log(`  豁免名单过期：${n} 不在盘上 —— 要么把它加回来，要么把这一格从名单里删掉`);
   if (r.overBudget) console.log(`  ⚠ 残骸砍完仍超预算（${r.afterMb} MB > ${BUDGET.logsMaxMb} MB）—— 只剩"最近 ${BUDGET.logsKeepNewest} 项"那一形，请人工看`);
   if (r.overTotal) console.log(`  ⚠ 总量超预算（${r.totalMb} MB > ${BUDGET.totalMaxMb} MB）—— 常驻现场本身在长，看 ` + BUDGET.resident.join('/') + ` 那几格`);
-  process.exit(checking && (r.overBudget || r.overTotal || r.doomed.length > 0 || r.staleResident.length > 0) ? 1 : 0);
+  process.exit(checking && (r.overBudget || r.overTotal || r.doomed.length > 0 || r.copiesOver > 0 || r.staleResident.length > 0) ? 1 : 0);
 }
