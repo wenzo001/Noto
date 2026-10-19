@@ -400,7 +400,11 @@ async fn a_cancel_pressed_before_the_loops_stops_the_round_and_claims_nothing() 
         ..EngineConfig::default()
     };
     let (st, evs) = run_with(l.clone(), r.clone(), None, cfg).await;
-    assert_eq!(st.outcome, RoundOutcome::Cancelled, "按停的这一轮要如实报停：{st:?}");
+    assert_eq!(
+        st.outcome,
+        RoundOutcome::Cancelled,
+        "按停的这一轮要如实报停：{st:?}"
+    );
     assert_eq!(st.pushed, 0, "按停之后一件都不许再动");
     assert!(r.records.lock().unwrap().is_empty(), "一件都不许上行");
     assert!(

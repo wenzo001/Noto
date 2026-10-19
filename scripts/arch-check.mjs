@@ -1218,6 +1218,33 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     problems, problems.join('\n    '));
 }
 
+
+// ------------------------- 34. 本地台面必须真的读得到 CI 那一份步骤清单（缺口 G143）---
+// 起因（2026-10-19）：远程 `PR 门禁` 连着红了 7 次推送，而我本地每次都"全绿"。逐条对下来红的是
+// `cargo fmt --all --check` —— CI 有、我那份习惯清单里没有的一步。所以修法不是再往清单里补命令
+// （那是第二份名单，早晚会再漂一次），而是 `scripts/prepush-gates.mjs` 直接解析 `ci.yml`。
+// 但"有一把更硬的远程门"从来不需要人记得跑它；这条腿要防的是**那把尺子自己烂掉**：脚本被删、
+// workflow 改了形状导致解析出 0 步、`ci-only` 标记写歪 —— 三种形状都会绿成"本地台面什么都跑了"。
+// 所以这里只跑 `--list`（不执行任何命令，毫秒级），认两件事：退出码 0，且**真列出 ≥8 条待跑步**。
+// 刀（2026-10-19 现场，六把都红过）——对 runner：CI 里删掉 fmt 那一步 → exit 3；把 `- name:` 写成
+// `- name :` 使解析漏一条步 → exit 3（`run:` 条数与解析出的步数对不上）；把 `ci-only` 标记从步骤块内
+// 挪到块外 → 待跑从 14 变 15（丢的是"跳过"，方向是多跑不是少跑）；把某一步改成必红 → 台面 FAIL 且 exit 1。
+// 对本腿：上面那把漏解析的刀、把每条阻断步都标 ci-only（待跑清单空了）、把脚本本身挪走 —— 三种各 48/49。
+{
+  const { spawnSync } = await import('node:child_process');
+  const problems = [];
+  const listed = spawnSync(process.execPath, [join(ROOT, 'scripts', 'prepush-gates.mjs'), '--list'], { encoding: 'utf8', cwd: ROOT });
+  const out = (listed.stdout ?? '') + (listed.stderr ?? '');
+  if (listed.status !== 0) {
+    problems.push(`prepush-gates --list 退出码 ${listed.status}（脚本没了、还是 ci.yml 形状变了？）\n    ${out.split('\n').slice(-6).join('\n    ')}`);
+  } else {
+    const n = (out.match(/将跑：/g) ?? []).length;
+    if (n < 8) problems.push(`本地台面只认出 ${n} 条待跑的 CI 阻断步（少于 8）—— 这等于"清单空了还报绿"，判据不许空转`);
+  }
+  check('ci:local-gate-runner-reads-ci', 'CI-CD §流水线分层 / G143（本地台面以 ci.yml 为唯一来源，且这把尺子自己不能烂）',
+    problems, problems.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;

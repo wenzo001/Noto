@@ -5039,7 +5039,10 @@ mod tests {
         app.apply_round_stats(&st, false);
         let dto = app.sync_status().expect("读状态");
         assert_ne!(dto.badge, "synced", "被用户停掉的一轮不许报已同步：{dto:?}");
-        assert_ne!(dto.badge, "syncing", "停了就是停了，不许留着转圈（静止那一格绝不转）");
+        assert_ne!(
+            dto.badge, "syncing",
+            "停了就是停了，不许留着转圈（静止那一格绝不转）"
+        );
         assert_eq!(dto.message_key.as_deref(), Some("sync.cancelled"));
         assert!(dto.retryable, "停了就是还能再来一轮");
         assert!(
@@ -5054,10 +5057,16 @@ mod tests {
     fn cancelling_when_no_round_is_running_answers_false_and_changes_nothing() {
         let app = boot("cancel-no-round");
         let before = app.sync_status().expect("读状态");
-        assert!(!app.request_sync_cancel(), "此刻没有轮次，回执不许说'停下了'");
+        assert!(
+            !app.request_sync_cancel(),
+            "此刻没有轮次，回执不许说'停下了'"
+        );
         let after = app.sync_status().expect("再读一次");
         assert_eq!(after.badge, before.badge, "一次空的按停不许动徽标");
-        assert_eq!(after.message_key, before.message_key, "更不许给它编一句'已停止'");
+        assert_eq!(
+            after.message_key, before.message_key,
+            "更不许给它编一句'已停止'"
+        );
     }
 
     /// 拒收名单换成"人话"的那一步（任务 #4 ②）：认得的给标题，认不出的**照实说认不出**。
@@ -5076,7 +5085,11 @@ mod tests {
             Some("被拒的那一篇"),
             "认得的这一篇要给标题"
         );
-        assert_eq!(rejected_title(store, "n", ""), None, "批量那一族没有身份，就不许指认");
+        assert_eq!(
+            rejected_title(store, "n", ""),
+            None,
+            "批量那一族没有身份，就不许指认"
+        );
         assert_eq!(
             rejected_title(store, "n", "00000000-0000-0000-0000-000000000009"),
             None,
@@ -5108,10 +5121,19 @@ mod tests {
         let t = store.create_tag("变了名字的那一颗").expect("create_tag");
         let created = app.tag_stamp();
         assert_ne!(created, before, "多出一颗标签要看得见");
-        store.rename_tag(&t.id, "改过之后的名字").expect("rename_tag");
+        store
+            .rename_tag(&t.id, "改过之后的名字")
+            .expect("rename_tag");
         let renamed = app.tag_stamp();
-        assert_eq!(renamed.len(), created.len(), "改名不改数量（所以别拿个数当那把尺）");
-        assert_ne!(renamed, created, "只改名字也必须让这把尺动，否则侧栏永远停在旧名");
+        assert_eq!(
+            renamed.len(),
+            created.len(),
+            "改名不改数量（所以别拿个数当那把尺）"
+        );
+        assert_ne!(
+            renamed, created,
+            "只改名字也必须让这把尺动，否则侧栏永远停在旧名"
+        );
     }
 
     fn keys(v: &serde_json::Value) -> Vec<String> {

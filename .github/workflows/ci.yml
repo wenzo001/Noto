@@ -37,6 +37,8 @@ jobs:
       # MinGW-w64 是 windows-latest 镜像里带的，但版本与 windres/dllwrap 是否在 PATH
       # 未在本机验证过 —— 若 `cargo test --workspace` 报链接器缺失，看这一行的输出定位。
       - name: 安装 GNU 工具链（rustup）
+        # ci-only: 这一步改的是 runner 的**全局默认工具链**（`rustup default`），本机跑会把用户机器上
+        # ci-only: 那一份换掉；命令体还用了 PowerShell 变量 `$env:RUST_TARGET`，在本地 bash 下只会红在仪器上。
         run: |
           rustup toolchain install stable-$env:RUST_TARGET --profile minimal --component rustfmt --component clippy
           rustup default stable-$env:RUST_TARGET
@@ -162,6 +164,8 @@ jobs:
         run: node scripts/verify-diagram.mjs
 
       - name: 产物一致性（release 构建能出来，但不做签名/打包）
+        # ci-only: 本机 release 全量要几十分钟且会独占 target 目录（与开发靶子抢），而同一件事由
+        # ci-only: 「出包与发布」workflow 每批真做 —— 那份产物字节数已被 collect-release-assets 的上界门钉住。
         run: cargo build --release -p notera-desktop
         timeout-minutes: 60
 

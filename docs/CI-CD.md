@@ -97,11 +97,51 @@
 **这份清单不是抄来的**：`scripts/arch-check.mjs` 第 32 条 `ci:gates-are-actually-blocking` 会逐条去
 `ci.yml` 里查这些命令在不在某个 `run:` 上、那一步有没有被加上 `continue-on-error` —— 少一步或加了容错就红。
 
+### 本地台面：`node scripts/prepush-gates.mjs`（2026-10-19 第一百四十七批，缺口 G143）
+
+**为什么有这一条**：远程 `PR 门禁` 从第一百四十批那次推送起**连着红了 7 次**，而我本地每一批都记的是"全绿"。
+逐条对下来红的是 `cargo fmt --all --check` —— CI 有、我那份习惯清单里**根本没有**的那一步。
+往上追，缺的不是那一条命令：本地台面从来没有与 CI 台面**同源**，差的那几格（fmt / check-versions /
+check-icons / check-brand / `pnpm build` / `pnpm typecheck`）一直没人跑，直到 GitHub 替我跑、然后红在那里。
+按 §45 的形状，这是"两份名单早晚会分叉"的又一次，只不过这次分叉的是**放行权在谁手里**那一侧。
+
+**修法是同源，不是补命令**：这一步自己解析 `.github/workflows/ci.yml`，把 CI 的步骤清单当唯一来源——
+命令、顺序、`working-directory` 全部照那一行取（本仓库根目录没有 package.json，前端四条必须在
+`apps/desktop` 里跑；在根跑会红成"找不到脚本"，那是仪器的错不是产品的）。跑法：
+
+```
+node scripts/prepush-gates.mjs --list   # 只看解析结果（毫秒级，arch-check 第 34 条跑的就是这一档）
+node scripts/prepush-gates.mjs          # 真跑（独占机器；读数记在 CHANGELOG 当批那一格）
+```
+
+**只有远程能跑的，显式标出来并写明原因**，不写成"应该会过"：在步骤块**内**（缩进 ≥8 空格）加
+`# ci-only: <原因>`，台面跳过它并把原因打出来。今天有两条：
+
+| 步骤 | 为什么本机不跑 |
+| --- | --- |
+| 安装 GNU 工具链（rustup） | 改的是 runner 的**全局默认工具链**（`rustup default`），本机跑会把用户机器上那一份换掉；命令体还用了 PowerShell 变量 `$env:RUST_TARGET`，在本地 bash 下只会红在仪器上。本机由 `RUSTUP_TOOLCHAIN` 提供同一档工具链。 |
+| 产物一致性（`cargo build --release -p notera-desktop`） | 本机 release 全量要几十分钟且独占 `target/`（与开发靶子抢）；同一件事由「出包与发布」workflow 每批真做，那份产物的字节数已被 `collect-release-assets` 的上界门钉住。 |
+
+**标记只认块内那一档**，这是判据不是排版偏好：写在步骤**上面**那段说明注释里（6 空格）在 YAML 里属于**上一条**步骤，
+认错了会把没标的那条跳过、把标了的那条跑掉，两种都是假绿。
+**解析器不许空转**：三道自证 —— ①文件里 `run:` 的条数必须等于解析出的步数；②阻断步里必须看得见
+`cargo fmt --all --check`、`cargo clippy`、`node scripts/arch-check.mjs`；③阻断步 ≥8 条。任一不满足 `exit 3`，
+绝不把"没跑到"写成"跑过了"。
+**六把刀（2026-10-19 现场）**：CI 里删掉 fmt 那一步 → 3；把 `- name:` 写成 `- name :` 使解析漏一条步 → 3；
+把 `ci-only` 标记从块内挪到块外 → 待跑由 14 变 15（丢的是"跳过"，方向是多跑不是少跑）；
+把某一步改成必红 → 那条 FAIL、`prepush-gates：2 / 3 条通过`、退出 1；
+后三种（漏解析 / 全标 ci-only 使待跑清单空了 / 脚本本身没了）让 `arch-check` 第 34 条
+`ci:local-gate-runner-reads-ci` 各红一次（48/49），还原后 49/49。
+
 **红的时候怎么读到日志（2026-10-10 加）**：未认证读 job 日志是 **403**。`gates` job 里「失败递证据」
 这一步在红的时候把 `cargo test` 输出的尾巴（30000 字符）贴成 **commit 评论**
 （`POST /commits/{sha}/comments`；评论列表未认证可读）—— `9cf7e6f` 那次 gates 红在第 14 步而本机同树
 复现全绿，就是为读那一段输出加的。五条纪律（`if: failure()` 只覆盖它**之前**的步、绝对路径、
 先 `touch` 再读、自己 `continue-on-error` 不把 job 带走、把自己读了几个字符写进正文）逐条写在那一步的注释里。
+
+**下面那张表是 2026-09-30 那一次抄的快照，已经不是"当前清单"**（它少几格、编号也与今天的 `ci.yml` 对不上）。
+从今天起要知道 CI 到底跑哪几步，看 `node scripts/prepush-gates.mjs --list` 的输出 —— 那一份是解析 `ci.yml` 现拿的，
+不会漂；这张表留着只因为它每格带着**那一天的实测证据**，删掉就等于把证据也删了。
 
 | # | 步骤（阻断） | 本机基线（2026-09-30） |
 | --- | --- | --- |

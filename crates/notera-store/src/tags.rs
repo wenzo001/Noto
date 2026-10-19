@@ -9,7 +9,7 @@
 //!  · **删除是软删除**（`deleted_at`），传播形态与笔记一致：带 `deleted_at` 的 upsert（ADR-0006 那条口径），
 //!    不是"文件消失"；永久删除才走墓碑。
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{params, OptionalExtension};
 
 use notera_core::{canonical::canonical_tag_name, hash_json, next_rev, EntityId, EntityKind, Rev};
 

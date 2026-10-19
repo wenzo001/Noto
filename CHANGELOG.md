@@ -49,6 +49,65 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 门禁（2026-10-19 第一百四十七批：本地台面改成**直接解析 `ci.yml`** —— 远程连红七次那一族的根治；只动工装与排版，不改产品行为 ⇒ 不升版本）
+
+- **归因先说清**：从第一百四十批那次推送起，远程 `PR 门禁` **连着红了 7 次**，而我每一批本地都记"全绿"。
+  红的那一格是 `cargo fmt --all --check`（`ci.yml` 里步骤名就写着"本机已可验证，阻断"）。
+  往上追一层：缺的不是这一条命令，是**我的本地台面从来不是 CI 那一份台面** —— 差的 fmt / check-versions /
+  check-icons / check-brand / `pnpm build` / `pnpm typecheck` 一直没人跑，直到 GitHub 替我跑、然后红在那里。
+  这是"两份名单早晚会分叉"这一族在本仓的第七次，只不过这回分叉的是**放行权在谁手里**那一侧。
+- **修法是同源，不是往我的清单里再补五条命令**：`scripts/prepush-gates.mjs` 读 `.github/workflows/ci.yml`
+  自己解析 —— 阻断步 = 有 `run:` 且没有 `continue-on-error: true`；命令、顺序、`working-directory` 全照那一行取。
+  `working-directory` 这一条不是装饰：**本仓库根目录没有 package.json**，前端四条必须在 `apps/desktop` 里跑，
+  在根跑会红成"找不到脚本"，那是仪器的错不是产品的。参数只认 `--list`，其余一律 `exit 2`（会执行命令的脚本
+  不许对拼错的 flag 沉默，与 `clean-scratch` 同一条规矩）。
+- **本机跑不动的两条显式标 `# ci-only: <原因>`**，不写成"应该会过"：rustup 那一步（改的是 runner 的**全局默认
+  工具链**，本机跑会把用户机器上那一份换掉；命令体还用了 PowerShell 的 `$env:RUST_TARGET`）、
+  `cargo build --release -p notera-desktop`（本机 release 全量几十分钟且独占 `target/`，同一件事由「出包与发布」
+  workflow 每批真做，产物字节数已被上界门钉住）。标记**只认步骤块内那一档**（缩进 ≥8 空格）：写在步骤上面那段
+  说明注释里（6 空格）在 YAML 里属于**上一条**步骤，认歪了会跳过错的那条、跑掉标的那条，两种都是假绿。
+- **解析器不许空转**（三道自证，任一不满足 `exit 3`，绝不把"没跑到"写成"跑过了"）：①文件里 `run:` 的条数必须
+  等于解析出的步数；②阻断步里必须看得见 `cargo fmt --all --check`、`cargo clippy`、`node scripts/arch-check.mjs`；
+  ③阻断步 ≥8 条。`--list` 那一遍实测：`共 18 步，阻断 16 条，本机跑 14 条，标 ci-only 跳过 2 条`。
+- **六把刀（当日现场，不是推理）**：CI 里删掉 fmt 那一步 → `exit 3`；把 `- name:` 写成 `- name :` 使解析漏一条步
+  → `exit 3` 并打出 `文件里有 18 条 run:，只解析出 17 步`；把 `ci-only` 标记从块内挪到块外 → 待跑由 14 变 15
+  （丢的是"跳过"，方向是**多跑**不是少跑）；把某一步改成必红 → `FAIL 版本单源 退出码 7`、
+  `prepush-gates：2 / 3 条通过`、退出码 1；另有两条刀（全标 ci-only 使待跑清单空了 / 把脚本本身挪走）打在下面那条新腿上。
+- **新腿 `ci:local-gate-runner-reads-ci`（arch-check 第 34 条）**：每批用 `--list` 替那把尺子跑一遍（毫秒级、
+  不执行任何命令），认"退出码 0 且真列出 ≥8 条待跑"。防的是尺子自己烂掉：脚本被删、workflow 改形状解析出 0 步、
+  标记写歪 —— 三种形状从前会绿成"本地台面什么都跑了"。三把刀各红一次（48/49），还原后 **49/49**。
+  我先写的"每条 ci-only 必须带原因"那一判**当场证伪并删掉**：`# ci-only:` 后面空着时正则 `(.+)$` 根本不认它，
+  那条步骤直接变回待跑 —— 这一判**到不了 printer**，留着就是一条空转断言。
+- **第一遍跑自己交出的仪器脏（按实记，不改写成"一次就对"）**：我给 `GITHUB_WORKSPACE` 指了仓库根，于是 CI 那两条
+  `tee` 在仓库根种出一个 `.logs-ci/`（73 KB + 14 KB 两份日志），工作树因此变脏 —— 而脏树会顶掉整跑的 `exit 4`
+  前置与 `tag-release --push`。改成指 `.logs/prepush`（那里既被 ignore 又有 `clean-scratch` 的预算看守），
+  残骸删掉，并用一条 `mkdir + 写文件` 探针复验新落点可写。**这两步的判定本身不受影响**（改的只是日志落点），
+  但"14/14 跑在哪一棵树上"这句话下面单独交代。
+- **一条被今天证伪的旧前提**：台账与我的记忆里都写着"本机 `node` 连 `api.osv.dev` 10 秒超时、判定权只能交远程"。
+  今天发了一发最便宜的探针：`node fetch` **一秒内拿到 HTTP 400**（真响应），同一时刻 `curl` 给 405 —— 路是通的。
+  所以两条 OSV 审计**没有**被标成 ci-only，它们在本机真跑了（`--self-test` 2s、全量 3s：`PASS · 625 个依赖里
+  0 条未豁免（豁免 6 条，逐条有理由）`）。口径：**"因为跑不通所以跳过"之前先测一次**，否则那条跳过就从
+  当天的事实变成了永久豁免。
+- **排版那一格**：`cargo fmt --all` 动了三个文件（`notera-host/src/lib.rs`、`notera-store/src/tags.rs`、
+  `notera-sync/tests/engine.rs`）。"只是排版"这句我没有直接主张，而是拿去对账：把 HEAD 与工作树两版
+  **逐字符去掉全部空白**再比 —— `lib.rs`（180 939 字符）与 `engine.rs`（32 408 字符）**逐字节相同**；
+  `tags.rs` 长度相同但**顺序不同**，第一处分歧是 `use rusqlite::{OptionalExtension, params}` →
+  `{params, OptionalExtension}`，即 rustfmt 把 `use` 花括号内按字母序重排（Rust 里 `use` 顺序无语义）。
+  所以准确说法是"非空白字符流只差一处 import 内部排序"，不是"只差空白"。⇒ 不改产品行为，
+  按"只有改产品的 commit 才升 patch"那条决定，**不升版本、不打 tag**。
+- **读数（14 条 CI 阻断步在本机全绿，`GATES_RC=0`，独占机器 02:41–02:49）**：
+  `pnpm install --frozen-lockfile` 1s、`pnpm build` 8s、check-versions 0s、**arch-check 49/49** 3s、
+  check-icons 0s、check-brand 0s、**`cargo fmt --all --check` 退出 0** 2s、
+  **`cargo clippy --workspace --all-targets -- -D warnings` 0 条** 14s（target 是热的）、
+  **`cargo test --workspace -- --test-threads=1` 763 / 0 失败 / 7 ignored**（101 个 result 行）307s、
+  **`pnpm test` 83 个文件 / 734 条全过** 62s、**`pnpm typecheck` 0 错** 16s、
+  `pnpm audit --audit-level=high --registry=…` 2s、两套 Rust 审计 2s / 3s。
+  **归因口径**：这 14/14 跑在"ci.yml 标记 + 新腿 + fmt 修复"都已进树、但 `GITHUB_WORKSPACE` 那一行**还是仓库根**
+  的那一版工装上；改完落点之后按"提交 → 用提交后的同一棵树再跑一遍 → 绿了才推"的顺序补一次，读数补在下一条自证里。
+- **没动的两格**：整跑 lane（`verify-layout`）**不在这条台面里，CI 也不跑它** —— 那一格仍按老规矩本机独占跑，
+  本批无浏览器可见变化所以不重跑；`docs/CI-CD.md` 里那张 2026-09-30 抄的步骤表**没有重写**（它每格带着那天的
+  实测证据），只在上面加了一句"从今天起以 `prepush-gates --list` 为准，那张表是快照不是清单"。
+
 ### 平台通知（2026-10-19 第一百四十六批：`notice_for` 去掉 `_ =>` 通配 —— 新增事件种类必须当场表态"要不要响一声"）
 
 - **接着 145 批那一格往下收**：`BusEvent::TagsChanged` 加进来之后，它是**顺着 `platform.rs` 里那句
