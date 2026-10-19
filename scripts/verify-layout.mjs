@@ -260,6 +260,8 @@ const FIXTURE_MARKS = [
   '分档夹具', '改于夹具', '移到夹具', '附件夹具', '指点路径夹具',
   // 第 44/45 刀那两条腿的夹具：崩在半路也不许把残骸留成后面腿的现场（第 54 刀一次造 85 篇）。
   '满页夹具', '设备夹具',
+  // 腿 77（标签那一族）的夹具：崩在半路也不许把标签与笔记留成下一遍的现场。
+  '标签腿夹具',
   // 第 49 刀那条字号腿的夹具。
   '字号夹具',
   // 第 50 批那条 toast 时限腿的夹具。
@@ -9154,6 +9156,123 @@ async function purgeByTitle(prefix) {
   check('76 前置：--sp-6 仍是 24px（366 = 390−48 这个期望值的地基；地基换了要说得出是谁换的）',
     narrow.读数 !== null && narrow.读数.sp6 === '24px', JSON.stringify(narrow.读数));
   notes.push(`     腿 76（渲染后的 toast 栈宽，声明那一句归 deckNumbers.spec.ts）：${read.map((r) => `${r.视口}⇒${r.读数?.rectW ?? '没挂上'}`).join(' / ')}`);
+}
+
+/**
+ * 77 标签那一族在真浏览器里的形状（欠账 #10）。
+ *
+ * 为什么要有这一条腿：第一百四十一批那颗 chip 在 390 不渲染（编辑器是 `v-if` 挂上去的，
+ * 挂载时 `selectedId` 已经定好 ⇒ 只挂 `watch` 的读法一次都不出门），而当时那 794 条判据里
+ * **没有任何一条读得到"这一族自己画没画出来"** —— 是看截图抓到的。门不能靠人看图。
+ *
+ * 五格各自一条，且每格都带正对照：
+ *  ① 在场：编辑器那排 chip 的**颗数 = 核心 `note_tags` 读回来的链接数**（数量对撞，不是"看起来有"）；
+ *  ② 挂载即读：390 那一档点开同一篇也要有两颗 —— 这一格与 ① 是**两条不同的时序**，
+ *     变异（摘掉 `{ immediate: true }`）只红 ②、①照旧绿，两档视口量的不是同一件事；
+ *  ③ 命中区：chip 上那颗 × 与那颗「+ 加标签」按 §5 的 44（量声明矩形）；
+ *  ④ 侧栏那一族：行数 = 核心 `list_tags` 里有笔记的行数，且每行点得出名字与同一个计数；
+ *  ⑤ 390 那一档那一排不许把界面撑出横向滚动（长名字的一颗也要能收进 390）。
+ * 收尾自己清夹具（笔记与标签都清），并把"清干净"本身钉一条 —— 残骸会变成下一遍的现场。
+ */
+{
+  const MARK77 = '标签腿夹具';
+  const stamp77 = Date.now();
+  const doc77 = (text) => ({
+    v: 1,
+    content: [{ id: `p${String(stamp77).slice(-6)}`, type: 'paragraph', content: [{ type: 'text', text }] }],
+  });
+  const tg1 = await cmd('create_tag', { title: `${MARK77}甲 ${stamp77}` });
+  const tg2 = await cmd('create_tag', { title: `${MARK77}这一条标签的名字故意取得很长要折 ${stamp77}` });
+  const nt = await cmd('create_note', { folderId: null, doc: doc77(`${MARK77} ${stamp77}`) });
+  await cmd('set_note_tags', { id: nt.id, tagIds: [tg1.id, tg2.id] });
+  const coreLinks = ((await cmd('note_tags', { id: nt.id })) ?? []).map((x) => (typeof x === 'string' ? x : x.id));
+  const coreTags = ((await cmd('list_tags', {})) ?? []).filter((x) => x.noteCount > 0);
+
+  const errs77 = [];
+  const open77 = async (w, h) => {
+    const c = await browser.newContext({ viewport: { width: w, height: h } });
+    const p = await c.newPage();
+    p.on('console', (m) => { if (m.type() === 'error') errs77.push(m.text()); });
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.locator('[data-testid="note-list"]').waitFor({ timeout: 15000 });
+    await p.waitForTimeout(900);
+    await p.locator(`[data-testid="note-row-${nt.id}"]`).first().click({ timeout: 6000 });
+    await p.waitForTimeout(h === 390 ? 1200 : 900);
+    return { c, p };
+  };
+  const chips77 = (p) => p.evaluate(() => {
+    const list = [...document.querySelectorAll('[data-testid^="tag-chip-"]')];
+    const toggle = document.querySelector('[data-testid="tag-add-toggle"]')?.getBoundingClientRect() ?? null;
+    return {
+      row: document.querySelector('[data-testid="tag-row"]') !== null,
+      n: list.length,
+      titles: list.map((e) => e.textContent?.trim() ?? ''),
+      toggle: toggle ? { w: Math.round(toggle.width), h: Math.round(toggle.height) } : null,
+      xs: [...document.querySelectorAll('[data-testid^="tag-detach-"]')].map((e) => {
+        const r = e.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height) };
+      }),
+    };
+  });
+
+  const wide = await open77(1440, 900);
+  const w77 = await chips77(wide.p);
+  check('77 前置（正对照）：核心这一篇真挂着两颗（不然下面全是空判据）',
+    coreLinks.length === 2 && w77.titles.length > 0, JSON.stringify({ 核心: coreLinks.length }));
+  check('77 ① 编辑器那排 chip 的颗数 = 核心读回来的链接数（不是"看起来有"）',
+    w77.n === coreLinks.length, JSON.stringify({ 屏幕: w77.n, 核心: coreLinks.length, 名字: w77.titles }));
+  check('77 ①b 两颗的名字都来自 list_tags 那一份（认不出的 id 不许长出来，认得的要说得出是谁）',
+    w77.titles.some((x) => x.includes(`${MARK77}甲`)) && w77.titles.some((x) => x.includes('故意取得很长')),
+    JSON.stringify(w77.titles));
+  check('77 ③ chip 上那颗 ×：命中区按 §5 的 44（声明矩形；涂装小与命中小是两件事）',
+    w77.xs.length === coreLinks.length && w77.xs.every((x) => x.w >= 44 && x.h >= 44), JSON.stringify(w77.xs));
+  check('77 ③b 「+ 加标签」那颗自己也在 44 之上',
+    w77.toggle !== null && w77.toggle.w >= 44 && w77.toggle.h >= 44, JSON.stringify(w77.toggle));
+  const side77 = await wide.p.evaluate(() => {
+    const rows = [...document.querySelectorAll('[data-testid="tag-row-item"]')];
+    return {
+      section: document.querySelector('[data-testid="tag-section"]') !== null,
+      n: rows.length,
+      text: rows.map((r) => r.innerText.replace(/\s+/g, ' ').trim()),
+    };
+  });
+  check('77 ④ 侧栏那一族：行数 = 核心 list_tags 里有笔记的行数（计数不是界面自己数的）',
+    side77.section === true && side77.n === coreTags.length,
+    JSON.stringify({ 屏幕: side77.n, 核心: coreTags.length, 那一节在场: side77.section }));
+  check('77 ④b 侧栏每一行点得出名字，且那个数 = 核心的 noteCount',
+    coreTags.every((t) => side77.text.some((l) => l.includes(t.title) && l.includes(String(t.noteCount)))),
+    JSON.stringify({ 核心: coreTags.map((t) => [t.title.slice(0, 10), t.noteCount]), 屏幕: side77.text }));
+  await wide.p.close(); await wide.c.close();
+
+  const narrow77 = await open77(390, 844);
+  const n77 = await chips77(narrow77.p);
+  check('77 ② 390 那一档：点开一篇挂着两颗标签的笔记，屏幕上就是两颗（挂载即读，不等"一次变化"）',
+    n77.row === true && n77.n === coreLinks.length,
+    JSON.stringify({ 颗数: n77.n, 那一排在场: n77.row, 名字: n77.titles }));
+  const of77 = await narrow77.p.evaluate(() => ({
+    docScrollW: document.documentElement.scrollWidth, vw: window.innerWidth,
+    rowRight: Math.round(document.querySelector('[data-testid="tag-row"]')?.getBoundingClientRect().right ?? 0),
+  }));
+  check('77 ⑤ 390 那一档：标签那一排不把界面撑出横向滚动（多一颗长名字的 chip 也要收得进去）',
+    of77.docScrollW <= of77.vw && of77.rowRight <= of77.vw, JSON.stringify(of77));
+  check('77 这一腿 console error 为零', errs77.length === 0, errs77.slice(0, 2).join(' | '));
+  await narrow77.p.close(); await narrow77.c.close();
+
+  const notesList = (v) => ((v?.items ?? v) ?? []);
+  for (const x of notesList(await cmd('list_notes', { folderId: null, trash: false }))) {
+    if (String(x.title ?? '').startsWith(MARK77)) { await cmd('delete_note', { id: x.id }); await cmd('purge_note', { id: x.id }); }
+  }
+  const leftTags = (((await cmd('list_tags', {})) ?? [])).filter((t) => String(t.title).startsWith(MARK77));
+  for (const t of leftTags) await cmd('delete_tag', { id: t.id });
+  const afterTags = (((await cmd('list_tags', {})) ?? [])).filter((t) => String(t.title).startsWith(MARK77));
+  const afterNotes = notesList(await cmd('list_notes', { folderId: null, trash: false }))
+    .filter((x) => String(x.title ?? '').startsWith(MARK77));
+  // 两样都要断言：只查标签那一半，"笔记没清"就是一条**空转的判据**（第一版就是这么漏的 ——
+  // 它报"剩下 0"，而收尾那道全局残骸自检抓到活动列表里还躺着一篇）。
+  check('77 自己造的标签与笔记扫完要清干净（夹具留着就变成下一遍的现场）',
+    afterTags.length === 0 && afterNotes.length === 0,
+    JSON.stringify({ 标签剩下: afterTags.length, 笔记剩下: afterNotes.length }));
+  notes.push(`     腿 77（标签那一族）：1440 两颗 / 390 两颗（挂载即读那一档单量）· × 命中区 ${JSON.stringify(w77.xs)} · 侧栏 ${side77.n} 行`);
 }
 
 await browser.close();
