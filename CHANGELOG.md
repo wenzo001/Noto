@@ -49,6 +49,58 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 标签（2026-10-19 第一百四十九批：显示顺序的比较器**钉死 locale** —— 两台设备不再给同一批标签画出不同先后（任务 #11，缺口由远程 CI 撞出来））
+
+- **这不是测试写歪，是产品缺陷**。远程 `PR 门禁` 对 `1734afd` 红在 `pnpm test`：
+  `tagChipsMount.spec.ts` 的 `expected [ '乙', '甲' ] to deeply equal [ '甲', '乙' ]` —— 而**本地同一份代码 734 条全绿**。
+  根因在 `apps/desktop/src/stores/tags.ts:31`：`new Intl.Collator(undefined, …)`。`undefined` 的意思是
+  **"取宿主默认语言"**：本机系统语言 zh ⇒ CLDR 给 `zh` 的拼音排法（甲 jiǎ 在 乙 yǐ 前）；CI 那台 Node 默认 en ⇒
+  CLDR root 对汉字按**码位**（乙 U+4E59 在 甲 U+7532 前）。`chipModel` 与侧栏 `ordered` 共用这一个比较器，
+  所以用户看到的是"同一批标签，两台设备先后不一样"。这个产品只有简中一版，**跟着宿主语言变没有任何产品理由**。
+- **为什么必须有静态门**：本机就是 zh ⇒ 把它改回 `undefined`，vitest、typecheck、整跑**全部照旧绿**，
+  红的只有换一台非 zh 机器的那一天。**行为判据在这一族上是结构性看不见的**（与 [[verify-the-instrument-before-the-verdict]] 同族，
+  但这回看不见的原因是"被测机器恰好等于犯错的那一档"）。
+- **改法**：比较器钉死 `new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' })`，
+  并把重复了两处的排序表达式收成一个导出的 `compareTags`（chip 那一排与侧栏那一族从此共用一份实现）。
+  **两条实测口径，别照文档想当然**：① 只钉 locale 就够了，CLDR 给 `zh` 的默认排法就是拼音；
+  ② 再写 `collation: 'pinyin'` 是**空选项** —— `resolvedOptions().collation` 回报 `default`，
+  写了等于没写，所以代码里不写（写了会让下一个人以为它生效）。
+- **新腿 `static:intl-collator-locale-pinned`（arch-check 第 36 条，51/51）**：扫全前端非测试源文件，
+  要求 ① 任何 `new Intl.Collator(` 的第一个实参是**带引号的字面量**（`undefined`、无实参、变量都红 ——
+  变量最终也会落到宿主语言），② 标签那一格必须钉 `zh-…`，③ 一条下界：**一个构造都没扫到就红**（比较器被删/改名时
+  要改这条判据，不许删判据）。
+  **四把刀（当日各红一次 50/51，还原后 51/51）**：代码里改回 `undefined` / 钉成 `'en-US'` /
+  把构造整个换成 `{ compare: () => 0 }` 使下界落空 / 无实参。
+  **另有一把是"必须不红"的对照**：`tags.ts` 的头注释里现在照原样写着那句历史"从前这里是
+  `new Intl.Collator(undefined, …)`"（`grep -c` 数到 1 处），带着这一句门仍是绿的 ——
+  因为扫描**先剥注释再看代码**。这一条不是装饰：第一版没剥注释，**这条门把自己的说明当成了产品**，
+  开局就红指过去（与 [[gate-comment-naming-banned-word-trips-it]] 是同一条坑，这次是我自己刚踩的）。
+- **顺手修掉一条我自己写的恒真断言**：`stores/tags.spec.ts` 从前那格是
+  `expect(tags.ordered.map(…).sort()).toEqual(tags.ordered.map(…).sort())` —— 自己比自己，永远真。
+  现在钉 locale 之后写的是有内容的两条：顺序 = 拼音（读后 dú 在 工作 gōng 前，`['t2','t1']`），
+  以及**把同一批倒着喂进来，出来的先后不许变**（这才叫输入无关性；照旧实现"保持输入顺序"的话这条会红）。
+  `tagChipsMount.spec.ts` 那条按位置写死的期望**现在才有资格存在**，注释里把前提指回这条腿。
+- **一条我自己的口径打脸，按实记**：`stores/tags.spec.ts:74` 从前那句注释写着
+  "中文的具体先后由运行时的 ICU 决定 ⇒ 按位置写死就是一条假判据" —— 那是**同一份仓里已经写过的口径**，
+  我第一百四十五批写新 spec 时没 grep 到它，照样按位置写了甲乙。判据错在没对撞旧账
+  （[[two-ledgers-on-one-fact-collide-check-them]]、[[sweep-doc-commitments-against-code]]）。
+  口径升级成一句：**当"按位置写死"被远程抓住时，先问"这个位置是不是产品自己没钉权威"** ——
+  这一次两件事同时成立，所以修的是产品，不是把测试放宽。
+- **不重跑整跑的理由（写清，不留"应该没影响"）**：本机系统语言就是 zh ⇒ 钉 locale 前后**在这台设备上像素一字不变**；
+  而整跑腿 77 对标签那两族用的是 `.some(...)`（颗数、名字在场、× 的 44、侧栏计数对上核心），**没有任何一条看位置**。
+  真正变了的是非 zh 设备，那一格按 §"两台真设备"的规矩仍是 BLOCKED（等用户的第二台设备）。
+- **读数**：`node scripts/arch-check.mjs` **51/51**；定向 `vitest run src/stores/tags.spec.ts src/tagChipsMount.spec.ts`
+  **16 条全过**（先跑定向，再上贵链）；然后按新规矩跑**整条 CI 同源台面**
+  `RUSTUP_TOOLCHAIN=stable-x86_64-pc-windows-gnu node scripts/prepush-gates.mjs` ⇒
+  **`prepush-gates：14 / 14 条通过`**（`GATES_RC=0`，独占机器 03:36–03:44）：
+  `cargo fmt --all --check` 退出 0、`clippy -D warnings` 0 条（26s）、
+  **`cargo test --workspace -- --test-threads=1` 763 / 0 / 7**（101 个 result 行，340s）、
+  **`pnpm test` 83 文件 / 734 条**（31s）、`pnpm typecheck` 0 错（8s）、两套依赖审计 PASS（625 个依赖 0 条未豁免 / 豁免 6 条）。
+  台面里那次 `arch-check` 跑在 ADR ⑮ 那一行进树**之前**，所以收尾又在新树上单独复验一遍：
+  `arch-check 51/51`、`check-versions rc=0`、`check-brand rc=0`（这三条读文档，跑得便宜，不必重跑整条台面）。
+  Rust 侧这一批一字未动 —— 那 763 条是"没把别的层带坏"的证据，不是本批的判据。
+- **→ 0.0.150**（产品的显示顺序变了 ⇒ 改产品，升 patch；四处派生位置 + `Cargo.lock` 由 `bump-version.mjs` 自己核对）。
+
 ### 门禁（2026-10-19 第一百四十八批：整跑的证据图默认**不再写进版本库** —— 缺口 #9 关掉，工作树从"恒脏"变成"跑完还是干净的"）
 
 - **病灶是一行默认值**：`verify-layout.mjs` 从前写 `OUT = process.env.OUT_DIR || 'D:/code/Notes/docs/evidence/uat'`。

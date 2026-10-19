@@ -71,10 +71,16 @@ describe('tag store 的调用边（打到发出去的那一发命令上）', () 
     expect(service.callsOf('list_tags')).toHaveLength(1);
     expect(tags.tags).toEqual([tag('t1', '工作', 3), tag('t2', '读后', 0)]);
     // 缺 noteCount 的那一行给 0，而不是 undefined：界面 `> 0` 那一句要永远有数可比。
-    // `ordered` 只钉"同一批内容、不重不漏、幂等"：中文的**具体先后**由运行时的 ICU 决定，
-    // Node（可能带 small-icu）与 Chromium 给的答案不同 ⇒ 按位置写死就是一条假判据。
-    expect([...tags.ordered.map((t) => t.id)].sort()).toEqual(['t1', 't2']);
-    expect(tags.ordered.map((t) => t.id).sort()).toEqual(tags.ordered.map((t) => t.id).sort());
+    // **顺序这里现在允许按位置写死**，但前提只有一条：比较器钉了 locale（`stores/tags.ts` 的
+    // `new Intl.Collator('zh-Hans-CN', …)`）。这条前提不是注释，由 `arch-check` 的
+    // `static:intl-collator-locale-pinned` 守着 —— 把 locale 改回 `undefined` 之后，
+    // 本机（系统语言 zh）照样全绿，红的是**另一台非 zh 的机器**，所以行为判据抓不到它。
+    // 读后(dú) 在 工作(gōng) 之前：CLDR 给 `zh` 的默认排法就是拼音。
+    expect(tags.ordered.map((t) => t.id), '侧栏那一份的顺序必须是拼音序，不是码位序').toEqual(['t2', 't1']);
+    // 幂等要有内容：把**同一批**倒着喂进来，出来的先后必须一模一样。
+    // （从前这一格写的是 `expect(ordered).toEqual(ordered)` —— 自己比自己，恒真、没有牙。）
+    tags.tags = [...tags.tags].reverse();
+    expect(tags.ordered.map((t) => t.id), '顺序不许跟着输入顺序变').toEqual(['t2', 't1']);
   });
 
   it('create 发的是标题原样（trim 后），且核心回的那一颗被并进表里而不是新起一行', async () => {

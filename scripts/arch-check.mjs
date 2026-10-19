@@ -1290,6 +1290,55 @@ check('hygiene:no-vacuous-source-scan', 'ARCHITECTURE-MAP §8（门禁必须真�
     problems, problems.join('\n    '));
 }
 
+
+// ------------------- 36. 显示顺序的比较器不许把 locale 交给宿主（任务 #11）---
+// 起因（2026-10-19）：远程 `pnpm test` 红在 `tagChipsMount.spec.ts` —— `['乙','甲'] ≠ ['甲','乙']`。
+// 根因不是测试写歪，是产品把**显示顺序**交给了宿主语言：`stores/tags.ts` 从前写
+// `new Intl.Collator(undefined, …)`，本机系统语言 zh ⇒ 拼音序（甲 jiǎ 先），CI 那台 Node 默认 en ⇒
+// CLDR root 对汉字按码位（乙 U+4E59 先）。同一批标签在两台设备上画出不同先后，而这个产品只有简中一版。
+// **为什么必须是静态判据**：本机恰好是 zh —— 把它改回 `undefined`，本地 vitest / typecheck / 整跑
+// 全部照旧绿，只有换一台非 zh 的机器才红。行为判据在这一族上是**结构性看不见**的。
+// 两条各管一头：① 全前端任何 `new Intl.Collator(` 的第一个实参必须是**带引号的字面量**
+// （`undefined`、无实参、变量都红 —— 变量最终也会落到宿主语言）；
+// ② 标签那个比较器所在那一格必须钉 `zh-…`（顺序是给中文用户看的，写成别的 locale 就是另一件事，
+// 要改得由人明说）。外加一条下界：一个构造都没扫到 ⇒ 判据空转（比较器被删了就得跟着改这条，不许删判据）。
+{
+  const problems = [];
+  const files = sources(join(ROOT, 'apps', 'desktop', 'src'), ['.ts', '.vue'], { includeTests: false });
+  // **先剥注释再扫**：这一族的构造在 `stores/tags.ts` 的头注释里被**当作历史**写过一次
+  // （"从前这里是 `new Intl.Collator(undefined, …)`"）—— 不剥注释，这条门会把自己的说明当成产品，
+  // 红指过去。与 `gate-comment-naming-banned-word-trips-it` 是同一条坑。
+  const stripComments = (s) => s
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  let seen = 0;
+  let tagCtor = 0;
+  for (const f of files) {
+    const src = stripComments(readFileSync(f, 'utf8'));
+    for (const m of src.matchAll(/new\s+Intl\.Collator\(\s*([^,)]*)/g)) {
+      seen += 1;
+      const first = (m[1] ?? '').trim();
+      const literal = /^(['"])[^'"]+\1$/.test(first);
+      if (!literal) {
+        problems.push(`${rel(f)}：new Intl.Collator(${first === '' ? '（无实参）' : first}) ⇒ locale 交给宿主，` +
+          `两台设备可以给同一批标签画出不同先后（第一个实参要写成带引号的字面量）`);
+      }
+      if (rel(f).replace(/\\/g, '/') === 'apps/desktop/src/stores/tags.ts') {
+        tagCtor += 1;
+        if (!/^['"]zh([-'][^'"]*)?['"]$/.test(first)) {
+          problems.push(`${rel(f)}：标签顺序钉的是 ${first}，不是 zh-… —— 侧栏与 chip 的先后就不是给中文用户看的那一份`);
+        }
+      }
+    }
+  }
+  if (seen === 0) {
+    problems.push(`扫了 ${files.length} 个前端源文件，一个 Intl.Collator 构造都没看到 —— 这条判据空转；` +
+      `比较器被删掉/换名时要改这条，不许删判据`);
+  }
+  check('static:intl-collator-locale-pinned', '任务 #11 / ADR-0022（显示顺序只有一个权威，且不许随宿主语言变）',
+    problems, problems.join('\n    '));
+}
+
 let failed = 0;
 for (const r of results) {
   if (!r.ok) failed++;

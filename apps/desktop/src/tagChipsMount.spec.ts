@@ -67,6 +67,10 @@ describe('TagChips 挂载当刻就要读回这一篇的链接', () => {
     await settle();
     const chips = wrapper.findAll('.tag-chip:not(.tag-chip--add)');
     expect(chips).toHaveLength(2);
+    // 这一条**按位置**写死是有前提的：chip 那排的顺序来自钉了 locale 的比较器
+    // （`stores/tags.ts` 的 `new Intl.Collator('zh-Hans-CN', …)`，任务 #11），
+    // 而那条前提由 `arch-check` 的 `static:intl-collator-locale-pinned` 守着。
+    // 远程 CI 第一次就是红在这里（`['乙','甲']`）：那台 Node 默认语言不是 zh ⇒ 汉字按码位排。
     expect(chips.map((c) => c.text().trim())).toEqual(['甲', '乙']);
   });
 

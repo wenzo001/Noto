@@ -5,8 +5,9 @@
  *  · **相等关系不在这里**。`canonical`（NFKC + 全小写）只有核心算，
  *    界面拿到的 `id` 才是身份；这里没有任何 `toLowerCase()`/`normalize()` 参与比较
  *    —— 那条静态判据扫的就是"第二个执行者"。
- *  · **显示排序是这里的**（`Collator` + `numeric: true`）。核心的 `ORDER BY … COLLATE NOCASE`
- *    只管 ASCII 大小写，中文按码点位，所以列表给的是"能比较"的顺序，不是"人看的"顺序。
+ *  · **显示排序是这里的**（比较器见下方 `compareTags`：钉死 `zh-Hans-CN` 的 `Collator` + `numeric: true`）。
+ *    核心的 `ORDER BY … COLLATE NOCASE` 只管 ASCII 大小写，中文按码点位，
+ *    所以列表给的是"能比较"的顺序，不是"人看的"顺序。
  *    排序不是相等关系，因此这一份不算第二个执行者。
  */
 import { defineStore } from 'pinia';
@@ -28,7 +29,28 @@ function ensureTag(value: unknown): Tag | null {
   };
 }
 
-const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+/**
+ * 显示顺序的比较器 —— **locale 必须写死，不许留 `undefined`**。
+ *
+ * 从前这里是 `new Intl.Collator(undefined, …)`，而 `undefined` 的意思是"取宿主默认语言"。
+ * 后果不是难看，是**两台设备给同一批标签画出不同先后**：本机系统语言是 zh ⇒ 拼音序（甲 jiǎ 在 乙 yǐ 前）；
+ * CI 那台 Node 默认 en ⇒ CLDR root 对汉字按码位（乙 U+4E59 在 甲 U+7532 前）。
+ * 2026-10-19 就是远程 `pnpm test` 把这件事撞出来的（`tagChipsMount.spec.ts` 红在 `['乙','甲'] ≠ ['甲','乙']`）。
+ * 本产品只有简中一版（`JOPLIN-VS-NOTO-FEATURE-MAP.md` §3.4 语言那一行），所以"跟着宿主语言变"没有任何产品理由。
+ *
+ * 两条实测口径，别照文档想当然：
+ *  · 钉 locale 就够了 —— CLDR 给 `zh` 的**默认**排法就是拼音；
+ *  · 再加 `collation: 'pinyin'` **是空选项**：`resolvedOptions().collation` 回报 `default`，
+ *    写了等于没写，所以这里不写（写了会让下一个人以为它生效）。
+ * 看守在 `arch-check` 的 `static:intl-collator-locale-pinned`（静态扫构造）——
+ * **行为判据抓不到这一族**：本机恰好是 zh，改回 `undefined` 在本地照样全绿。
+ */
+const collator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+
+/** 标签之间的先后：先按人看的名字顺序，同一名再按 id —— 一处实现，chip 那一排与侧栏那一族共用。 */
+export function compareTags(a: Tag, b: Tag): number {
+  return collator.compare(a.title, b.title) || (a.id < b.id ? -1 : 1);
+}
 
 export const useTagStore = defineStore('tags', () => {
   const tags = ref<Tag[]>([]);
@@ -43,7 +65,7 @@ export const useTagStore = defineStore('tags', () => {
 
   /** 侧栏那一份：按人看的顺序，不按码点。 */
   const ordered = computed<Tag[]>(() =>
-    [...tags.value].sort((a, b) => collator.compare(a.title, b.title) || (a.id < b.id ? -1 : 1)),
+    [...tags.value].sort(compareTags),
   );
 
   async function load(): Promise<void> {
@@ -146,7 +168,7 @@ export function chipModel(ids: readonly string[], byId: Record<string, Tag>): Ta
     seen.add(id);
     picked.push(found);
   }
-  return picked.sort((a, b) => collator.compare(a.title, b.title) || (a.id < b.id ? -1 : 1));
+  return picked.sort(compareTags);
 }
 
 /** 加/摘同一颗：集合语义（已存在就移除）。返回**排序且去重**的新数组，不改入参。 */
