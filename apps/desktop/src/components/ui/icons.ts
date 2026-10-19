@@ -27,7 +27,7 @@ export type IconName =
   | 'sync-synced' | 'sync-syncing' | 'sync-offline' | 'sync-failed' | 'sync-idle'
   | 'pin-on' | 'pin-off'
   | 'attach-file' | 'attach-image'
-  | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'arrow-back'
+  | 'check' | 'drag-handle' | 'plus' | 'pencil' | 'chevron-down' | 'chevron-left' | 'chevron-right' | 'chevron-up' | 'search' | 'arrow-back'
   // §2.2 载体表里最后两行的真 SVG（2026-10-14 用户拍"按 §2.1 规格自绘"）：
   // 方框 = 勾选 / 清单项，文件夹 = 组织相关。两族各自**共享同一条基形**，只换内部徽标（§2.3 那条原则）。
   | 'folder' | 'folder-plus' | 'checkbox-unchecked' | 'checkbox-checked'
@@ -94,6 +94,10 @@ export const ICONS: Record<IconName, IconSpec> = {
   'chevron-left': { d: ['M12.4 5.6L8 10l4.4 4.4'] },
   'chevron-right': { d: ['M7.6 5.6L12 10l-4.4 4.4'] },
   'arrow-back': { d: ['M12.4 4.8L6.6 10l5.8 5.2'] },
+  // 查找条那两颗（§3.1 A 档「便签内局部搜索」）：chevron-up 是 chevron-down 的镜像（同一条基形，不另起一套），
+  // search 是放大镜的圈 + 手柄 —— 手柄与圈相切处不留缝，描边档下才不会看着像断的。
+  'chevron-up': { d: ['M5.6 11.8L10 7.4l4.4 4.4'] },
+  search: { d: ['M14.4 9.2a5.2 5.2 0 1 1-10.4 0 5.2 5.2 0 0 1 10.4 0', 'M13.1 13.1l3.1 3.1'] },
   'indent-in': { d: ['M10.4 6h5', 'M10.4 14h5', 'M4.6 10h3.2', 'M6.2 8l1.6 2-1.6 2'] },
   'indent-out': { d: ['M10.4 6h5', 'M10.4 14h5', 'M4.6 10h3.2', 'M7.8 8L6.2 10l1.6 2'] },
   trash: { d: ['M5.4 6.8h9.2', 'M7 6.8V4.9h6v1.9', 'M6.4 6.8l.7 8.3h5.8l.7-8.3'] },

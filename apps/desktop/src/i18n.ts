@@ -72,6 +72,14 @@ const MESSAGES: Record<MessageKey, string> = {
   'editor.untitled': '无标题',
   'editor.pane': '笔记正文',
   'editor.placeholder': '请输入标题和正文',
+  // 文内查找（§3.1 A 档）。计数那两句分开：零处时不许写"第 0 / 0 处"，那看着像有匹配。
+  'editor.find': '在本文查找',
+  'editor.findPlaceholder': '查找正文里的词',
+  'editor.findCount': '第 {current} / {total} 处',
+  'editor.findNone': '没有匹配',
+  'editor.findPrev': '上一处',
+  'editor.findNext': '下一处',
+  'editor.findClose': '关闭查找',
   // §4.1 保存四格的文案（措辞按规范原话：说清"东西在哪、稳不稳"，不用"已保存"这种状态词糊过去）
   'editor.saved': '已存在本机',
   // 设计稿编辑器角上第三那句（`已存在本机` `412 字` `改于 14:22`）。时间由 `formatModified` 给，

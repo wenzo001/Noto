@@ -5,8 +5,10 @@
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import EditorToolbar from './EditorToolbar.vue';
+import FindBar from './FindBar.vue';
 import { vEditable, markAsParsed } from '../editor/editableDirective';
-import { applySelection, measureEditable, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
+import { applySelection, caretInView, measureEditable, parseEditable, safeHref, selectionBoxIn, selectionIn } from '../editor/dom';
+import { findMatches, nextIndex, prevIndex } from '../editor/findInNote';
 import { placeBar, type Box } from '../editor/selectionBar';
 import { MARK_BUTTONS } from '../editor/marks';
 import { applySlash, filterSlash, markdownShortcut, slashQuery, type SlashItem } from '../editor/quickInsert';
@@ -94,6 +96,57 @@ const activeMarks = ref<string[]>([]);
 const activeFontSize = ref<string | null>(null);
 const activeColor = ref<string | null>(null);
 const charCount = computed(() => docCharCount(blocks.value));
+
+/**
+ * 文内查找（A 档，Joplin 的 `showLocalSearch`）。**全程只读**：命中靠选区，
+ * 一个字都不写进正文 —— 用户只是找了个词，不该因此多发一次保存、更不该把笔记弄脏。
+ */
+const findOpen = ref(false);
+const findQuery = ref('');
+/** 当前停在哪一处（-1 = 还没跳）。 */
+const findAt = ref(-1);
+const findHits = computed(() => findMatches(blocks.value, findQuery.value));
+
+function openFind(): void {
+  findOpen.value = true;
+  void nextTick(() => {
+    document.querySelector<HTMLInputElement>('[data-testid="find-input"]')?.focus();
+  });
+}
+
+function closeFind(): void {
+  findOpen.value = false;
+  findQuery.value = '';
+  findAt.value = -1;
+  // 关掉时把留在正文里的那段选区收掉：留着它，用户下一发打字会**替换掉刚找到的那个词**。
+  // `removeAllRanges` 只动选区、不动模型 ⇒ 不会因为"关个查找条"多一次保存。
+  window.getSelection()?.removeAllRanges();
+}
+
+/** 跳某一处：拿那一块的可编辑根，按**块内偏移**下选区，再让它进视野。 */
+function jumpTo(index: number): void {
+  const hit = findHits.value[index];
+  if (!hit) return;
+  findAt.value = index;
+  const root = elOf(hit.blockId);
+  if (!root) return;
+  applySelection(root, hit.start, hit.end);
+  caretInView(root);
+}
+
+function findNext(): void {
+  jumpTo(nextIndex(findHits.value.length, findAt.value));
+}
+
+function findPrev(): void {
+  jumpTo(prevIndex(findHits.value.length, findAt.value));
+}
+
+// 打字即跳第一处（原生查找条的行为）。查询变 ⇒ 旧的"第几处"立刻作废，先归 -1 再跳。
+watch(findQuery, () => {
+  findAt.value = -1;
+  if (findHits.value.length > 0) jumpTo(0);
+});
 /** 设计稿那句 `改于 14:22`：读核心的 `updatedAt`。取不到就整条不画，不许编一个"刚刚"。 */
 const modifiedAt = computed(() => formatModified(store.noteUpdatedAt));
 /**
@@ -914,7 +967,28 @@ defineExpose({ onBackspaceInBlock, focusBlock, capture });
       </p>
     </div>
 
+    <FindBar
+      v-if="findOpen"
+      :query="findQuery"
+      :total="findHits.length"
+      :current="findAt"
+      @update:query="findQuery = $event"
+      @next="findNext"
+      @prev="findPrev"
+      @close="closeFind"
+    />
+
     <div class="editor-corner">
+      <button
+        type="button"
+        class="btn btn--quiet btn--icon"
+        :aria-label="t('editor.find')"
+        :aria-expanded="findOpen ? 'true' : 'false'"
+        data-testid="find-open"
+        @click="findOpen ? closeFind() : openFind()"
+      >
+        <AppIcon name="search" :size="18" />
+      </button>
       <span class="text-sm text-muted">{{ charCount }}</span>
       <span
         v-if="store.saveKind"

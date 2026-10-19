@@ -83,7 +83,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 | 表格编辑、代码语言高亮、数学公式 | `editor.tableEditing`、markdownPlugins 23 项 | 表格在前端只是"未知块"JSON；无高亮/公式 | 🔶 **1.0 不做**（C 档）。表格可先做"只读渲染 + 逐格文本编辑"的轻版 |
 | 拼写检查与语言子菜单 | `builtInMetadata.ts:1953`、`commands/showSpellCheckerOptions.ts` | 无 | ❌ 依赖 Chromium 拼写栈，收益/风险不划算，1.0 不收 |
 | 字数/字符/行数/阅读时长统计 | `gui/NoteContentPropertiesDialog.tsx:38-47,112-118` | 只有**字符数**（`RichEditor.vue:917-947`） | ✅ 采纳，且**必须按 CJK 正确分词**（它是英文词计数，我们要更对） |
-| 便签内局部搜索 | `showLocalSearch`，`Ctrl+Shift+F` | 无 | ✅ 采纳（A 档） |
+| 便签内局部搜索 | `showLocalSearch`，`Ctrl+Shift+F` | **已落（第一百五十批，0.0.150）**：`editor/findInNote.ts` 纯函数算块内偏移，跳一处走 `applySelection` + `caretInView`，查找条贴在状态条那一侧（`FindBar.vue`）。**只读**：整段交互零次 `edit_note`（整跑腿 78 ③ 钉着）。**键位没有落**：`Ctrl+F` 归全局搜索、`Ctrl+Shift+F` 归附件（D21/A11 那份表是满的），所以入口是界面上那颗按钮，键位另拍（D23） | ✅ 采纳（A 档）—— 已落，键位待拍 |
 
 ### 3.2 组织能力
 

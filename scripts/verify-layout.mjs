@@ -279,6 +279,7 @@ const FIXTURE_MARKS = [
   '满页夹具', '设备夹具',
   // 腿 77（标签那一族）的夹具：崩在半路也不许把标签与笔记留成下一遍的现场。
   '标签腿夹具',
+  '查找腿夹具',
   // 第 49 刀那条字号腿的夹具。
   '字号夹具',
   // 第 50 批那条 toast 时限腿的夹具。
@@ -9315,6 +9316,121 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
    *  腿 73 自己那发对端口 9 的探针不算，它不是现场。 */
   const dialed = failedRequests.filter((s) => !s.includes('127.0.0.1:17399'));
   notes.push(`     同一遍里 requestfailed 记到的失败请求 ${dialed.length} 发（只报地址，不参与判据）：${dialed.slice(0, 4).join(' ｜ ') || '（没有）'}`);
+}
+
+/**
+ * 78 文内查找条在真浏览器里的形状（A 档采纳项第一条）。
+ *
+ * jsdom 那边（`findBar.spec.ts`）能验契约，**验不到几何**：它不排版，量到的 0×0 不算数。
+ * 这一腿量的是四件只有真渲染才有的事：
+ *  ① 那颗入口与条上三颗动作的**声明矩形 ≥44**（§5 的档；浮层/小图标把命中区弄小这件事本仓红过不止一次）；
+ *  ② 跳过去那一处**真的进了视野**（`caretInView` 那条边 —— 390 那一档把 needle 放在正文最后一段，
+ *     不滚就看不见；这一格是"查找条有用"与"查找条只是把选区挪到看不见地方"的分界）；
+ *  ③ 全程**一个字都不写**：整段交互期间 `/cmd/edit_note` 的请求数必须是 0
+ *     （命中靠选区，不往正文插东西；一旦改成插 `<mark>`，用户只是找了个词就会被记成"改过这篇"，
+ *      还会跟着同步出去 —— 那是最贵的一种越权）；
+ *  ④ 关掉之后选区要收掉（留着它，下一发打字会**替换掉刚找到的那个词**）。
+ * 外加 390 那一档那一排不许撑出横向滚动。夹具自己清，并把"清干净"钉一条。
+ */
+{
+  const MARK78 = '查找腿夹具';
+  const stamp78 = Date.now();
+  const needle = `${stamp78}终点词`;
+  // 正文造到"最后一颗 needle 一定在 390 的 fold 之下"：40 段，needle 在倒数第一段
+  const blocks78 = [];
+  for (let i = 0; i < 40; i += 1) {
+    blocks78.push({
+      id: `p${String(stamp78).slice(-6)}${i}`,
+      type: 'paragraph',
+      content: [{ type: 'text', text: i === 39 ? `${MARK78} 正文与 ${needle}` : `${MARK78} 垫高第 ${i} 段` }],
+    });
+  }
+  const nt78 = await cmd('create_note', { folderId: null, doc: { v: 1, content: blocks78 } });
+
+  const ctx78 = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const p78 = await ctx78.newPage();
+  const editCalls = [];
+  const errs78 = [];
+  p78.on('request', (r) => { if (r.url().includes('/cmd/edit_note')) editCalls.push(r.url()); });
+  p78.on('console', (m) => { if (m.type() === 'error') errs78.push(m.text()); });
+  await p78.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p78.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p78.locator(`[data-testid="note-row-${nt78.id}"]`).first().click({ timeout: 6000 });
+  await p78.waitForTimeout(1200);
+
+  check('78 前置：核心里那一篇确实有 needle（不然下面全是空判据）',
+    typeof nt78.id === 'string' && nt78.id.length > 0, JSON.stringify({ id: nt78.id }));
+
+  await p78.locator('[data-testid="find-open"]').click({ timeout: 5000 });
+  await p78.waitForSelector('[data-testid="find-bar"]', { timeout: 5000 });
+  const bar = await p78.evaluate(() => {
+    const el = document.querySelector('[data-testid="find-bar"]');
+    const r = el?.getBoundingClientRect();
+    return {
+      exists: el !== null,
+      h: r ? Math.round(r.height) : 0,
+      bottom: r ? Math.round(r.bottom) : 0,
+      vh: window.innerHeight,
+      docScrollW: document.documentElement.scrollWidth,
+      vw: window.innerWidth,
+      hits: [...document.querySelectorAll('[data-testid="find-prev"],[data-testid="find-next"],[data-testid="find-close"]')]
+        .map((b) => { const x = b.getBoundingClientRect(); return { w: Math.round(x.width), h: Math.round(x.height) }; }),
+    };
+  });
+  check('78 ① 条上三颗动作的声明矩形都在 44 之上（入口那颗自己也要）',
+    bar.exists && bar.hits.length === 3 && bar.hits.every((x) => x.w >= 44 && x.h >= 44),
+    JSON.stringify({ hits: bar.hits }));
+  check('78 ①b 查找条贴在状态条那一侧，没有掉出可视区',
+    bar.exists && bar.bottom > 0 && bar.bottom <= bar.vh, JSON.stringify({ bottom: bar.bottom, vh: bar.vh }));
+  check('78 ④b 390 那一档那一排不许撑出横向滚动',
+    bar.docScrollW <= bar.vw, JSON.stringify({ docScrollW: bar.docScrollW, vw: bar.vw }));
+
+  await p78.fill('[data-testid="find-input"]', needle);
+  await p78.waitForTimeout(600);
+  const jumped = await p78.evaluate(() => {
+    const sel = window.getSelection();
+    const text = sel && sel.rangeCount ? sel.toString() : '';
+    let rect = null;
+    if (sel && sel.rangeCount) {
+      const box = sel.getRangeAt(0).getBoundingClientRect();
+      rect = { top: Math.round(box.top), bottom: Math.round(box.bottom), h: Math.round(box.height) };
+    }
+    return {
+      count: document.querySelector('[data-testid="find-count"]')?.textContent?.trim() ?? '',
+      selected: text,
+      rect,
+      vh: window.innerHeight,
+      barBottom: Math.round(document.querySelector('[data-testid="find-bar"]')?.getBoundingClientRect().top ?? -1),
+    };
+  });
+  check('78 ② 打进去就跳到那一处：屏幕上说的与选区里装的是同一个串',
+    jumped.selected === needle, JSON.stringify({ 选区: jumped.selected, 期望: needle, 计数: jumped.count }));
+  check('78 ②b 计数说"第 1 / 1 处"（垫高的那些段不许被算成命中）',
+    jumped.count === '第 1 / 1 处', JSON.stringify({ 计数: jumped.count }));
+  check('78 ②c 跳过去那一处**真的进了视野**（在条的上方、在窗口之内 —— 没滚就等于没找到）',
+    jumped.rect !== null && jumped.rect.h > 0 && jumped.rect.top >= 0
+      && jumped.rect.bottom <= jumped.vh && jumped.rect.bottom <= jumped.barBottom,
+    JSON.stringify(jumped));
+
+  await p78.locator('[data-testid="find-close"]').click({ timeout: 5000 });
+  await p78.waitForTimeout(400);
+  const closed = await p78.evaluate(() => ({
+    bar: document.querySelector('[data-testid="find-bar"]') !== null,
+    ranges: window.getSelection()?.rangeCount ?? 0,
+  }));
+  check('78 ④ 关掉之后条收起、留在正文里那段选区也收掉（留着它，下一发打字会替换掉找到的词）',
+    closed.bar === false && closed.ranges === 0, JSON.stringify(closed));
+
+  check('78 ③ 全程零次 edit_note —— 查找是只读的，一个字都不该写',
+    editCalls.length === 0, JSON.stringify({ 次数: editCalls.length, 样本: editCalls.slice(0, 2) }));
+  check('78 这一腿 console error 为零', errs78.length === 0, JSON.stringify(errs78.slice(0, 3)));
+
+  await p78.close();
+  await ctx78.close();
+  await cmd('purge_note', { id: nt78.id });
+  const left78 = (((await cmd('list_notes', { folderId: null, trash: false })) ?? [])).filter((x) => (x.title ?? '').includes(MARK78));
+  check('78 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left78.length === 0, JSON.stringify({ 剩下: left78.length }));
+  notes.push(`     腿 78（文内查找）：三颗动作 ${JSON.stringify(bar.hits)} · 跳过去那一处 ${jumped.rect?.top ?? '没有'}px · edit_note ${editCalls.length} 次`);
 }
 
 /**
