@@ -7853,11 +7853,34 @@ function contrastRatio(fg, bg) {
       const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
       return { chain, hit: hit ? `${hit.tagName.toLowerCase()}.${String(hit.className).split(' ')[0]}` : 'none' };
     };
+    /**
+     * 被**滚动容器**裁掉的那一颗不算"看得见的按钮"（第一百五十五批这一遍教出来的）。
+     *
+     * 旧写法只比窗口：`r.bottom > window.innerHeight` 挡不住"在窗口里、却在 `.pane-body` 底边之外"那一档 ——
+     * 虚拟列表的最后一两排正好卡在那一条带上，`elementFromPoint` 交回的是列表脚的 `p.list-foot`，
+     * 于是 Playwright 按 aim 挑到的那一点 hover 到了**别人身上**，按钮自己那一格像素当然不变 ⇒
+     * 报成"这颗按钮没有悬停反馈"。那是仪器在说自己的事，不是产品的事（[[press-target-must-be-in-the-controls-own-shape]] 同族）。
+     * 只收紧"看得见"的定义，判据本身一条没松：凡进集合的，每一颗都要真量到 hover 差。
+     */
+    const fullyInside = (el, r) => {
+      for (let n = el.parentElement; n && n !== document.documentElement; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (!/(auto|scroll|hidden|overlay)/.test(cs.overflowX) && !/(auto|scroll|hidden|overlay)/.test(cs.overflowY)) continue;
+        const b = n.getBoundingClientRect();
+        if (r.top < b.top - 0.5 || r.bottom > b.bottom + 0.5 || r.left < b.left - 0.5 || r.right > b.right + 0.5) return false;
+      }
+      return true;
+    };
+    let clipped = 0;
     for (const el of document.querySelectorAll('button, [role="button"], input[type="button"]')) {
       const r = el.getBoundingClientRect();
       if (r.width < 20 || r.height < 20) continue;
       if (r.top < 0 || r.bottom > window.innerHeight || r.left < 0 || r.right > window.innerWidth) continue;
       if (!shown(el)) continue;
+      if (!fullyInside(el, r)) {
+        clipped += 1;
+        continue;
+      }
       const disabled = (el instanceof HTMLButtonElement && el.disabled) || el.getAttribute('aria-disabled') === 'true';
       // **选中态优先**：`.nav-btn:hover` 与 `.nav-btn[data-active='true']` 同权重（0,2,0），
       // 后写的选中态赢 ⇒ 当前选中的那一行 hover 不闪是设计如此（第十三批按实复核过）。
@@ -7890,7 +7913,7 @@ function contrastRatio(fg, bg) {
       const el = document.querySelector(`[data-ms-probe="${t.i}"]`);
       return el ? { ...t, ...diag(el, t.box) } : t;
     });
-    return { list: withDiag, injected: Boolean(victim) };
+    return { list: withDiag, injected: Boolean(victim), clipped };
   });
   const list = targets.list;
 
@@ -7972,7 +7995,7 @@ function contrastRatio(fg, bg) {
   check('63 §4.9 禁用优先：禁用那颗（含注入的那一颗）hover 之后不许有变化（钉住 :hover:not(:disabled)）',
     disabledChanged.length === 0 && list.some((t) => t.disabled) === true,
     JSON.stringify({ 变了: disabledChanged.slice(0, 6), 禁用颗数: list.filter((t) => t.disabled).length }));
-  notes.push(`     §4.9 悬停像素差实测：祖先链可见的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.disabled).length} 颗，其中注入 1 颗；选中态豁免 ${exemptSelected.length} 颗），无变化 ${noHover.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗`);
+  notes.push(`     §4.9 悬停像素差实测：祖先链可见的按钮 ${measured} 颗（禁用 ${list.filter((t) => t.disabled).length} 颗，其中注入 1 颗；选中态豁免 ${exemptSelected.length} 颗），无变化 ${noHover.length} 颗，基线不稳 ${unstable.length} 颗，点不着 ${unreachable.length} 颗，被滚动容器裁掉而不进集合 ${targets.clipped} 颗`);
   check('63 这一腿 console error 为零', errs.length === 0, errs.slice(0, 2).join(' | '));
   await p.close();
   await ctx.close();

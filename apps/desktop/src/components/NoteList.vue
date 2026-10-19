@@ -221,7 +221,9 @@ function createFrom(tpl: NoteTemplate): void {
 <template>
   <section class="pane pane--list" :aria-label="t('list.searchPlaceholder')" data-testid="note-list">
     <div class="pane-header">
-      <span class="pane-title">{{ listTitle }}</span>
+      <!-- 全文进 `title`：这一栏定宽 ~315px，长文件夹名一定放得下折行也救不了（折行只救"一颗都塞不下"那一档），
+           §5 要的是"被裁的那一段一字不差读得回来"，不是"看起来像省略号就行"。 -->
+      <span class="pane-title" :title="listTitle">{{ listTitle }}</span>
       <!-- 这里**不再**放侧栏把手。原本列表头这颗与标题栏那颗、主区左上那颗会同时出现，
            用户看到的就是「折起之后下面一层还有一个折起」；把手的唯一归属由
            `drawsTitleBar(caps)` 决定（见 WorkspaceView / SidebarPanel）。 -->

@@ -139,3 +139,54 @@ describe('§2.5 触摸目标容器：三个数各有主人，28 这一档按 A6 
     expect(containerHeights('.x {\n  line-height: 28px;\n}'), '§1.5 的行高被当成容器了').toEqual([]);
   });
 });
+
+/**
+ * 列表那一栏的表头 —— 第一百五十五批那一遍整跑（腿 ㊻）红出来的修法，钉在这儿当静态证人。
+ *
+ * 病是第一百五十三批带进来的：列表那一栏是**定宽栏**（整跑实测 1440 与 390 两档的可用内容宽都只有 ~315px，
+ * 因为窄的是栏目而不是窗口），而那一排放着标题 + 四颗动作。多一颗之后 flex 只能先吃标题：
+ * 红的那一遍量到 390 那档 `clientWidth=40 / scrollWidth=67`，**1440 那档 `clientWidth=0`** ——
+ * 用户读不到"自己在哪一栏"，而屏幕上没有任何一句话说明这件事（§5 禁的就是这一族）。
+ *
+ * 修法两句话，两条各配一把牙齿：**放不下就折行**（付的是高度，不是信息），**标题的基准换成内容宽**且全文挂在 `title` 上。
+ * 这里认的是**能生效的那一句声明**（[[static-gate-must-name-the-binding-declaration]]），不是"文件里出现过这个词"。
+ */
+const declOf = (css: string, sel: string): string => {
+  const m = new RegExp(`\\n\\s*${sel}\\s*\\{([^}]*)\\}`).exec(css);
+  return m ? m[1] : '';
+};
+const headerWraps = (css: string): boolean => /(^|\n)\s*flex-wrap:\s*wrap\s*;/.test(declOf(css, '.pane-header'));
+const titleHoldsItsWidth = (css: string): boolean => /(^|\n)\s*flex:\s*0\s+1\s+auto\s*;/.test(declOf(css, '.pane-title'));
+const titleCarriesFullText = (vue: string): boolean => /class="pane-title"[^>]*:title="listTitle"/.test(vue);
+
+describe('定宽栏的表头：多一颗动作时先让位的是折行，不是标题（§1.2 + §5）', () => {
+  const baseCss = readFileSync(join(SRC, 'styles', 'base.css'), 'utf8');
+  const noteList = readFileSync(join(SRC, 'components', 'NoteList.vue'), 'utf8');
+
+  it('仪器自检：两条声明与那一行模板都真读得出来（读空串这几条会集体空转）', () => {
+    expect(declOf(baseCss, '.pane-header').length, '读不到 .pane-header 那一条声明').toBeGreaterThan(20);
+    expect(declOf(baseCss, '.pane-title').length, '读不到 .pane-title 那一条声明').toBeGreaterThan(20);
+    expect(/class="pane-title"/.test(noteList), 'NoteList 里找不到那颗标题').toBe(true);
+  });
+
+  it('.pane-header 会折行；放不下的是这一排，不是那几个字', () => {
+    expect(headerWraps(baseCss), '.pane-header 没有 flex-wrap: wrap —— 定宽栏里多一颗按钮就会先压标题').toBe(true);
+  });
+
+  it('.pane-title 的基准是内容宽（`flex: 1` 那种把 0 当基准的写法就是这一次红出来的形状）', () => {
+    expect(titleHoldsItsWidth(baseCss), '.pane-title 不是 flex: 0 1 auto').toBe(true);
+    expect(/text-overflow:\s*ellipsis/.test(declOf(baseCss, '.pane-title')), '省略号那一格没写，长文件夹名会硬切').toBe(true);
+  });
+
+  it('被裁的那一段一字不差挂在 `title` 上（§5 的出口②；触屏没有 hover，这一格只算兜底不算解法）', () => {
+    expect(titleCarriesFullText(noteList), '那颗标题没把 listTitle 挂到 title 上').toBe(true);
+  });
+
+  it('牙齿：三种坏形状各红一条，好的那一版不误伤（合成串，不碰源文件）', () => {
+    expect(headerWraps('\n.pane-header {\n  display: flex;\n}\n'), '摘掉 wrap 却没红').toBe(false);
+    expect(headerWraps('\n.pane-header {\n  flex-wrap: nowrap;\n}\n'), 'nowrap 被当成会折行').toBe(false);
+    expect(titleHoldsItsWidth('\n.pane-title {\n  flex: 1;\n  min-width: 0;\n}\n'), '旧写法（基准 0）却没红').toBe(false);
+    expect(titleCarriesFullText('<span class="pane-title">{{ listTitle }}</span>'), '摘掉 title 绑定却没红').toBe(false);
+    expect(titleCarriesFullText('<span class="pane-title" :title="other">{{ listTitle }}</span>'), 'title 挂错了对象').toBe(false);
+  });
+});

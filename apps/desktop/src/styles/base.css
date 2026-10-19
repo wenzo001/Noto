@@ -209,6 +209,15 @@ button {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  /**
+   * 第一百五十五批之后补的一句（整跑腿 ㊻ 抓出来的，根因在第一百五十三批）：这一栏**列宽只有 ~315px**
+   * （桌面 1440 与手机 390 都一样，因为列表那一栏是定宽的），而第一百五十三批又往这排放了第五颗（排序，86px）。
+   * 不折行时 flex 只能把**标题**压到 0 宽（1440 实测 `clientWidth=0`、`scrollWidth=67`）——
+   * 那就是 §5 禁的"静默裁掉"。折行的代价是表头可能占两行，而不是"用户读不到自己在哪一栏"。
+   * 这颗该不该缩成图标、或搬到搜索框那一行 —— 视觉取舍登记成 **D26**，等用户拍。
+   */
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
   min-height: var(--touch);
   padding: var(--sp-2) var(--sp-4);
   border-bottom: 1px solid var(--line);
@@ -219,7 +228,9 @@ button {
   font-size: var(--text-md);
   font-weight: 650;
   letter-spacing: -0.01em;
-  flex: 1;
+  /* 基准是**内容宽**而不是 0：有余量就先给它自己的宽度（`flex: 1` 的旧写法把 0 当基准，
+     于是同排多一颗东西就先无声无息吃掉标题），真放不下才走下面那三行（省略号 + `title` 全文）。 */
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
