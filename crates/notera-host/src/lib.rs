@@ -68,6 +68,11 @@ pub enum BusEvent {
     },
     #[serde(rename_all = "camelCase")]
     NotesChanged { ids: Vec<String> },
+    /// 标签那一族在这之后与之前不一样了（改名、删除、折叠、计数变了都算）。
+    /// 为什么单独一个事件而不是搭 `NotesChanged` 的便车：只改标签名**不动任何笔记**，
+    /// 那条便车根本不会来（141 批欠账 ② 就是这个形状）。
+    /// 载荷是空的 —— 侧栏那份账本来就整份读一次就对，"哪一颗变了"这一格在这里没有买家。
+    TagsChanged,
     #[serde(rename_all = "camelCase")]
     Conflict {
         conflict_id: i64,
@@ -2188,6 +2193,8 @@ impl App {
         // 每一轮开头清一次「停」：上一轮按下的那一位不许把这轮也一起停掉
         // （不清的形态是"按一次停两轮"，而用户看到的第二轮回执会是莫名其妙的"已停止"）。
         self.inner.cancel.reset();
+        // 标签那一族的"本轮前的账"：轮末对撞一次，变了才发 `tags-changed`。
+        let tags_before = self.tag_stamp();
         self.set_sync_public(Badge::Syncing);
         // §6.3：带上轮的 etag 才可能拿到 304（空轮 1 请求 0 字节正文）
         let etag = self.manifest_etag();
@@ -2215,6 +2222,11 @@ impl App {
         self.apply_round_stats(&st, yielded);
         // 整份替换：这一轮干净了，上一轮那几笔旧账就不该继续挂在界面上。
         *self.inner.rejected.lock().unwrap() = rejected;
+        // 标签那一族变了才说一声（141 批欠账 ②：只改标签名不动任何笔记，
+        // 原来的 `notes-changed` 便车根本不来的那一段）。
+        if self.tag_stamp() != tags_before {
+            self.emit(BusEvent::TagsChanged);
+        }
         self.inner.syncing.store(false, Ordering::SeqCst);
         Some(st)
     }
@@ -3477,6 +3489,26 @@ impl App {
     /// 三种"说不清"都照实说不清：批量那一族本来就没有 id、那一行已经被永久删除、
     /// `kind` 不是认得的四种 —— 一律 `title: None`。**绝不拿一串 UUID 冒充名字**，
     /// 那串字符对用户没有任何意义，指错一条比不指更坏。
+    /// 标签那一族"这一轮动过没有"的读数：活着的 `(id, 标题)` 加上每颗的笔记数。
+    /// 为什么不是计数：**改名不改数量，而改名正是这一格欠账的那件事**；
+    /// 为什么要带笔记数：一颗标签被永久删除后表里的行不一定少，但链接与计数会变。
+    /// 读不到就退化成"没变"（这一格是提醒，权威在侧栏那一次 `list_tags`）。
+    fn tag_stamp(&self) -> Vec<(String, String, i64)> {
+        let Ok(tags) = self.inner.store.list_tags() else {
+            return Vec::new();
+        };
+        let counts = self.inner.store.tag_note_counts().unwrap_or_default();
+        tags.into_iter()
+            .map(|t| {
+                let n = counts
+                    .iter()
+                    .find(|(id, _)| *id == t.id.as_str())
+                    .map_or(0, |(_, c)| *c);
+                (t.id.as_str().to_string(), t.title, n)
+            })
+            .collect()
+    }
+
     fn rejected_items(&self) -> Vec<commands::RejectedItemDto> {
         self.inner
             .rejected
@@ -5055,6 +5087,31 @@ mod tests {
             None,
             "陌生 kind 不许猜"
         );
+    }
+
+    /// 「标签那一族变了」这一声（145 批，关 141 批欠账 ②）的两格尺子。
+    #[test]
+    fn the_tag_change_signal_is_named_on_the_wire_and_the_stamp_moves_when_only_a_name_moves() {
+        // ① 线上名字就是 TS 那一份 `kind: 'tags-changed'` 的对照面：kebab-case 漂一个字母，
+        //    那一发事件在运行时被丢掉而两边一声不响。
+        let v = serde_json::to_value(BusEvent::TagsChanged).expect("序列化");
+        assert_eq!(
+            v.get("kind").and_then(|x| x.as_str()),
+            Some("tags-changed"),
+            "{v:?}"
+        );
+        // ② 这把尺本身要有牙齿：**只改名字**也要让它动。个数那把尺在这一格是瞎的 ——
+        //    而"改名不动笔记"正是 141 批那条欠账的形状。
+        let app = boot("tags-changed-stamp");
+        let store = app.store();
+        let before = app.tag_stamp();
+        let t = store.create_tag("变了名字的那一颗").expect("create_tag");
+        let created = app.tag_stamp();
+        assert_ne!(created, before, "多出一颗标签要看得见");
+        store.rename_tag(&t.id, "改过之后的名字").expect("rename_tag");
+        let renamed = app.tag_stamp();
+        assert_eq!(renamed.len(), created.len(), "改名不改数量（所以别拿个数当那把尺）");
+        assert_ne!(renamed, created, "只改名字也必须让这把尺动，否则侧栏永远停在旧名");
     }
 
     fn keys(v: &serde_json::Value) -> Vec<String> {

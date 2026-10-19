@@ -71,10 +71,16 @@ function handleEvent(event: UiEvent): void {
     void notes.invalidate(event.ids ?? []);
     // 标签的链接住在笔记记录里（ADR-0022 D1）⇒ 对面动过标签也会动过笔记，
     // 这一格顺带把侧栏那一份标签账回读一次。
-    // ⚠ 已知欠账：**只改标签名**不动任何笔记，所以这一台要等下一次笔记变化或重启才跟上；
-    // 同步事件里没有"标签变了"这一族信号。登记在 CHANGELOG 本批的欠账栏，不是没想到。
+    // 而**只改标签名不动笔记**那一格不再靠这里 —— 它有自己的事件（下面 `tags-changed`），
+    // 141 批欠账 ② 到 145 批为止关掉；这里留这一次回读只是"顺手也对"，不是唯一的通路。
     void tags.load();
     if (!editor.dirty && editor.noteId && (event.ids ?? []).includes(editor.noteId)) void editor.reloadRemote();
+    return;
+  }
+  if (event.kind === 'tags-changed') {
+    // 核心主动说"标签那一族的账变了"（一轮里改过名 / 删过 / 折叠过 / 计数变过）。
+    // 权威在核心那一次比对（`run_round` 前后的 `tag_stamp`），界面不自己猜有没有变。
+    void tags.load();
     return;
   }
   if (event.kind === 'conflict') {

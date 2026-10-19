@@ -470,6 +470,12 @@ export interface NotesChangedEventPayload {
   ids: Uuid[];
 }
 
+/** 核心主动说"标签那一族的账变了"（一轮里改过名 / 删过 / 折叠过 / 计数变过）。
+ *  没有载荷：侧栏那份账本来就整份读一次就对，"哪一颗变了"这一格在界面上没有买家。 */
+export interface TagsChangedEventPayload {
+  kind: 'tags-changed';
+}
+
 export interface ConflictEventPayload {
   kind: 'conflict';
   conflictId: number;
@@ -485,8 +491,24 @@ export interface ToastEventPayload {
 export type UiEvent =
   | SyncEventPayload
   | NotesChangedEventPayload
+  | TagsChangedEventPayload
   | ConflictEventPayload
   | ToastEventPayload;
+
+/**
+ * 桥会收下的事件名，**一处来源**（`bridge.ts` 的守卫读这一份，不再自己抄一遍名单）。
+ * 为什么要有下面那两行类型断言：守卫漏一个 kind 时 TS 不会报错 —— 那个事件就在运行时被
+ * 静默丢掉，界面上"什么都没发生"（`tags-changed` 这一发正是这个形状最坏的样子：
+ * 核心发了，侧栏永远不跟上）。断言把"名单 ⇄ 联合类型"变成编译期的双向差集。
+ */
+export const UI_EVENT_KINDS = ['sync', 'notes-changed', 'tags-changed', 'conflict', 'toast'] as const;
+
+type UnionKinds = UiEvent['kind'];
+type ListedKinds = (typeof UI_EVENT_KINDS)[number];
+// 两个方向都要成立：联合里有的名单必须有，名单里不许有联合没有的（那会是条死路守卫）。
+const _kindsCovered: UnionKinds extends ListedKinds ? true : false = true;
+const _kindsNotExtra: ListedKinds extends UnionKinds ? true : false = true;
+void _kindsCovered; void _kindsNotExtra;
 
 /* ------------------------------------------------------------- 命令与错误 */
 

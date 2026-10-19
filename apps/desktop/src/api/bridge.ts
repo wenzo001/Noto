@@ -5,7 +5,7 @@
  *     —— 连的是本地核心服务（真实存储），不是假数据。
  * UI 其余部分只看到 callCommand / onUiEvent，不关心通道。
  */
-import type { CommandResult, UiEvent } from './types';
+import { UI_EVENT_KINDS, type CommandResult, type UiEvent } from './types';
 
 export type Transport = 'tauri' | 'http';
 
@@ -242,7 +242,9 @@ type EventHandler = (event: UiEvent) => void;
 function looksLikeUiEvent(value: unknown): value is UiEvent {
   if (typeof value !== 'object' || value === null) return false;
   const kind = (value as { kind?: unknown }).kind;
-  return kind === 'sync' || kind === 'notes-changed' || kind === 'conflict' || kind === 'toast';
+  // 名单只有一份（`types.ts` 的 `UI_EVENT_KINDS`，与 `UiEvent` 联合类型由编译期双向对撞）。
+  // 这里以前是自己抄的一串 `||`：抄漏一个 kind，那一发事件就在运行时被丢掉而 TS 一声不响。
+  return typeof kind === 'string' && (UI_EVENT_KINDS as readonly string[]).includes(kind);
 }
 
 function dispatchPayload(payload: unknown, handlers: Set<EventHandler>): void {
