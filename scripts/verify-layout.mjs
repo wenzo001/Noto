@@ -9293,7 +9293,8 @@ async function purgeByTitle(prefix) {
   notes.push(`     腿 77（标签那一族）：1440 两颗 / 390 两颗（挂载即读那一档单量）· × 命中区 ${JSON.stringify(w77.xs)} · 侧栏 ${side77.n} 行`);
 }
 
-await browser.close();
+// 共享的那个 browser 由**所有浏览器腿用完之后**统一关（腿 78 也在这条线之前 —— 曾经把这条 close
+// 留在腿 77 后面，于是排在它之后的腿拿到的就是"browser has been closed"，整跑 0 FAIL 而退出 1）。
 // 夹具清干净：这条门禁反复跑，不许每次往开发库里多堆 31 篇。
 for (const id of [...fx.ids, fx.longId]) await cmd('purge_note', { id });
 
@@ -9432,6 +9433,9 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   check('78 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left78.length === 0, JSON.stringify({ 剩下: left78.length }));
   notes.push(`     腿 78（文内查找）：三颗动作 ${JSON.stringify(bar.hits)} · 跳过去那一处 ${jumped.rect?.top ?? '没有'}px · edit_note ${editCalls.length} 次`);
 }
+
+// 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。
+await browser.close();
 
 /**
  * **收尾残骸自检**（G121 那一条的泛化形状）：崩在半路的那一轮永远执行不到每腿自己的收尾，
