@@ -20,9 +20,26 @@
   macOS dmg **6.47**（10）· app.zip **6.42**（10）· Android APK **14.95**（24）
   —— 五档都在上界之内、余量 32%～38%，且上界门自身每次都被六臂验过"真的会红"
   （`scripts/collect-release-assets.mjs` 的上界表 + `arch-check` 的 `ci:release-ceilings-have-teeth`）。
-- **还等谁（2026-10-20 的实况）**：A 档采纳项 **15/16 已落**，只剩**草稿态新建**——它要用户先拍
-  "什么算空 / 哪种离开算数 / 丢整篇还是回上一版"三句口径；其余待用户/待设备的：D19 · D18/D20 · D22–D26 ·
+- **还等谁（2026-10-20 的实况）**：A 档采纳项 **16/16 代码已落**（最后一条草稿态新建见 `CHANGELOG` 第一百六十二批）；
+  但 **`v0.0.162` 还没打 tag** —— 那一批的三遍整跑一遍都没跑完整（机器压力 / 一次 400 已修 / 起跑额度不足），
+  按仓里的规矩"没有整跑证人不打 tag"。其余待用户/待设备的：D19 · D18/D20 · D22–D26 ·
   三端真机（Windows 之外的两个平台只有 CI 产物、没有真机读数）· 把草稿 Release 转公开 · **1.0.0 这枚 tag 的时机**。
+
+### 1.0 发布检查单（2026-10-20 编；照着从上往下走，任何一格红就停在那格）
+
+1. **树的账**：`git status` 干净；`HEAD == origin/main`。本机跑过 `prepush-gates` 的话，先用
+   `git checkout HEAD -- apps/desktop/pnpm-lock.yaml` 把那条 `pnpm install` 写脏的锁文件清掉。
+2. **补 0.0.162 的整跑证人**（唯一欠账）：`node scripts/verify-layout.mjs`，看末尾 `>>> 布局门禁 PASS`
+   且 `LANE_RC=0`；重点盯 **腿 87 六格**、**"宽 1440 console error 为零"**、**只读那腿（㉚）**。
+   绿了才：`node scripts/tag-release.mjs v0.0.162 --push`（它自己会校验版本单源 + CHANGELOG 那条 `- **` 行）。
+3. **远程两扇门**：`gh run list --limit 6` 里 `PR 门禁` 与 `依赖与密钥审计` 对**最新那次 push** 都是 success；
+   `出包与发布` 对 tag 那次 success（草稿 Release 会带五件产物 + `SHA256SUMS.txt`）。
+4. **体积**：五档都在上界内（exe 8 / msi 11 / dmg 10 / app.zip 10 / apk 24 MiB；当前余量 32%～38%）。
+5. **用户侧三条决定**（我不替你拍）：① D 清单里那几格（D19 / D18·D20 / D22–D26）；
+   ② 三端真机要不要先跑一轮再发；③ **1.0.0 这枚 tag 什么时候打**（口径：采纳项已 16/16，剩下就是时机）。
+6. **发布动作**（按 2026-10-02 的口径由你按）：把草稿 Release 转公开 `gh release edit <tag> --draft=false`，
+   然后**逐件验"真的能下载"**（匿名 Range 请求应回 206、`SHA256SUMS.txt` 匿名可取且哈希对得上）。
+   未签名/未公证的两句用户后果（SmartScreen / macOS 右键打开）要跟 Release 文案一起发。
   **未签名/未公证**（用户侧后果要提前说清：Windows 会出 SmartScreen 提示、macOS 首次要右键打开）——
   这是 2026-09-27 那条"Android 出 unsigned、签名归用户"的口径，不是产物坏了。
 - **仍然 NOT READY FOR PRODUCTION**：① 三平台里只有 Windows 在本机装过/起过；macOS 未公证、
