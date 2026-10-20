@@ -493,6 +493,40 @@ export const useNoteStore = defineStore('notes', () => {
     return n;
   }
 
+  /**
+   * 批量加标签（多选那一批的后半截，采纳清单第 94 行）。
+   *
+   * 核心只有**逐篇**的 `set_note_tags`，而且它是**全量替换** ⇒ 这一发必须自己"读—并—写"：
+   * ① 已有这颗的直接跳过（「加标签」是幂等的，不是"覆盖成只剩这颗"）；
+   * ② 读不到"它原来有哪些"就**停**，不拿一个空数组去写 —— 那会把用户别的标签一起洗掉。
+   * 返回真加上的篇数：界面据此决定说"加了 N 篇"还是"这几篇本来就有"。
+   */
+  async function batchAddTag(ids: string[], tagId: string, tagTitle: string): Promise<number> {
+    let n = 0;
+    for (const id of ids) {
+      try {
+        const raw = await callCommand<unknown>(Commands.noteTags, { id });
+        if (!Array.isArray(raw)) {
+          errorKey.value = 'state.tagReadFailed';
+          break;
+        }
+        const current = raw.filter((x): x is string => typeof x === 'string');
+        if (current.includes(tagId)) continue;
+        const next = [...current, tagId];
+        await callCommand<Note>(Commands.setNoteTags, { id, tagIds: next });
+        tagIdsByNote.value = { ...tagIdsByNote.value, [id]: next };
+        n += 1;
+      } catch (error) {
+        errorKey.value = asBridgeError(error).messageKey;
+        break;
+      }
+    }
+    if (n > 0) {
+      useToastStore().pushText(t('state.taggedMany', { count: n, tag: tagTitle }), 'info');
+    }
+    return n;
+  }
+
   async function restore(id: string): Promise<void> {
     try {
       await callCommand<null>(Commands.restoreNote, { id });
@@ -601,6 +635,7 @@ export const useNoteStore = defineStore('notes', () => {
     batchMoveToTrash,
     batchRestore,
     batchMoveTo,
+    batchAddTag,
     restore,
     listKey,
     currentSort,

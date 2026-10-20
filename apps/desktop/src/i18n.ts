@@ -260,6 +260,11 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.blockedNoName': '一处说不出名字的改动',
   'sync.blockedRetry': '重试这一条',
   'sync.blockedDiscard': '不再上传这一条',
+  // 批量加标签（采纳清单第 94 行那半截）。"加了 N 篇"只报真加上去的，
+  // 全都本来就有时那句**不出现**（拿 0 去凑一句"已加 0 篇"是在报一件没发生的事）。
+  'list.batchTag': '加标签',
+  'state.taggedMany': '已给 {count} 篇加上「{tag}」。',
+  'state.tagReadFailed': '读不到这几篇现有的标签，已停下（不会拿空清单去覆盖你原来的标签）。',
   'sync.detail': '同步状态',
   'sync.syncNow': '立即同步',
   'sync.progress': '{done}/{total}',

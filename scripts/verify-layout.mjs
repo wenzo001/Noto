@@ -10244,6 +10244,102 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 83（毒丸隔离那一格）：2 条 / 4 颗按钮 ${box83.rects.map((r) => `${r.w}×${r.h}`).join(' ')} · 重试 1 发 + 放弃 1 发 · 点完重读 ${readsAfter} 次 · 老核心不出现`);
 }
 
+/**
+ * 84 批量加标签（第一百五十九批，采纳清单第 94 行那半截）。
+ *
+ * 这一腿钉三件事，缺一条都不算：
+ *  · **差集**：两篇里有一篇本来就有这颗 ⇒ 只发**一支** `set_note_tags`，且发的是缺的那一篇；
+ *  · **并集**：那一篇原有的另一颗标签在写完之后**还在**（核心是全量替换，界面拿"只放这颗"去写就是洗标签）；
+ *  · 悬浮层里那几颗按钮的**声明矩形** ≥44，且整件事 console 不报错。
+ * 数据侧的真读数另有单测（`src/batchTag.spec.ts` 5 条 + 四把刀）；这边量的是浏览器里那一路。
+ */
+{
+  const MARK84 = '批量标签夹具';
+  const TAG84 = '批量标签夹具Tag';
+  const OTHER84 = '批量标签夹具旧标';
+  const made84 = [];
+  const ids84 = [];
+  for (const suffix of ['甲', '乙']) {
+    const note = await cmd('create_note', {
+      folderId: null,
+      doc: { v: 1, content: [{ id: `b84${suffix}`, type: 'paragraph', content: [{ text: `${MARK84}·${suffix}` }] }] },
+    });
+    made84.push(note?.id);
+    ids84.push(note?.id);
+  }
+  const tagNew = await cmd('create_tag', { title: TAG84 });
+  const tagOld = await cmd('create_tag', { title: OTHER84 });
+  // 甲：本来就有"新"这颗（不许再发）；乙：先挂着"旧"那颗（写完不许被洗掉）
+  await cmd('set_note_tags', { id: ids84[0], tagIds: [tagNew.id] });
+  await cmd('set_note_tags', { id: ids84[1], tagIds: [tagOld.id] });
+
+  const c84 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p84 = await c84.newPage();
+  const errs84 = [];
+  p84.on('console', (m) => { if (m.type() === 'error') errs84.push(m.text()); });
+  const writes84 = [];
+  p84.on('request', (r) => {
+    if (/\/cmd\/set_note_tags$/.test(r.url())) writes84.push(r.postData() ?? '');
+  });
+  await p84.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p84.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  // 进多选 → 只勾这两篇（按身份找行，不按位置）
+  await p84.evaluate(() => document.querySelector('[data-testid="list-select"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p84.waitForTimeout(400);
+  for (const id of ids84) {
+    await p84.evaluate((x) => document.querySelector(`[data-testid="select-note-${x}"]`)?.dispatchEvent(new MouseEvent('click', { bubbles: true })), id);
+  }
+  await p84.waitForTimeout(300);
+  const count84 = await p84.evaluate(() => document.querySelector('[data-testid="batch-count"]')?.innerText?.trim() ?? null);
+  check('84 前置：两篇都真勾上了（批量条说的是 2；没勾上后面全是空判据）',
+    count84 !== null && /2/.test(count84), JSON.stringify({ count84 }));
+
+  await p84.click('[data-testid="batch-tag"]');
+  await p84.waitForTimeout(600);
+  const panel84 = await p84.evaluate((tagId) => {
+    const btn = document.querySelector(`[data-testid="batch-tag-${tagId}"]`);
+    const r = btn?.getBoundingClientRect();
+    return { present: btn !== null, w: r ? Math.round(r.width) : -1, h: r ? Math.round(r.height) : -1 };
+  }, tagNew.id);
+  check('84 悬浮层里那颗标签按钮在场、且声明矩形 ≥44（点不到就等于这条功能不存在）',
+    panel84.present === true && panel84.w >= 44 && panel84.h >= 44, JSON.stringify(panel84));
+
+  writes84.length = 0;
+  await p84.evaluate((tagId) => document.querySelector(`[data-testid="batch-tag-${tagId}"]`)?.dispatchEvent(new MouseEvent('click', { bubbles: true })), tagNew.id);
+  await p84.waitForTimeout(900);
+
+  const afterA = await cmd('note_tags', { id: ids84[0] });
+  const afterB = await cmd('note_tags', { id: ids84[1] });
+  const aList = Array.isArray(afterA) ? afterA : [];
+  const bList = Array.isArray(afterB) ? afterB : [];
+  check('84 差集：两篇里甲本来就有 ⇒ 只发一支写，且发的是缺的那一篇乙（多发一支 = 幂等破了）',
+    writes84.length === 1 && writes84[0].includes(ids84[1]) && !writes84[0].includes(ids84[0]),
+    JSON.stringify({ writes: writes84.length, payload: (writes84[0] ?? '').slice(0, 120) }));
+  check('84 并集：乙原来那颗旧标签在写完之后还在（核心是全量替换，载荷少了它就是把用户的标签洗掉）',
+    bList.includes(tagOld.id), JSON.stringify({ bList }));
+  check('84 两篇最后都带着这颗新标签（核心那一侧的终态，不是只在界面上画了个假象）',
+    aList.includes(tagNew.id) && bList.includes(tagNew.id), JSON.stringify({ aList, bList }));
+
+  check('84 这一腿 console error 为零', errs84.length === 0, errs84.slice(0, 3).join(' | '));
+  await p84.screenshot({ path: `${OUT}/84-batch-tag-1440.png` });
+  await p84.close();
+  await c84.close();
+
+  for (const id of made84) await cmd('purge_note', { id });
+  for (const t of [tagNew, tagOld]) if (t?.id) await cmd('delete_tag', { id: t.id });
+  const live84 = await cmd('list_notes', {});
+  const rows84 = Array.isArray(live84) ? live84 : [];
+  // 按 **id** 认残骸，不按标题：这几篇是"只有正文没有标题"时建出来的，标题可能干脆是空的 ——
+  // 按标题找会报"干净"，而东西其实还留在库里（下一遍就会在列表里看见它）。
+  const left84 = rows84.filter((n) => made84.includes(n.id));
+  const tags84 = await cmd('list_tags', {});
+  const trows84 = Array.isArray(tags84) ? tags84 : [];
+  const leftTags84 = trows84.filter((x) => x.id === tagNew.id || x.id === tagOld.id);
+  check('84 自己造的标签与笔记扫完要清干净（按 id 认，不按标题；留着就变成下一遍的现场）',
+    left84.length === 0 && leftTags84.length === 0, JSON.stringify({ 笔记: left84.length, 标签: leftTags84.length }));
+  notes.push(`     腿 84（批量加标签）：勾 ${count84 ?? '?'} · 标签按钮 ${panel84.w}×${panel84.h} · 真写 ${writes84.length} 支 · 并集 ${bList.includes(tagOld.id) ? '保住' : '丢了'}`);
+}
+
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
 
 /**

@@ -11,6 +11,7 @@ import { useNoteStore } from '../stores/notes';
 import { useSelectionStore } from '../stores/selection';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
+import { useTagStore } from '../stores/tags';
 import { useShellStore } from '../stores/shell';
 import { useConflictStore } from '../stores/conflicts';
 import { t, messageFor } from '../i18n';
@@ -214,6 +215,25 @@ function leaveSelection(): void {
   sel.exit();
 }
 
+const tags = useTagStore();
+
+/**
+ * 批量加标签（采纳清单第 94 行那半截）。合并与"已经有这颗就不发"都在 store 那侧做 ——
+ * 这里只把选中的 id 交出去，并在真加上了之后把标签计数读回来（那颗数长在上面）。
+ */
+async function batchTag(tagId: string, tagTitle: string): Promise<void> {
+  const ids = [...sel.ids];
+  if (ids.length === 0) return;
+  const n = await notes.batchAddTag(ids, tagId, tagTitle);
+  if (n > 0) await tags.load();
+}
+
+/** 进多选时顺手把标签清单备好（悬浮层里要摆的就是它；已经读过就不重复问）。 */
+async function startSelection(): Promise<void> {
+  sel.enter();
+  if (tags.tags.length === 0) await tags.load();
+}
+
 /** 批量删除：只把**真移走的那几篇**从选区摘掉；全做完了才退出多选（半途失败时剩下的还得看得见）。 */
 async function batchTrash(): Promise<void> {
   const ids = [...sel.ids];
@@ -319,7 +339,7 @@ function createFrom(tpl: NoteTemplate): void {
       </AppPopover>
       <!-- 进多选的入口（回收站里没有：那里的动作只有"恢复/彻底删除"，批量走的是行上那两颗）。
            做成显式按钮而不是 `Ctrl+A`：快捷键那张表（D21/A11）名额是满的，加一枚要先重开那张表。 -->
-      <button v-if="!notes.inTrash" type="button" class="btn btn--quiet" data-testid="list-select" :aria-pressed="sel.active ? 'true' : 'false'" @click="sel.enter()">
+      <button v-if="!notes.inTrash" type="button" class="btn btn--quiet" data-testid="list-select" :aria-pressed="sel.active ? 'true' : 'false'" @click="startSelection()">
         {{ t('list.select') }}
       </button>
       </template>
@@ -343,6 +363,21 @@ function createFrom(tpl: NoteTemplate): void {
               @click="close(); batchMove(f.node.id, f.node.name)"
             >
               {{ f.path.join(' / ') }}
+            </button>
+          </template>
+        </AppPopover>
+        <AppPopover v-if="!sel.empty" testid="batch-tag" :label="t('list.batchTag')">
+          <template #default="{ close }">
+            <p v-if="tags.tags.length === 0" class="text-sm text-muted" data-testid="batch-tag-none">{{ t('tags.none') }}</p>
+            <button
+              v-for="tag in tags.tags"
+              :key="tag.id"
+              type="button"
+              class="btn btn--block"
+              :data-testid="`batch-tag-${tag.id}`"
+              @click="close(); batchTag(tag.id, tag.title)"
+            >
+              {{ tag.title }}
             </button>
           </template>
         </AppPopover>
