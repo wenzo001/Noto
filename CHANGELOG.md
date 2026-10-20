@@ -89,8 +89,7 @@
 - **一处环境事实**：这台机器的 `pnpm exec` 今天起坏了（它的 `packageManager` 指向 store 里一份跑不起来的 pnpm），
   本批所有前端读数改走 `node apps/desktop/node_modules/vitest/vitest.mjs run --root apps/desktop ...`
   与 `node apps/desktop/node_modules/vue-tsc/bin/vue-tsc.js` —— 记下它是为了"下一条读数是怎么来的"能被复现。
-- **读数**：前端 **802 通过 / 91 文件**（串行全量）、`vue-tsc` 0 错、`arch-check` **52/52**、彩排 **10/10 全绿**。
-  没动 Rust、没动同步协议。版本 0.0.156 → 0.0.157。
+- **读数**：前端 **802 通过 / 91 文件**（串行全量）、`vue-tsc` 0 错、`arch-check` **52/52**、彩排 **10/10 全绿**。没动 Rust、没动同步协议。版本 0.0.156 → 0.0.157。
 - **整跑（`.logs/lane-157d.log`，2026-10-20 02:04–02:29 独占台面）**：**859 PASS / 0 FAIL**，
   另有 **2 条按环境噪声名单放行**（`net::ERR_NO_BUFFER_SPACE`，同一遍 `requestfailed` 记到的是
   `cmd/get_note` 那一发 —— 与第一百四十二批那格同族；台面这一族的名单上界是 2，**第 3 条照样红**，
