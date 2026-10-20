@@ -49,6 +49,28 @@
 
 复现命令见 `docs/ARCHITECTURE-MAP.md` §8；分领域的验收状态（含 BLOCKED 项的原因与解除条件）见 `docs/IMPLEMENTATION-STATUS.md`。
 
+### 编辑器（2026-10-20 第一百六十二批：草稿态新建 —— 口径是照抄 Joplin 的三处实现，不是我自创的）
+
+- **出处逐条**（`.vendor/joplin` 里读出来的）：`gui/WindowCommandsAndDialogs/commands/newNote.ts:27-46` 新建时
+  `Note.save({…}, {provisional: true})` —— 笔记**当场落库**、只是打上 provisional 标记，然后立刻选中；
+  `lib/components/shared/reduxSharedMiddleware.ts:76-83` —— 收到 `NOTE_SELECT` / `NAV_BACK` 时把**除目标以外**的
+  provisional 一律 `Note.delete`（**软删**，进回收站）；`lib/models/Note.ts:915-917` —— "只有用户真的改过它才永久保存"
+  ⇒ 改过就摘掉标记；`gui/NoteList/style.scss:51` —— 列表里淡化。
+- **落点**：`stores/provisional.ts`（标记只活在进程内存，与 Joplin 的 `provisionalNoteIds` 同层）；
+  `create()` 记标记、`watch(selectedId)` 收口（与 `NOTE_SELECT` 同一触发点）、`applyNoteUpdate` 摘标记
+  （拉列表不算改动 —— 把它当改动，草稿就永远不会被丢）；列表行 `row-item--provisional`（opacity .55，**只淡化不隐藏**：
+  它是一条真笔记，藏着等于骗人）。
+- **两条自己踩出来的边界**：① 删不掉（库只读等）就**留着**——宁可多一篇空笔记，也不许把"没删成"说成"删了"；
+  ② 收口**不许对"已经被删掉的那一条"再发 `delete_note`**：第一次整跑在别的腿上当场收到 `HTTP 400`、
+  把那条腿的 console 门打红 —— 修法是"先看它还在不在列表里"，并让 `moveToTrash`/`purge`/批量删除顺手忘掉标记。
+- **读数（0.0.162，`c29b57b` + `d74d730`）**：`provisional.spec.ts` **4/4**（账本身 / 新建即标记且切走真发 delete_note /
+  改过之后不许删 / 删失败时它留在列表里）；`vue-tsc` 0 错；腿 87 六格在**修 400 之前**那一遍里全绿
+  （淡化 opacity 命中 · 空着切走变软删 · 打一个字再切走留下 · console 0 · 残骸 0）。
+- **整跑待补、因此本批不打 tag**：修 400 之后的两遍整跑都倒在机器压力上（0 FAIL 崩在同一处 —— 那条 ROWFIT 腿的
+  `waitForSelector('[data-testid="note-list"]')`，`.logs/lane-162b.log`），一遍都没跑完整。
+  **下一次能跑完整跑时，先看腿 87 与"宽 1440 console error 为零"这两格**；绿了再打 `v0.0.162`。
+
+
 ### 布局（2026-10-20 第一百六十一批：桌面三栏可拖宽 + 本机记忆 —— 默认值仍取 tokens 那两颗，不另抄一份）
 
 - **它到底动了什么**：两颗把手（侧栏｜工作区、列表｜编辑区），拖的是那一栏的 CSS 变量
