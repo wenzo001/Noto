@@ -1599,11 +1599,10 @@ impl Store {
         }
         let conn = self.read()?;
         let marks = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!("SELECT DISTINCT sha256 FROM note_attachments WHERE note_id IN ({marks})");
-        let binds: Vec<&dyn rusqlite::ToSql> = note_ids
-            .iter()
-            .map(|s| s as &dyn rusqlite::ToSql)
-            .collect();
+        let sql =
+            format!("SELECT DISTINCT sha256 FROM note_attachments WHERE note_id IN ({marks})");
+        let binds: Vec<&dyn rusqlite::ToSql> =
+            note_ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>().map_err(Into::into)
