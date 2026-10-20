@@ -5410,6 +5410,13 @@ function contrastRatio(fg, bg) {
   const c48c = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
   const p48c = await c48c.newPage();
   await p48c.goto(URL_BASE, { waitUntil: 'networkidle' });
+  // **这一臂以前没有前置条件**：`goto` 完就对 `[data-testid="note-row-<id>"]` 打 `?.dispatchEvent`，
+  // 靶子那一刻还没渲染出来时 `?.` 静默不发 —— 三个读数一起长成 `null / -1 / -1`，看着像"窄档点不开"。
+  // 第一百五十七批那遍就是这么红的（860 PASS / 1 FAIL）。单独复现同一颗夹具的读数：
+  // 位次 0、DOM 里有、点得开、`改于 10:01`、角上溢出 0 ⇒ 红的是这一臂缺一条"靶子在场"的等待，不是产品。
+  // 所以这里只把**触发之前**的那一步补成断言；**效果那一侧照旧不设等待**，
+  // 让 `label !== null` 继续是"这一发真把编辑器打开了"的判据，而不是被自己的前置条件喂成恒真。
+  await p48c.waitForSelector(`[data-testid="note-row-${noteId}"]`, { timeout: 15000 });
   await p48c.evaluate((id) => document.querySelector(`[data-testid="note-row-${id}"]`)?.dispatchEvent(new MouseEvent('click', { bubbles: true })), noteId);
   await p48c.waitForTimeout(1500);
   const narrow = await p48c.evaluate((sel) => {
