@@ -164,7 +164,6 @@ button {
   content: '';
   position: absolute;
   inset: 0 3px;
-  border-radius: 2px;
 }
 .splitter:hover::before,
 .splitter--dragging::before {
