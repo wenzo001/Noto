@@ -2,6 +2,7 @@
 import { defineStore } from 'pinia';
 import { computed, ref, watch } from 'vue';
 import { useProvisionalStore } from './provisional';
+import { useShellStore } from './shell';
 import { callCommand } from '../api/bridge';
 import {
   Commands,
@@ -339,6 +340,13 @@ export const useNoteStore = defineStore('notes', () => {
     const prov = useProvisionalStore();
     const doomed = prov.pendingExcept(next);
     if (doomed.length === 0) return;
+    // 库被挂成只读（首帧 `stats.libraryReadOnly`，㉚ 那一腿专门造这个现场）时**一支都不许发**：
+    // 核心会拒、浏览器把那发 400 记成 console error，于是整跑那条"console error 为零"当场红
+    // （它抓过两次，两次都是这一条线）。只读时把标记忘掉就行 —— 那些空笔记本来也删不动。
+    if (useShellStore().libraryReadOnly) {
+      for (const id of doomed) prov.forget(id);
+      return;
+    }
     let removed = 0;
     for (const id of doomed) {
       prov.forget(id);
@@ -346,6 +354,11 @@ export const useNoteStore = defineStore('notes', () => {
       // 而浏览器会把它记成一条 console error（整跑的"console error 为零"那一格当场红过一遍）。
       // 判据就用我们自己手里的列表：不在列表里 = 没有可删的东西，只把账上的标记忘掉。
       if (!rows.value.some((r) => r.id === id)) continue;
+      // 光看列表还不够：它在**回收站**里时列表也可能把它画出来（列表档切到 trash），而 `delete_note`
+      // 对一条已经删过的笔记是 400。所以再问核心一次"它还在不在、是不是已经删了"——
+      // 这一发是 GET、对缺席返回 null，不会像那一发 DELETE 一样在 console 上留一条红。
+      const fresh = await callCommand<Note | null>(Commands.getNote, { id }).catch(() => null);
+      if (!fresh || fresh.deletedAt) continue;
       try {
         await callCommand<null>(Commands.deleteNote, { id });
         removed += 1;
