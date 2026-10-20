@@ -1482,6 +1482,21 @@ impl App {
             .iter()
             .map(|s| EntityId::parse(s).map_err(|_| CmdError::of("bad_id", false)))
             .collect::<Result<_, _>>()?;
+        // 按**这几篇**导（第一百六十批）：作用域是"这几篇 + 它们所在文件夹的祖先链"。
+        let note_scope: Option<std::collections::BTreeSet<String>> = if c.note_ids.is_empty() {
+            None
+        } else {
+            Some(
+                c.note_ids
+                    .iter()
+                    .map(|s| {
+                        EntityId::parse(s)
+                            .map(|e| e.as_str().to_string())
+                            .map_err(|_| CmdError::of("bad_id", false))
+                    })
+                    .collect::<Result<_, _>>()?,
+            )
+        };
         // 两个范围、两种用途：文件夹行要按外键闭包带上祖先骨架，
         // 笔记与附件只认这一棵子树 —— 否则祖先（默认本）里的东西会被顺手带走。
         let skeleton: Option<std::collections::BTreeSet<String>> = if ids.is_empty() {
@@ -1529,6 +1544,26 @@ impl App {
         };
         let purged =
             |r: &serde_json::Value| r.get("purged").and_then(|p| p.as_bool()).unwrap_or(false);
+        // 笔记作用域要带上的文件夹：这几篇所在那些本 + 它们的祖先链（导入端靠它把树拼回来）。
+        // 只给父本不带祖先，导入到一棵深一点的树里就会挂不上 —— 那正是"导出看着成了、导进去少一层"。
+        let note_folders: Option<std::collections::BTreeSet<String>> = match &note_scope {
+            None => None,
+            Some(set) => {
+                let parents: Vec<EntityId> = records
+                    .iter()
+                    .filter(|r| kind_of(r) == "note" && set.contains(&id_of(r)))
+                    .filter_map(|r| EntityId::parse(&folder_of(r)).ok())
+                    .collect();
+                Some(
+                    self.inner
+                        .store
+                        .folder_closure(&parents)
+                        .map_err(CmdError::from)?,
+                )
+            }
+        };
+        let in_note_folders = |id: &str| note_folders.as_ref().is_some_and(|s| s.contains(id));
+
         // 按文件夹导时：
         //   文件夹 → 子树 + 祖先链（`folder_closure` 的键集就是它：祖先只是外键骨架）
         //   笔记   → 父本在**子树**里的（`folder_subtree`，祖先自己的笔记不算这一棵的内容）
@@ -1544,22 +1579,34 @@ impl App {
                 app_version: env!("CARGO_PKG_VERSION").to_string(),
                 root_id: None,
                 counts: std::collections::BTreeMap::new(),
-                partial: skeleton.is_some(),
+                partial: skeleton.is_some() || note_scope.is_some(),
             }),
             folders: records
                 .iter()
-                .filter(|r| kind_of(r) == "folder" && !purged(r) && in_skeleton(&id_of(r)))
+                .filter(|r| {
+                    kind_of(r) == "folder"
+                        && !purged(r)
+                        && (in_skeleton(&id_of(r)) || in_note_folders(&id_of(r)))
+                })
                 .cloned()
                 .collect(),
             notes: records
                 .iter()
-                .filter(|r| kind_of(r) == "note" && !purged(r) && in_content(&folder_of(r)))
+                .filter(|r| {
+                    kind_of(r) == "note"
+                        && !purged(r)
+                        && match &note_scope {
+                            Some(set) => set.contains(&id_of(r)),
+                            None => in_content(&folder_of(r)),
+                        }
+                })
                 .cloned()
                 .collect(),
             tombstones: records
                 .iter()
                 .filter(|r| {
                     purged(r)
+                        && note_scope.is_none()
                         && (skeleton.is_none()
                             || (kind_of(r) == "folder" && in_skeleton(&id_of(r))))
                 })
@@ -1567,13 +1614,21 @@ impl App {
                 .collect(),
             attachments: Vec::new(),
         };
-        let shas: Vec<String> = match &content {
-            None => self
+        let shas: Vec<String> = match (&note_scope, &content) {
+            // 按笔记导：只带**这几篇自己**挂着的附件（`note_attachments` 那条边）。
+            (Some(set), _) => {
+                let list: Vec<String> = set.iter().cloned().collect();
+                self.inner
+                    .store
+                    .attachment_shas_for_notes(&list)
+                    .map_err(CmdError::from)?
+            }
+            (None, None) => self
                 .inner
                 .store
                 .local_attachment_shas()
                 .map_err(CmdError::from)?,
-            Some(set) => {
+            (None, Some(set)) => {
                 let folders: Vec<String> = set.iter().cloned().collect();
                 self.inner
                     .store

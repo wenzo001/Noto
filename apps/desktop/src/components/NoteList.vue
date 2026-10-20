@@ -228,6 +228,16 @@ async function batchTag(tagId: string, tagTitle: string): Promise<void> {
   if (n > 0) await tags.load();
 }
 
+/**
+ * 导出选中的这几篇（第一百六十批）。提示语（含**真实落盘路径**）由 store 那侧发 ——
+ * 这里不重复编一句话，免得两处说法漂开。
+ */
+async function batchExport(): Promise<void> {
+  const ids = [...sel.ids];
+  if (ids.length === 0) return;
+  await notes.exportSelected(ids);
+}
+
 /** 进多选时顺手把标签清单备好（悬浮层里要摆的就是它；已经读过就不重复问）。 */
 async function startSelection(): Promise<void> {
   sel.enter();
@@ -381,6 +391,9 @@ function createFrom(tpl: NoteTemplate): void {
             </button>
           </template>
         </AppPopover>
+        <button v-if="!sel.empty" type="button" class="btn btn--quiet" data-testid="batch-export" @click="batchExport()">
+          {{ t('list.batchExport') }}
+        </button>
         <button v-if="!sel.empty" type="button" class="btn btn--quiet" data-testid="batch-trash" @click="batchTrash()">
           {{ t('list.batchTrash') }}
         </button>

@@ -1587,6 +1587,28 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(Into::into)
     }
 
+    /// 这几篇**自己**挂着的附件（`note_attachments` 的那条边，不是"所在文件夹里所有附件"）。
+    /// 按笔记导出时用它：拿文件夹那一版会把同文件夹里别的笔记的图一起打进包里 ——
+    /// 用户勾了三篇、包里却有二十张图，那种"多给了"比"少给了"更难发现。
+    pub fn attachment_shas_for_notes(
+        &self,
+        note_ids: &[String],
+    ) -> Result<Vec<String>, StoreError> {
+        if note_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.read()?;
+        let marks = note_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT DISTINCT sha256 FROM note_attachments WHERE note_id IN ({marks})");
+        let binds: Vec<&dyn rusqlite::ToSql> = note_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(binds.as_slice(), |r| r.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>().map_err(Into::into)
+    }
+
     // ------------------------------------------------- push 侧：记录 wire ---
 
     /// 笔记记录的 wire 字节（DATA-MODEL §11 / SYNC-PROTOCOL §3）：同步引擎 PUT 的就是这份。

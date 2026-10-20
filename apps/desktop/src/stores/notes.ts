@@ -527,6 +527,29 @@ export const useNoteStore = defineStore('notes', () => {
     return n;
   }
 
+  /**
+   * 导出选中的这几篇（第一百六十批）。走的是设置页那条 `export_data`，只把作用域换成 `noteIds`；
+   * **不给 `path`** ⇒ 核心落到它自己的 `exports/` 目录并把真实路径回传，界面把那一句原样说出来 ——
+   * 让用户自己去文件管理器里猜"导到哪了"是这一格最容易敷衍的地方。
+   * 附件只带**这几篇自己**挂着的（核心那一侧按 `note_attachments` 取，不按文件夹扫）。
+   */
+  async function exportSelected(ids: string[]): Promise<number> {
+    if (ids.length === 0) return 0;
+    try {
+      const r = await callCommand<{ path?: string; created?: number }>(Commands.exportData, {
+        req: { noteIds: ids, includeAttachments: true, includeTrash: false },
+      });
+      const made = typeof r?.created === 'number' ? r.created : 0;
+      if (typeof r?.path === 'string' && r.path.length > 0) {
+        useToastStore().pushText(t('state.exportedMany', { count: made, path: r.path }), 'info');
+      }
+      return made;
+    } catch (error) {
+      errorKey.value = asBridgeError(error).messageKey;
+      return 0;
+    }
+  }
+
   async function restore(id: string): Promise<void> {
     try {
       await callCommand<null>(Commands.restoreNote, { id });
@@ -636,6 +659,7 @@ export const useNoteStore = defineStore('notes', () => {
     batchRestore,
     batchMoveTo,
     batchAddTag,
+    exportSelected,
     restore,
     listKey,
     currentSort,

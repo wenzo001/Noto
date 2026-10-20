@@ -640,6 +640,10 @@ pub struct ConfirmCmd {
 pub struct ExportCmd {
     #[serde(default)]
     pub folder_ids: Vec<String>,
+    /// 导出**这几篇**（第一百六十批）。与 `folder_ids` 互斥：给了它就只看这几篇 ——
+    /// 两套作用域叠在一起，谁覆盖谁都会让用户拿到一份"看起来是子树、其实是另一个范围"的包。
+    #[serde(default)]
+    pub note_ids: Vec<String>,
     #[serde(default)]
     pub include_attachments: bool,
     #[serde(default)]

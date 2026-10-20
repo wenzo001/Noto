@@ -10340,6 +10340,82 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 84（批量加标签）：勾 ${count84 ?? '?'} · 标签按钮 ${panel84.w}×${panel84.h} · 真写 ${writes84.length} 支 · 并集 ${bList.includes(tagOld.id) ? '保住' : '丢了'}`);
 }
 
+/**
+ * 85 批量导出（第一百六十批，采纳清单第 94 行最后一个动作）。
+ *
+ * 这一腿量的是**点下去之后真的在盘上多了一个包**，不只是"发了一发请求"：
+ *  · 请求载荷的作用域是 `noteIds`（那两篇），不是 `folderIds` —— 拿文件夹作用域冒充"选中的几篇"会把整本打进去；
+ *  · 界面上那句提示要带**核心回传的真实路径**（不写路径 = 让用户去文件管理器里猜）；
+ *  · `exports/` 目录里那一份**文件真的存在、非空、名字是 `notera-*.zip`**，跑完我们把它删掉。
+ */
+{
+  const DATA85 = path.resolve(process.env.NOTERA_DEV_DATA || '.logs/g102-data');
+  const EXPORTS85 = path.join(DATA85, 'exports');
+  const before85 = fsp.existsSync(EXPORTS85)
+    ? new Set(fsp.readdirSync(EXPORTS85).filter((f) => f.endsWith('.zip')))
+    : new Set();
+
+  const made85 = [];
+  for (const suffix of ['甲', '乙']) {
+    const note = await cmd('create_note', {
+      folderId: null,
+      doc: { v: 1, content: [{ id: `x85${suffix}`, type: 'paragraph', content: [{ text: `导出夹具·${suffix}` }] }] },
+    });
+    made85.push(note?.id);
+  }
+
+  const c85 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p85 = await c85.newPage();
+  const errs85 = [];
+  p85.on('console', (m) => { if (m.type() === 'error') errs85.push(m.text()); });
+  const reqs85 = [];
+  p85.on('request', (r) => {
+    if (/\/cmd\/export_data$/.test(r.url())) reqs85.push(r.postData() ?? '');
+  });
+  await p85.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p85.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p85.evaluate(() => document.querySelector('[data-testid="list-select"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  await p85.waitForTimeout(400);
+  for (const id of made85) {
+    await p85.evaluate((x) => document.querySelector(`[data-testid="select-note-${x}"]`)?.dispatchEvent(new MouseEvent('click', { bubbles: true })), id);
+  }
+  await p85.waitForTimeout(300);
+  await p85.evaluate(() => document.querySelector('[data-testid="batch-export"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  // 打包要写盘：给它比一次点击宽一点的时间，但**不拿超时当判据** —— 下面的断言读的是盘上的事实。
+  await p85.waitForTimeout(2500);
+
+  const payload85 = reqs85[0] ?? '';
+  check('85 作用域是 noteIds（两篇都在载荷里），不是 folderIds —— 拿文件夹作用域冒充"选中的几篇"会把整本打进去',
+    reqs85.length === 1 && payload85.includes('"noteIds"') && made85.every((id) => payload85.includes(id)) && !payload85.includes('"path"'),
+    JSON.stringify({ reqs: reqs85.length, payload: payload85.slice(0, 160) }));
+
+  const after85 = fsp.existsSync(EXPORTS85)
+    ? fsp.readdirSync(EXPORTS85).filter((f) => f.endsWith('.zip'))
+    : [];
+  const fresh85 = after85.filter((f) => !before85.has(f));
+  const stat85 = fresh85.length === 1 ? fsp.statSync(path.join(EXPORTS85, fresh85[0])) : null;
+  check('85 盘上真的多了**一个**非空的 notera-*.zip（"导出成功"不是回执里说的，是 exports/ 里躺着的）',
+    fresh85.length === 1 && /^notera-.*\.zip$/.test(fresh85[0]) && (stat85?.size ?? 0) > 0,
+    JSON.stringify({ fresh: fresh85, bytes: stat85?.size ?? -1 }));
+
+  const toast85 = await p85.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid="toast"], .toast')).map((x) => x.innerText).join(' | '));
+  check('85 屏幕上那句带着真实落盘路径（不写路径 = 让用户去文件管理器里猜导到哪了）',
+    fresh85.length === 1 && toast85.includes(fresh85[0]), JSON.stringify({ toast: toast85.slice(0, 140) }));
+  check('85 这一腿 console error 为零', errs85.length === 0, errs85.slice(0, 3).join(' | '));
+  await p85.screenshot({ path: `${OUT}/85-batch-export-1440.png` });
+  await p85.close();
+  await c85.close();
+
+  // 收尾：我们造的那几篇与那个包都删掉（留着的包会变成下一遍的"已存在"）
+  for (const id of made85) await cmd('purge_note', { id });
+  for (const f of fresh85) fsp.unlinkSync(path.join(EXPORTS85, f));
+  const left85 = fsp.existsSync(EXPORTS85) ? fsp.readdirSync(EXPORTS85).filter((f) => !before85.has(f)) : [];
+  check('85 自己造的包与笔记扫完要清干净（包留着，下一遍就可能撞上"目标已存在"）',
+    left85.length === 0, JSON.stringify({ 剩包: left85.length }));
+  notes.push(`     腿 85（批量导出）：载荷 ${reqs85.length} 发 · 盘上新增 ${fresh85.length} 份 ${stat85?.size ?? 0} 字节 · 提示带路径 ${fresh85.length === 1 && toast85.includes(fresh85[0]) ? '是' : '否'}`);
+}
+
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
 
 /**
