@@ -11,12 +11,16 @@ import SidebarPanel from './components/SidebarPanel.vue';
 import WorkspaceView from './views/WorkspaceView.vue';
 import SettingsView from './views/SettingsView.vue';
 import ConflictsView from './views/ConflictsView.vue';
+import PaneSplitter from './components/ui/PaneSplitter.vue';
+import { usePaneWidthsStore } from './stores/paneWidths';
 import { callCommand, inTauri, onLinkChange, onMenuAction, onUiEvent, probeLink } from './api/bridge';
 import type { UiEvent } from './api/types';
 import { loadCaps } from './platform/caps';
 import { dispatchMenu } from './platform/menu';
 import { LINK_PROBE_INTERVAL_MS } from './util/timing';
 import { useConflictStore } from './stores/conflicts';
+
+const panes = usePaneWidthsStore();
 import { useEditorStore } from './stores/editor';
 import { useFolderStore } from './stores/folders';
 import { useTagStore } from './stores/tags';
@@ -315,6 +319,7 @@ onBeforeUnmount(() => {
   <div
     class="app-shell"
     :class="{ 'reduced-motion': shell.reducedMotion }"
+    :style="panes.style"
     :data-layout="shellAttrs.layout" :data-compact="shellAttrs.compact" :data-pane="shellAttrs.pane" :data-sidebar="shellAttrs.sidebar" :data-drawer="shellAttrs.drawer" :data-theme="shellAttrs.theme">
     <a class="skip-link" href="#note-search" @click.prevent="focusSearch">{{ t('a11y.skipToSearch') }}</a>
 
@@ -326,6 +331,8 @@ onBeforeUnmount(() => {
            会把遮罩打开、侧栏却还藏着 ⇒ 一块黑幕 + 没有第二条路回笔记列表（§6 的"无法返回"）。
            抽屉既然被点名要开，就让它真的开。 -->
       <SidebarPanel v-show="shell.view === 'workspace' || shell.drawerTarget === 'sidebar' || !shell.isCompact" />
+      <!-- 侧栏｜工作区 之间的把手。只在桌面三栏出现（两栏/单栏由 CSS 藏掉：那两档的"栏宽"是断点算的）。 -->
+      <PaneSplitter v-if="shell.view === 'workspace'" which="sidebar" testid="splitter-sidebar" />
       <button
         v-if="shell.drawerTarget !== null"
         type="button"

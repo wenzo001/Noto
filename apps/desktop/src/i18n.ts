@@ -266,6 +266,7 @@ const MESSAGES: Record<MessageKey, string> = {
   // 导出选中的那几篇（第一百六十批）。这句必须带**真实路径**：核心不给 path 时自己落到 exports/，
   // 不把那个路径说出来，用户就得去文件管理器里猜"导到哪了"。
   'list.batchExport': '导出',
+  'layout.resize': '拖动调整宽度（左右键微调，双击复位）',
   'state.exportedMany': '已导出 {count} 篇到 {path}',
   'state.taggedMany': '已给 {count} 篇加上「{tag}」。',
   'state.tagReadFailed': '读不到这几篇现有的标签，已停下（不会拿空清单去覆盖你原来的标签）。',

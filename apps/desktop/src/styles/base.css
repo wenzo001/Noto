@@ -149,6 +149,35 @@ button {
   overflow: hidden;
 }
 
+/* 三栏之间的拖动把手（第一百六十一批，P3）。只在桌面三栏出现；这条 10px 是**命中带**，
+   看得见的那条线是 ::before（hover / 聚焦 / 拖动时才亮）。两栏与单栏由 data-layout 藏掉 ——
+   那两档的栏宽是断点算的，没有"用户拖"这回事。 */
+.splitter {
+  flex: 0 0 10px;
+  width: 10px;
+  align-self: stretch;
+  position: relative;
+  cursor: col-resize;
+  touch-action: none;
+}
+.splitter::before {
+  content: '';
+  position: absolute;
+  inset: 0 3px;
+  border-radius: 2px;
+}
+.splitter:hover::before,
+.splitter--dragging::before {
+  background: var(--line-strong);
+}
+.splitter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+.app-shell:not([data-layout='three']) .splitter {
+  display: none;
+}
+
 .pane--sidebar {
   flex: 0 0 var(--sidebar-w);
   width: var(--sidebar-w);

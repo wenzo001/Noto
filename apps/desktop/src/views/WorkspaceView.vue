@@ -7,6 +7,7 @@ import TagChips from '../components/TagChips.vue';
 import EmptyState from '../components/EmptyState.vue';
 import SkeletonRows from '../components/SkeletonRows.vue';
 import AppSelect from '../components/ui/AppSelect.vue';
+import PaneSplitter from '../components/ui/PaneSplitter.vue';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
 import { useNoteStore } from '../stores/notes';
@@ -74,6 +75,8 @@ const folderChoices = computed(() =>
       <AppIcon :size="18" name="menu" />
     </button>
     <NoteList v-if="shell.listVisible" @open="shell.openEditor()" />
+    <!-- 列表｜编辑区 之间的把手（桌面三栏才有；两栏/单栏由 CSS 藏掉）。 -->
+    <PaneSplitter v-if="shell.listVisible && shell.editorVisible" which="list" testid="splitter-list" />
 
     <section v-if="shell.editorVisible" class="pane pane--editor" :aria-label="t('editor.pane')" data-testid="editor-pane">
       <div class="pane-header editor-head" :class="{ 'editor-head--stacked': shell.isCompact }">

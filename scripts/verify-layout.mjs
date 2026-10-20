@@ -10419,6 +10419,115 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 85（批量导出）：载荷 ${reqs85.length} 发 · 盘上新增 ${fresh85.length} 份 ${stat85?.size ?? 0} 字节 · 提示带路径 ${fresh85.length === 1 && toast85.includes(fresh85[0]) ? '是' : '否'}`);
 }
 
+/**
+ * 86 三栏可拖宽（第一百六十一批，P3）。1440 三栏下量四件事：
+ *  · 把手在场、`role=separator`、初始宽度就是 tokens 那两颗（260 / 340）；
+ *  · **真拖**（mouse.down → move → up）之后：被拖那一栏真的跟着变、另一栏不动；
+ *  · 拖动之后**重开还是那个宽度**（本机持久；换一个全新 context 则回到默认 —— 两半都要量）；
+ *  · 390 那一档没有把手（那两档栏宽是断点算的）。
+ */
+{
+  const c86 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p86 = await c86.newPage();
+  const errs86 = [];
+  p86.on('console', (m) => { if (m.type() === 'error') errs86.push(m.text()); });
+  await p86.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p86.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p86.waitForTimeout(600);
+
+  const geom86 = () => p86.evaluate(() => {
+    const w = (sel) => {
+      const el = document.querySelector(sel);
+      const r = el?.getBoundingClientRect();
+      return r ? Math.round(r.width) : -1;
+    };
+    const s = document.querySelector('[data-testid="splitter-sidebar"]');
+    const l = document.querySelector('[data-testid="splitter-list"]');
+    return {
+      sidebar: w('.pane--sidebar'),
+      list: w('[data-testid="note-list"]'),
+      editor: w('[data-testid="editor-pane"]'),
+      splitterS: s ? { role: s.getAttribute('role'), now: s.getAttribute('aria-valuenow'), w: Math.round(s.getBoundingClientRect().width) } : null,
+      splitterL: l ? { role: l.getAttribute('role'), now: l.getAttribute('aria-valuenow') } : null,
+    };
+  });
+  const before86 = await geom86();
+  check('86 三栏那一档两颗把手都在场、是 `role=separator`、宽度读数就是 tokens 那两颗（读不到就说明没进三栏）',
+    before86.splitterS?.role === 'separator' && before86.splitterL?.role === 'separator'
+      && before86.splitterS.now === '260' && before86.splitterL.now === '340'
+      && before86.sidebar === 260 && before86.list === 340,
+    JSON.stringify(before86));
+
+  const drag86 = async (testid, dx) => {
+    const box = await p86.locator(`[data-testid="${testid}"]`).boundingBox();
+    const x = box.x + box.width / 2;
+    const y = box.y + Math.min(200, box.height / 2);
+    await p86.mouse.move(x, y);
+    await p86.mouse.down();
+    await p86.mouse.move(x + dx, y, { steps: 8 });
+    await p86.mouse.up();
+    await p86.waitForTimeout(300);
+  };
+
+  await drag86('splitter-sidebar', 120);
+  const afterS = await geom86();
+  check('86 拖侧栏把手 +120 ⇒ 侧栏真的宽了约 120，而列表与编辑区不被顺手改动（拖的是那一栏，不是整页）',
+    Math.abs(afterS.sidebar - (before86.sidebar + 120)) <= 4 && Math.abs(afterS.list - before86.list) <= 1,
+    JSON.stringify({ before: before86.sidebar, after: afterS.sidebar, listBefore: before86.list, listAfter: afterS.list }));
+
+  await drag86('splitter-list', -60);
+  const afterL = await geom86();
+  check('86 拖列表把手 −60 ⇒ 列表窄约 60、编辑区相应变宽（两栏各归各的）',
+    Math.abs(afterL.list - (afterS.list - 60)) <= 4 && afterL.editor > afterS.editor,
+    JSON.stringify({ before: afterS.list, after: afterL.list, editor: [afterS.editor, afterL.editor] }));
+
+  // 键盘：把手自己拿到焦点时的左右键（不占全局键位）
+  await p86.locator('[data-testid="splitter-sidebar"]').focus();
+  await p86.keyboard.press('ArrowRight');
+  await p86.waitForTimeout(200);
+  const afterKey = await geom86();
+  check('86 把手上按 → 一次宽 16（焦点在把手自己身上才生效）',
+    Math.abs(afterKey.sidebar - (afterL.sidebar + 16)) <= 1,
+    JSON.stringify({ before: afterL.sidebar, after: afterKey.sidebar }));
+
+  await p86.reload({ waitUntil: 'networkidle' });
+  await p86.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p86.waitForTimeout(500);
+  const afterReload = await geom86();
+  check('86 重开还是那个宽度（本机持久；这一格就是 P3 的"记忆"）',
+    afterReload.sidebar === afterKey.sidebar && afterReload.list === afterKey.list,
+    JSON.stringify({ before: { s: afterKey.sidebar, l: afterKey.list }, after: { s: afterReload.sidebar, l: afterReload.list } }));
+
+  // 全新 context（没有本机记忆）⇒ 回到 tokens 那两颗
+  const c86b = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p86b = await c86b.newPage();
+  await p86b.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p86b.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p86b.waitForTimeout(500);
+  const fresh86 = await p86b.evaluate(() => ({
+    s: Math.round(document.querySelector('.pane--sidebar')?.getBoundingClientRect().width ?? -1),
+    l: Math.round(document.querySelector('[data-testid="note-list"]')?.getBoundingClientRect().width ?? -1),
+  }));
+  await p86b.setViewportSize({ width: 390, height: 844 });
+  await p86b.waitForTimeout(600);
+  const narrow86 = await p86b.evaluate(() => ({
+    s: document.querySelector('[data-testid="splitter-sidebar"]')?.getBoundingClientRect().width ?? 0,
+    l: document.querySelector('[data-testid="splitter-list"]')?.getBoundingClientRect().width ?? 0,
+    layout: document.querySelector('.app-shell')?.getAttribute('data-layout') ?? null,
+  }));
+  check('86 一台没记忆的设备回到 tokens 那两颗（260 / 340）—— 记忆是本机的，不是"上一次谁拖过就全世界"',
+    fresh86.s === 260 && fresh86.l === 340, JSON.stringify(fresh86));
+  check('86 390 那一档没有把手（两栏/单栏的栏宽是断点算的，没有"用户拖"这回事）',
+    narrow86.s === 0 && narrow86.l === 0 && narrow86.layout !== 'three', JSON.stringify(narrow86));
+  check('86 这一腿 console error 为零', errs86.length === 0, errs86.slice(0, 3).join(' | '));
+  await p86.screenshot({ path: `${OUT}/86-resizable-1440.png` });
+  await p86.close();
+  await c86.close();
+  await p86b.close();
+  await c86b.close();
+  notes.push(`     腿 86（三栏拖宽）：侧栏 ${before86.sidebar}→+120→${afterS.sidebar} · 列表 ${afterS.list}→−60→${afterL.list} · 键盘 +16→${afterKey.sidebar} · 重开 ${afterReload.sidebar}/${afterReload.list} · 新设备 ${fresh86.s}/${fresh86.l}`);
+}
+
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
 
 /**
