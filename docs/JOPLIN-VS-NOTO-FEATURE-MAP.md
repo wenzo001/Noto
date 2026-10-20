@@ -77,7 +77,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 |---|---|---|---|
 | 编辑器/查看器/分栏三态切换，`Ctrl+E`/`Ctrl+L` 切外部编辑与布局 | `gui/MenuBar.tsx:578-1026`、`builtInMetadata.ts:1104-1115` | 打开笔记即 `contenteditable`，无需点编辑（`RichEditor.vue:848`） | **❌ 不抄三态**。这正是你说要避开的毛病；抄过来等于把它请回来 |
 | 标题是独立输入框 | `gui/NoteTitleBar.tsx:123` | 标题即第一个标题块（`notera-richtext/src/extract.rs:92`） | ✔ 保持 |
-| 新建笔记为**草稿态**（provisional），切走时自动丢弃，列表里淡化显示 | `commands/newNote.ts:34-53`、`lib/components/shared/reduxSharedMiddleware.ts:76-83`、`gui/NoteList/style.scss:51` | 无 —— `Ctrl+N` 建的就是真笔记，误按会留垃圾 | ✅ **采纳**（A 档，用户能直接感觉到） |
+| 新建笔记为**草稿态**（provisional），切走时自动丢弃，列表里淡化显示 | `commands/newNote.ts:34-53`、`lib/components/shared/reduxSharedMiddleware.ts:76-83`、`gui/NoteList/style.scss:51` | **已落（第一百六十二批，0.0.162）**，口径逐条照抄那三处出处：新建**当场落库**并打 provisional 标记、立刻选中；`NOTE_SELECT`（这里是 `watch(selectedId)`）时把**除目标以外**的 provisional 一律 `delete_note`（**软删**，进回收站）；用户**改过**（`applyNoteUpdate`）就摘标记、之后不再丢；列表那行 `row-item--provisional`（opacity .55，**只淡化不隐藏**）。删失败就留着——不把"没删成"说成"删了"。标记只活在进程内存（与 Joplin 的 `provisionalNoteIds` 同层），重启不追账 | ✅ **采纳并已落**（A 档最后一条） |
 | 删除后弹**可撤销**的回收站通知 | `gui/TrashNotification/TrashNotification.tsx:50-57` | **已落（第一百五十二批，0.0.153）**：`moveToTrash` 推的那条 toast 带一颗「撤销」（`ToastAction`），点了走 `restore_note` 且**认的是刚删的那一篇的 id**，不是"当前选中"。两条出口各自分明：「撤销」= 撤条 + 跑动作，「知道了」= 只撤条。带动作的那一族**不自动消失**（§4.9 已补这一句），无动作那一族照旧 4500ms | ✅ **采纳** —— 已落 |
 | 编辑器后端 4 套并存（CM5 / CM6 / ProseMirror / TinyMCE 遗留 / 纯文本） | `gui/NoteEditor/`、`packages/editor/ProseMirror` | 一套自有块模型（`editor/model.ts:12-22`） | ❌ 不抄（多编辑器就是体积与内存的来源） |
 | 表格编辑、代码语言高亮、数学公式 | `editor.tableEditing`、markdownPlugins 23 项 | 表格在前端只是"未知块"JSON；无高亮/公式 | 🔶 **1.0 不做**（C 档）。表格可先做"只读渲染 + 逐格文本编辑"的轻版 |
