@@ -81,7 +81,16 @@
   （停轮 + 徽标那句重填口令），要不要给它也接上隔离是另一个口径，等拍；
   ③ GC / 完整性那条 I3 查询仍只看 `('pending','inflight','failed')` —— 一行停在 `blocked` 的附件重传动作
   会不会被"省磁盘"那一步摘掉，还没量（与 §13 附件那半截同一条账）。
-- **读数**：Rust 全量、clippy、fmt、`arch-check`、前端全量与 `vue-tsc` 见本批收盘那条（跑完后按实补，不预留数字）。版本 0.0.157 → 0.0.158。
+- **读数（按实补，全部跑在 `2e57674` 这棵树上）**：`cargo clippy -D warnings` 四个 crate 全绿（先 `cargo clean -p notera-core` 清掉
+  `only metadata stub found for rlib dependency core` 那个工件 —— 那是本机的东西，不是代码）；`notera-sync --test engine` **30/0**（新 3 条）；
+  `notera-store --test outbox_quarantine` **3/0**（真 SQLite，新文件）；前端 **802 通过 / 91 文件**、`vue-tsc` 0 错（node 直跑，这台机器的 pnpm 坏了）；
+  **布局整跑 872 PASS / 0 FAIL**（`.logs/lane-158c.log`，LANE_RC=0）。远程 CI：`bcba01f` 与 `2e57674` 的 **PR 门禁 + 审计作业都是 completed success**
+  （本机跑不动的 pnpm 那半边由它出证人）。版本 0.0.157 → 0.0.158。
+- **腿 83 的实读数**（这一格第一次有浏览器证人）：正对照 `{"text":"有 2 条这台服务器一直拒收…"}`；两颗按钮的**声明矩形** `99×44` 与 `125×44`
+  （四颗都 ≥44）；整格不出现 UUID 形状、且说出"一处说不出名字的改动"；点「重试」发出去的载荷带 `"kind":"n","id":"note-83-a","rev":7`（是那一行，不是旁边 rev 3 那条）；
+  点「不再上传」走 `discard_outbox_item` 且带 `rev:3`；动作之后 `sync_status` 又读了 **5** 次；老核心那两格缺席时整块不出现、而旁边"待处理"那句照旧在说；
+  三种注入形状 console error 全为零。
+
 
 
 ### 列表（2026-10-20 第一百五十七批：多选 + 批量条 —— A 档 P5，"50 次点击变 3 次"的那一类；三条判据先在彩排台红过）
