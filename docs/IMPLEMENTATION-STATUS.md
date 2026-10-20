@@ -5,13 +5,15 @@
 > `VERIFIED` 一律带**可重放的证据出处**，没有证据就往下写。
 > `SKIP / TODO / 理论通过 / 应该没问题 / 本地没环境所以跳过` 在这份表里不算 PASS。
 >
-> 更新时间：2026-10-20（0.0.156 这批）· 本轮口径：同步"装完是干净的"（缺口 G46–G57 一批，见
+> 更新时间：2026-10-20（0.0.159 这批）· 本轮口径：同步"装完是干净的"（缺口 G46–G57 一批，见
 > `docs/PRODUCTION-READINESS.md`）· 本机工具链 `stable-x86_64-pc-windows-gnu`
 > ⚠ 这张表下面那些"今天实测"的数字**是按批次冻结的读数**，不是当前值：
-> 最近一次全量实测（2026-10-20，0.0.156，`scripts/prepush-gates.mjs` 那条 CI 平价链）是
-> `cargo test --workspace` **765 通过 / 0 失败 / 7 ignored**（101 个 result 行）、
-> `cargo clippy --workspace --all-targets -- -D warnings` 0/0、`cargo fmt --all --check` 0、
-> 前端 **788 通过（89 文件）** + `vue-tsc` 0 错、`arch-check` **52/52**、布局整跑 **850 PASS / 0 FAIL**。
+> 最近一次全量实测（2026-10-20，0.0.159 这棵树上）是
+> `cargo test --workspace` **771 通过 / 0 失败 / 7 ignored**（102 个 result 行）、
+> `cargo clippy --workspace --all-targets -- -D warnings` —— 本机今天被 `only metadata stub found for rlib dependency core`
+> 这个**工件**挡过（不是代码红；清 `notera-core` 之后四个相关 crate 的 targeted clippy 是 0/0，远程 CI 的 Clippy 步骤是绿的）、
+> 前端 **802 通过（91 文件）** + `vue-tsc` 0 错（node 直跑 —— 这台机器的 pnpm 坏了）、`arch-check` **52/52**、
+> 布局整跑 **879 PASS / 0 FAIL**（含腿 83/84，`.logs/lane-159.log`）。
 > 下面还写着 612/236、672/285 的那些行是各自那一批的出处，留着是为了可回放，
 > 不是为了当现状 —— 读的时候先看行内的日期。
 
