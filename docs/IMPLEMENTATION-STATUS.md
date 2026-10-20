@@ -12,8 +12,8 @@
 > `cargo test --workspace` **771 通过 / 0 失败 / 7 ignored**（102 个 result 行）、
 > `cargo clippy --workspace --all-targets -- -D warnings` —— 本机今天被 `only metadata stub found for rlib dependency core`
 > 这个**工件**挡过（不是代码红；清 `notera-core` 之后四个相关 crate 的 targeted clippy 是 0/0，远程 CI 的 Clippy 步骤是绿的）、
-> 前端 **802 通过（91 文件）** + `vue-tsc` 0 错（node 直跑 —— 这台机器的 pnpm 坏了）、`arch-check` **52/52**、
-> 布局整跑 **879 PASS / 0 FAIL**（含腿 83/84，`.logs/lane-159.log`）。
+> 前端 **823 通过（95 文件）** + `vue-tsc` 0 错（node 直跑 —— 这台机器的 pnpm 坏了）、`arch-check` **52/52**、
+> 布局整跑 **892 PASS / 0 FAIL**（含腿 83/84/85/86，`.logs/lane-159.log` 及后续各批；第一百六十二批的整跑待补）。
 > 下面还写着 612/236、672/285 的那些行是各自那一批的出处，留着是为了可回放，
 > 不是为了当现状 —— 读的时候先看行内的日期。
 
