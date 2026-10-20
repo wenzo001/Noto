@@ -52,6 +52,7 @@ fn live_ids(app: &App) -> Vec<EntityId> {
 fn export(app: &App, to: &Path, trash: bool) -> serde_json::Value {
     app.export_data(ExportCmd {
         folder_ids: vec![],
+        note_ids: Vec::new(),
         include_attachments: false,
         include_trash: trash,
         path: Some(to.to_string_lossy().to_string()),
@@ -216,6 +217,7 @@ fn exporting_one_folder_carries_only_its_subtree_and_says_so() {
     let got = a
         .export_data(ExportCmd {
             folder_ids: vec![keep.id.to_string()],
+            note_ids: Vec::new(),
             include_attachments: false,
             include_trash: false,
             path: Some(out.to_string_lossy().to_string()),
@@ -253,6 +255,7 @@ fn exporting_one_folder_carries_only_its_subtree_and_says_so() {
     let err = a
         .export_data(ExportCmd {
             folder_ids: vec![EntityId::new().to_string()],
+            note_ids: Vec::new(),
             include_attachments: false,
             include_trash: false,
             path: None,

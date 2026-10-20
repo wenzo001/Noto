@@ -331,6 +331,8 @@ fn run(dir: PathBuf, cmd: Cmd) -> i32 {
             };
             let cmd = notera_host::commands::ExportCmd {
                 folder_ids: folders.clone(),
+                // CLI 这一档只认文件夹作用域；按笔记导由界面那条路走（`noteIds`）。
+                note_ids: Vec::new(),
                 include_attachments: true,
                 include_trash: true,
                 path: Some(out.to_string_lossy().to_string()),
