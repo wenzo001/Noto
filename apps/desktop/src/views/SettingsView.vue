@@ -624,7 +624,9 @@ function jumpTo(id: string): void {
               role="group"
               :aria-label="item.title ?? item.id"
             >
-              <span class="text-sm" :data-testid="`blocked-name-${item.kind}-${item.id}`">{{ item.title ?? item.id }}</span>
+              <!-- 说不出名字的那条**说"一处说不出名字的改动"**，不许拿那串 UUID 冒充名字
+                  （`rejected_items` 那一族同一条规矩：指错或冒充比不说更坏）。 -->
+              <span class="text-sm" :data-testid="`blocked-name-${item.kind}-${item.id}`">{{ item.title || t('sync.blockedNoName') }}</span>
               <span v-if="item.reason" class="text-sm text-muted" :data-testid="`blocked-why-${item.kind}-${item.id}`">{{ item.reason }}</span>
               <button
                 type="button"

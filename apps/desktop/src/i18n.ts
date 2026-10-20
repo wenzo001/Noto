@@ -256,6 +256,8 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.blockedLead': '有 {count} 条这台服务器一直拒收，先停在这里（改动还在本机）：',
   'sync.blockedEtc': ' 等 {count} 条',
   'sync.blockedNone': '有 {count} 条这台服务器一直拒收，先停在这里（这一批说不出是哪几条）',
+  'sync.blockedMore': '，另有 {count} 条说不出是哪几条',
+  'sync.blockedNoName': '一处说不出名字的改动',
   'sync.blockedRetry': '重试这一条',
   'sync.blockedDiscard': '不再上传这一条',
   'sync.detail': '同步状态',

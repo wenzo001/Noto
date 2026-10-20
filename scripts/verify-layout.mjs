@@ -10108,6 +10108,142 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 82（多选与批量）：勾 ${firstCheck?.w}×${firstCheck?.h} · 全选 ${allCount}/${coreRows} · 批量删 ${dels82.length} 支后撤销 ${restores82.length} 支 · 移动 ${folders82.length} 支`);
 }
 
+/**
+ * 83 毒丸隔离那一格（第一百五十八批的界面证人；SYNC-PROTOCOL §12「连续拒收 ⇒ 隔离」）。
+ *
+ * 为什么这一格只能靠注入：台面从不配置账户，也从不造真拒收（CHANGELOG 第一四二批那格就登记过这个缺口），
+ * 而这里要验的是**界面拿到这份账怎么说、怎么点** —— 数据层的真读数在
+ * `notera-store/tests/outbox_quarantine.rs`（真 SQLite）与 `notera-sync/tests/engine.rs`（调用边 + 对照臂）。
+ * 所以这一腿不写库、不建夹具：它只拦 `account` / `sync_status` / 那两条命令，
+ * 判据打在"渲染出来的文字与矩形"和"发出去的那一发请求的载荷"上。
+ */
+{
+  const ACC83 = {
+    id: 'acct-83', baseUrl: 'https://dav.invalid/dav', username: 'u', enabled: true,
+    hasCredential: true, credentialLive: true, credentialPersistent: true,
+  };
+  const BASE83 = {
+    phase: 'idle', badge: 'synced', lastSuccessAt: null, divergenceHeld: null,
+    messageKey: null, retryable: false, pendingOps: 0, openConflicts: 0, rejectedItems: [],
+  };
+  const UNNAMEABLE = '01a157ff-0000-7000-8000-00000000c0ff';
+
+  const visit83 = async ({ status, account = ACC83, watch = false } = {}) => {
+    const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const p = await c.newPage();
+    const errs = [];
+    p.on('console', (m) => { if (m.type() === 'error') errs.push(m.text()); });
+    const sent = [];
+    let statusReads = 0;
+    if (watch) {
+      p.on('request', (r) => {
+        const hit = /\/cmd\/(retry_outbox_item|discard_outbox_item)$/.exec(r.url());
+        if (hit) sent.push({ name: hit[1], body: r.postData() ?? '' });
+        if (/\/cmd\/sync_status$/.test(r.url())) statusReads += 1;
+      });
+    }
+    await p.route('**/cmd/account', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(account) }));
+    await p.route('**/cmd/sync_status', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(status) }));
+    await p.route('**/cmd/retry_outbox_item', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"found":true}' }));
+    await p.route('**/cmd/discard_outbox_item', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '{"found":true}' }));
+    await p.goto(URL_BASE, { waitUntil: 'networkidle' });
+    await p.evaluate(() => document.querySelector('[data-testid="nav-settings"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    await p.waitForTimeout(900);
+    return { p, c, errs, sent, reads: () => statusReads };
+  };
+
+  const two = await visit83({
+    watch: true,
+    status: {
+      ...BASE83,
+      blockedOps: 2,
+      blockedItems: [
+        { kind: 'n', id: 'note-83-a', title: '被拒的那一篇', rev: 7, reason: '服务器不收这一份（夹具）' },
+        { kind: 'n', id: UNNAMEABLE, title: null, rev: 3, reason: '写入没通过复读校验' },
+      ],
+    },
+  });
+  const box83 = await two.p.evaluate(() => {
+    const wrap = document.querySelector('[data-testid="sync-blocked"]');
+    const line = document.querySelector('[data-testid="sync-blocked-line"]');
+    const rects = Array.from(wrap?.querySelectorAll('button') ?? []).map((b) => {
+      const r = b.getBoundingClientRect();
+      return { w: Math.round(r.width), h: Math.round(r.height) };
+    });
+    return {
+      present: wrap !== null,
+      text: line?.innerText?.trim() ?? null,
+      full: wrap?.innerText?.replace(/\s+/g, ' ').trim() ?? null,
+      rects,
+    };
+  });
+  check('83 正对照：核心说 blockedOps=2 ⇒ 那一格真出现、且话说 2 条（不出现或说 0 都红）',
+    box83.present === true && box83.text !== null && box83.text.includes('2 条'), JSON.stringify({ text: box83.text }));
+  check('83 两颗动作的**声明矩形**都在 44 之上（#93 量的是这一格，不是可见裁剪后的）',
+    box83.rects.length >= 4 && box83.rects.every((r) => r.w >= 44 && r.h >= 44), JSON.stringify(box83.rects));
+  check('83 说不出名字的那条不许拿那串 UUID 冒充名字：整格里不出现 UUID 形状，且要说"说不出名字的改动"（指错比不指更坏）',
+    box83.full !== null && !/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}/.test(box83.full) && box83.full.includes('说不出名字的改动'),
+    JSON.stringify({ full: (box83.full ?? '').slice(0, 90) }));
+  await two.p.screenshot({ path: `${OUT}/83-blocked-outbox-1440.png` });
+
+  const retryBtn = await two.p.evaluate(() => {
+    const b = document.querySelector('[data-testid="blocked-retry-n-note-83-a"]');
+    b?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return b !== null;
+  });
+  const discardBtn = await two.p.evaluate(() => {
+    const b = document.querySelector('[data-testid="blocked-discard-n-01a157ff-0000-7000-8000-00000000c0ff"]');
+    b?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    return b !== null;
+  });
+  await two.p.waitForTimeout(900);
+  const readsAfter = two.reads();
+  const sentNames = two.sent.map((s) => s.name);
+  const retryPayload = two.sent.find((s) => s.name === 'retry_outbox_item')?.body ?? '';
+  const discardPayload = two.sent.find((s) => s.name === 'discard_outbox_item')?.body ?? '';
+  check('83 两颗按钮的 testid 都点得到（名字换了这腿就白跑 —— 先把"按钮在场"本身判掉）',
+    retryBtn === true && discardBtn === true, JSON.stringify({ retryBtn, discardBtn }));
+  check('83 点「重试这一条」发的正是**这一行自己**的 kind/id/rev（7 那一版，不是旁边那一条、也不是别的命令）',
+    retryPayload.includes('"id":"note-83-a"') && retryPayload.includes('"rev":7') && retryPayload.includes('"kind":"n"'),
+    JSON.stringify({ retryPayload }));
+  check('83 点「不再上传这一条」走的是 discard_outbox_item 且带那一行自己的 rev 3',
+    sentNames.includes('discard_outbox_item') && discardPayload.includes('"rev":3'),
+    JSON.stringify({ discardPayload, sentNames }));
+  check('83 点完要**重读这一格**（动作之后 sync_status 至少再问一次；屏幕说的话以核心回读为准）',
+    readsAfter >= 2, JSON.stringify({ readsAfter }));
+  await two.c.close();
+
+  const three = await visit83({
+    status: {
+      ...BASE83,
+      blockedOps: 3,
+      blockedItems: [
+        { kind: 'n', id: 'note-83-b', title: '只说得出这一个名字', rev: 1, reason: '不收' },
+        { kind: 'n', id: 'x2', title: null, rev: 1, reason: '不收' },
+        { kind: 'n', id: 'x3', title: null, rev: 2, reason: '不收' },
+      ],
+    },
+  });
+  const threeLine = await three.p.evaluate(() => document.querySelector('[data-testid="sync-blocked-line"]')?.innerText?.trim() ?? null);
+  check('83 那句总数跟着核心的 count 而不是名单长度：3 条里只说得出 1 个名字 ⇒ 话说"有 3 条"并**另计**"另有 2 条说不出是哪几条"（不拿长度冒充份数）',
+    threeLine !== null && threeLine.includes('3 条') && threeLine.includes('另有 2 条'), JSON.stringify({ threeLine }));
+  await three.c.close();
+
+  const legacy = await visit83({ status: { ...BASE83 } });
+  const legacyBox = await legacy.p.evaluate(() => document.querySelector('[data-testid="sync-blocked"]') !== null);
+  check('83 老核心没有这两格 ⇒ 整块**不出现**（不许把"没查到"说成"没有被卡住的改动"）',
+    legacyBox === false, JSON.stringify({ legacyBox }));
+  const legacyBacklog = await legacy.p.evaluate(() => document.querySelector('[data-testid="sync-backlog"]')?.innerText?.trim() ?? null);
+  check('83 这一格缺席不许抢走旁边那句（同屏各说各的：待处理那行照旧在说话）',
+    legacyBacklog !== null, JSON.stringify({ legacyBacklog }));
+  await legacy.c.close();
+
+  const errs83 = [...two.errs, ...three.errs, ...legacy.errs];
+  check('83 这一腿 console error 为零（三种注入形状都不许把界面弄报错）',
+    errs83.length === 0, errs83.slice(0, 3).join(' | '));
+  notes.push(`     腿 83（毒丸隔离那一格）：2 条 / 4 颗按钮 ${box83.rects.map((r) => `${r.w}×${r.h}`).join(' ')} · 重试 1 发 + 放弃 1 发 · 点完重读 ${readsAfter} 次 · 老核心不出现`);
+}
+
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
 
 /**

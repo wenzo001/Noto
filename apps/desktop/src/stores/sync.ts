@@ -282,7 +282,9 @@ export const useSyncStore = defineStore('sync', () => {
     if (names.length === 0) return t('sync.blockedNone', { count: read.count });
     const head = names.slice(0, 3).join('、');
     const etc = names.length > 3 ? t('sync.blockedEtc', { count: names.length - 3 }) : '';
-    return t('sync.blockedLead', { count: read.count }) + head + etc;
+    const more = read.count - names.length;
+    return t('sync.blockedLead', { count: read.count }) + head + etc +
+      (more > 0 ? t('sync.blockedMore', { count: more }) : '');
   });
 
   /**
