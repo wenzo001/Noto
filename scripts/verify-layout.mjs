@@ -10349,6 +10349,9 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
  *  · `exports/` 目录里那一份**文件真的存在、非空、名字是 `notera-*.zip`**，跑完我们把它删掉。
  */
 {
+  // 这个文件里别处的 `fsp` 都是**块内自己的局部 import**，在这里用会 ReferenceError（真崩过一次，
+  // 1012 PASS / 0 FAIL 之后倒在最后一腿）。所以本块自己拿一份。
+  const fsp = await import('node:fs');
   const DATA85 = path.resolve(process.env.NOTERA_DEV_DATA || '.logs/g102-data');
   const EXPORTS85 = path.join(DATA85, 'exports');
   const before85 = fsp.existsSync(EXPORTS85)
