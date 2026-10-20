@@ -555,8 +555,20 @@ for (const width of WIDTHS) {
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text().slice(0, 160)); });
   // 浏览器那句 "Failed to load resource: 400" 不带 URL —— 一条说不出是哪个请求的红要查一小时。
   // 这里把 4xx 的 URL 一起收进同一个数组，判据不变（还是"为零"），红的时候直接指名。
+  // 光指名命令还不够：同一条 `delete_note` 在一条 lane 里会被几十篇笔记发出去，
+  // "哪一篇"才是能顺着查到那一腿的东西（1440 那一格红过三次，三次都停在这里）。
+  // 载荷只取 60 字符 —— 这一行会进日志，正文夹具不该整份抄进门禁读数。
   page.on('response', (r) => {
-    if (r.status() >= 400) errors.push(`HTTP ${r.status()} ${r.url().replace(/^http:\/\/127\.0\.0\.1:17323\/cmd\//, 'cmd/')}`);
+    if (r.status() >= 400) {
+      const body = (() => {
+        try {
+          return (r.request().postData() ?? '').slice(0, 60);
+        } catch {
+          return '';
+        }
+      })();
+      errors.push(`HTTP ${r.status()} ${r.url().replace(/^http:\/\/127\.0\.0\.1:17323\/cmd\//, 'cmd/')}${body ? ` ← ${body}` : ''}`);
+    }
   });
   page.on('pageerror', (e) => errors.push(String(e).slice(0, 160)));
   await page.goto(URL_BASE, { waitUntil: 'networkidle' });
