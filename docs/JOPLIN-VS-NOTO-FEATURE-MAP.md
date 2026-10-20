@@ -132,7 +132,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 
 | 端 | Joplin 的布局事实 | 出处 | 建议 |
 |---|---|---|---|
-| 桌面 | **可拖拽三栏**（侧栏 / 列表 / 编辑），栏宽与可见性都有持久设置，另有布局移动模式与"重置布局" | `layout.noteList/folderList/note.factor`、`ui.layout`、`ResizableLayout`、`MainScreen.tsx:334-338` | ✅ **采纳"三栏可拖宽 + 宽度记忆 + 重置"**。我们目前只有 1180/820 两档断点换栏数（`stores/shell.ts:12-18`），没有用户可调宽度 |
+| 桌面 | **可拖拽三栏**（侧栏 / 列表 / 编辑），栏宽与可见性都有持久设置，另有布局移动模式与"重置布局" | `layout.noteList/folderList/note.factor`、`ui.layout`、`ResizableLayout`、`MainScreen.tsx:334-338` | ✅ **已落（第一百六十一批，0.0.161）**：三栏下两颗 `role=separator` 把手，拖的是 `--sidebar-w` / `--list-w`；默认值仍是 tokens 那两颗（260/340，spec 直接读原文对账）；上下界 200–420 / 240–560；`localStorage` 本机持久（松手才写）+ 双击复位 + 键盘 ±16/±64；两栏/单栏那两档由 `data-layout` 藏掉。**没做**：Joplin 的"栏宽随断点自动缩放（factor）"与"布局移动模式"——前者会跟 1180/820 的断点公式打架，先不做 |
 | 桌面侧栏 | Notebooks ▸ Tags ▸ 全部笔记 ▸ 回收站 ▸ 冲突夹，各段可折叠、显示计数 | `Sidebar.tsx`、`folderHeaderIsExpanded`/`tagHeaderIsExpanded`、`showNoteCounts` | 🔶 采纳"分段可折叠 + 计数"（计数我们已有，折叠没有） |
 | 列表列 | 可显示 时间/标题/是否待办/本/标签/到期/来源… 可排序、可拖宽 | `noteListType.ts:311-328` | ❌ 不收"插件可加列"；🔶 收"至少两列（标题 + 更新时间）"的固定版 |
 | 顶部 | 原生菜单条 90 条命令 + 工具栏按钮 | `menuCommandNames.ts`（101 行） | 🔶 我们已有原生菜单 + 快捷表，命令数差距是**功能面**差距，见 §3.1-3.4 逐条决定 |
