@@ -352,6 +352,19 @@ CREATE TABLE sync_operations (                -- 持久化 outbox：崩溃可恢
 --
 -- 「待发操作」计数（设置页那行）只统计**启用中账户**的行：`local` 哨兵账户
 -- （enabled=0）是"提交即入 outbox"的留痕账，引擎永不消费它，算进来这个数永远归不了零。
+--
+-- `blocked`（第一百五十八批）= **毒丸隔离**：同一份内容（按 `payload_rev` 认定）连续 3 轮被**单条**
+-- 拒收（`Protocol` / `Forbidden` / 写入复验不过）之后，引擎把这一行停在这里。三个要点：
+--   · **谁写**：`Store::outbox_quarantine`（引擎里 `poison_check` 调），不是 `outbox_settle` ——
+--     后者的 WHERE 是 `pending/inflight`，既写不进也解不开 `blocked`
+--     （那条窄守卫是"failed 不许被结清成 done"的执行者，不许为了隔离去放宽它）；
+--   · **谁解**：用户点「重试这一条」（`outbox_release`：回 pending 且 `attempts=0`）或「不再上传这一条」
+--     （`outbox_discard`：置 `superseded`，本机内容一字不动）。用户之后再改一次会写出**新的 `payload_rev`**
+--     （`dedupe_key` 带 rev）—— 那是另一行，不受这一行影响；
+--   · **谁跳**：所有按状态取活的查询只认 `pending/inflight/failed` ⇒ 这一行自动离开"待发操作"计数；
+--     而计划器**不看 outbox**（它按 `LocalView::dirty()` 规划），所以引擎在 push 循环开头还要单独问一次
+--     `outbox_is_blocked(kind,id,rev)` —— **只改库不跳过，等于每轮照旧白烧一发**。
+-- 附件那一侧另有一本账（`attachments` 的 quarantine，见 §GC），两本账互不读写。
 
 CREATE TABLE sync_conflicts (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
