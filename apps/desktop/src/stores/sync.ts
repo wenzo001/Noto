@@ -255,6 +255,59 @@ export const useSyncStore = defineStore('sync', () => {
       (more > 0 ? t('sync.rejectedMore', { count: more }) : '');
   });
 
+  /** 一条"这台服务器一直拒收，已停在这里"的待办（核心 `sync_status.blockedItems`）。
+   *  `rev` 是**这一份内容**的编号：放行与放弃都只处置它，同一篇之后的编辑是另一行。 */
+  interface BlockedItem {
+    kind: string;
+    id: string;
+    title?: string | null;
+    rev: number;
+    reason?: string | null;
+  }
+
+  /**
+   * 隔离区那一格（§12 的"连续拒收 ⇒ 隔离"，采纳清单第 109 行）。
+   * 与 `backlog` 同一条规矩：**未知就是 null** —— 把"没查到"读成 0 会说出一句
+   * "没有被卡住的改动"，那是没发生过的事。份数与清单一起读，缺一格就当没查到。
+   */
+  const blocked = ref<{ count: number; items: BlockedItem[] } | null>(null);
+  const blockedItems = computed<BlockedItem[]>(() => blocked.value?.items ?? []);
+  const blockedLine = computed<string | null>(() => {
+    const read = blocked.value;
+    if (read === null || read.count === 0) return null;
+    if (!useSettingsStore().hasAccount) return null;
+    const names = read.items
+      .map((i) => i.title)
+      .filter((x): x is string => typeof x === 'string' && x.length > 0);
+    if (names.length === 0) return t('sync.blockedNone', { count: read.count });
+    const head = names.slice(0, 3).join('、');
+    const etc = names.length > 3 ? t('sync.blockedEtc', { count: names.length - 3 }) : '';
+    return t('sync.blockedLead', { count: read.count }) + head + etc;
+  });
+
+  /**
+   * 「重试这一条」/「不再上传这一条」。两颗都**以重读为准**：
+   * 这一格权威在核心那张表，界面上勾掉一行不等于核心放了行（`found=false` 时清单会自己变短，
+   * 说"已重试"就是谎话）。回执原样交给调用方去决定说什么。
+   */
+  async function actOnBlocked(item: BlockedItem, command: string): Promise<boolean> {
+    try {
+      const r = await callCommand<{ found?: boolean }>(command, {
+        kind: item.kind,
+        id: item.id,
+        rev: item.rev,
+      });
+      await refreshStatus();
+      return r?.found === true;
+    } catch {
+      // 问不到就说问不到：重读一次，让屏幕上那一格回到核心的真相，而不是在界面上猜一句"操作失败"。
+      await refreshStatus();
+      return false;
+    }
+  }
+  const retryBlocked = (item: BlockedItem) => actOnBlocked(item, Commands.retryOutboxItem);
+  const discardBlocked = (item: BlockedItem) => actOnBlocked(item, Commands.discardOutboxItem);
+
   async function refreshStatus(): Promise<void> {
     try {
       const status = await callCommand<{
@@ -263,6 +316,8 @@ export const useSyncStore = defineStore('sync', () => {
         pendingOps?: number | null;
         openConflicts?: number | null;
         rejectedItems?: RejectedItem[] | null;
+        blockedOps?: number | null;
+        blockedItems?: BlockedItem[] | null;
       }>(Commands.syncStatus, {});
       lastSuccessAt.value = status?.lastSuccessAt ?? null;
       divergence.value = status?.divergenceHeld ?? null;
@@ -272,6 +327,12 @@ export const useSyncStore = defineStore('sync', () => {
       backlog.value = typeof pending === 'number' && typeof conflicts === 'number'
         ? { pendingOps: pending, openConflicts: conflicts }
         : null;
+      // 对面是个没有这两格的老核心 ⇒ 整格不出现（不是"0 条被卡住"）。
+      const blockedCount = status?.blockedOps;
+      blocked.value =
+        typeof blockedCount === 'number' && Array.isArray(status?.blockedItems)
+          ? { count: blockedCount, items: status.blockedItems }
+          : null;
     } catch {
       // 问不到就继续未知：这一格缺席不影响徽标那五格，也不该抛到界面上。
       backlog.value = null;
@@ -451,6 +512,11 @@ export const useSyncStore = defineStore('sync', () => {
     backlogLine,
     rejected,
     rejectedLine,
+    blocked,
+    blockedItems,
+    blockedLine,
+    retryBlocked,
+    discardBlocked,
     refreshStatus,
     acceptDivergence,
     offline,

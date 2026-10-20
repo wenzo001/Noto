@@ -251,6 +251,13 @@ const MESSAGES: Record<MessageKey, string> = {
   'sync.backlogPending': '还有 {count} 项改动等着同步',
   'sync.backlogClear': '改动都已经同步过去',
   'sync.backlogConflicts': ' · {count} 条版本等你处理',
+  // §12「连续拒收 ⇒ 隔离」（采纳清单第 109 行）。这三句要说清三件事：卡了几条、
+  // 改动还在本机（不是丢了）、以及人有两条能点的路。不写"30 天"那类数字 —— 权威只在一处。
+  'sync.blockedLead': '有 {count} 条这台服务器一直拒收，先停在这里（改动还在本机）：',
+  'sync.blockedEtc': ' 等 {count} 条',
+  'sync.blockedNone': '有 {count} 条这台服务器一直拒收，先停在这里（这一批说不出是哪几条）',
+  'sync.blockedRetry': '重试这一条',
+  'sync.blockedDiscard': '不再上传这一条',
   'sync.detail': '同步状态',
   'sync.syncNow': '立即同步',
   'sync.progress': '{done}/{total}',

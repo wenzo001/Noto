@@ -101,6 +101,20 @@ pub trait LocalPort: Send + Sync {
         rev: u64,
         st: OutboxState,
     ) -> Result<(), LocalError>;
+    /// 这一条此刻被隔离着吗（毒丸）。引擎在真正 PUT **之前**问一次。
+    /// 必须问在这里而不是只改库里那一格：见 `poison_check` 上面那段"为什么两处都要落"。
+    fn outbox_is_blocked(&self, kind: &str, id: &str, rev: u64) -> Result<bool, LocalError>;
+    /// 记一次"这一条被服务器拒了"，返回这一份内容连续失败的第几次。
+    /// `0` = 出箱里根本没有这一行 ⇒ 调用方据此**不许**隔离（不许凭空关一条看不见的改动）。
+    fn outbox_note_failure(
+        &self,
+        kind: &str,
+        id: &str,
+        rev: u64,
+        reason: &str,
+    ) -> Result<u64, LocalError>;
+    /// 把这一条隔离起来：它不再上行，直到用户放行或本机再改一次（写出新的 `payload_rev`）。
+    fn outbox_quarantine(&self, kind: &str, id: &str, rev: u64) -> Result<(), LocalError>;
     /// §11.4：把本轮贴上的租约记进本地状态（诊断用：出问题时能看出"当时我以为谁在写"）。
     /// 允许空实现 —— 它不丢数据，只少一条线索。
     fn record_lease(&self, _token: &str, _expires_at: &str) -> Result<(), LocalError> {
@@ -111,6 +125,40 @@ pub trait LocalPort: Send + Sync {
     /// 304（远端未变）时引擎手里**没有**清单正文，但本地若有改动仍必须追加公告 ——
     /// 没有这个缓存，"改了却没人看得见"就是静默同步失败。
     fn cached_manifest(&self) -> Option<Vec<u8>>;
+}
+
+/// 同一份内容连续被拒几次之后把它隔离。3 = "抖一下不冤枉它，而坏到底的也不许烧到第 4 轮"。
+/// 这一轮里 `halts_round()` 那一族会先停下整轮，所以一次只加一格 —— 也就是说这颗闸门的单位是**轮**，
+/// 不是请求数。改这个数之前先想清楚：调小会把一次网络抖动变成隔离（用户得手动重试），
+/// 调大就是把"每轮白烧一发注定被拒的 PUT"多留几轮。
+const POISON_AFTER: u64 = 3;
+
+/// 记一次被拒，到闸门就把这一条隔离。
+///
+/// **为什么计数在库里而不是在引擎内存里**：这一格要防的正是"每次开机都重烧三发"，
+/// 进程内存活不过重启（同一个形状在 G87 那批已经写过一次：只活在内存里的结论等于每次从零开始）。
+///
+/// **为什么隔离要在库里、又要在 push 循环那里各问一次**：计划器按 `dirty` 规划、**不看 outbox**
+/// （`Store::outbox_settle` 的注释自己写明 `outbox_take` 在生产里没有调用方）。所以只把行标成
+/// `blocked` 而不在循环里跳过，毒丸下一轮照样被计划、照样发那一发注定被拒的 PUT；
+/// 反过来只跳过而不写库，界面上就"没有一条被停"，用户看不见也解不开。
+fn poison_check<L: LocalPort + ?Sized>(local: &L, kind: &str, id: &str, rev: u64, reason: &str) {
+    let Ok(attempts) = local.outbox_note_failure(kind, id, rev, reason) else {
+        return;
+    };
+    if attempts < POISON_AFTER {
+        return;
+    }
+    if local.outbox_quarantine(kind, id, rev).is_ok() {
+        tracing::warn!(
+            kind,
+            id,
+            rev,
+            attempts,
+            reason,
+            "这一条连续被拒，已隔离：不再上行，改动仍在本机等用户处理"
+        );
+    }
 }
 
 /// 远端能力。实现者（webdav 适配层）负责重试/代理/TLS，本 crate 只做**决策**。
@@ -861,6 +909,16 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                 break;
             }
             let Some(l) = lmap.get(&d.key) else { continue };
+            // 被隔离的那一条**不再发那一发注定被拒的 PUT**（采纳清单 §3 第 109 行）。
+            // 问不到就当没隔离：宁可多发一发，也不许因为读失败而少推一条正常的改动。
+            if self
+                .local
+                .outbox_is_blocked(&l.kind, &l.id, l.rev)
+                .unwrap_or(false)
+            {
+                tracing::debug!(kind = %l.kind, id = %l.id, rev = l.rev, "这一条被隔离，本轮不上行");
+                continue;
+            }
             let plain = match self.local.envelope_wire(&l.kind, &l.id) {
                 Ok(Some(w)) => w,
                 Ok(None) => continue,
@@ -910,6 +968,9 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     let _ = self
                         .local
                         .outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
+                    // 这一族同样是"**这一条**服务器收了但不是我给的字节"——每一轮都一样的坏，
+                    // 所以照样进连续计数。
+                    poison_check(&self.local, &l.kind, &l.id, l.rev, "写入没通过复读校验");
                 }
                 Err(RemoteError::Precondition) => {
                     // 有人先写了：本轮该实体让路，重算在下轮
@@ -922,6 +983,12 @@ impl<L: LocalPort, R: RemotePort> SyncEngine<L, R> {
                     let _ = self
                         .local
                         .outbox_settle(&l.kind, &l.id, l.rev, OutboxState::Failed);
+                    // 只有"**这一条**被拒"那一族进连续计数：`Protocol`（服务器不收这一份信封/内容）、
+                    // `Forbidden`（这一条没写权限）。`Offline`/`Auth`/`Quota`/`Server`/`Cancelled`
+                    // 说的是整条链路或整个账户 —— 把它们数进来 = 断一次网就把当天第一条隔离掉。
+                    if matches!(e, RemoteError::Protocol(_) | RemoteError::Forbidden) {
+                        poison_check(&self.local, &l.kind, &l.id, l.rev, &e.to_string());
+                    }
                     if e.halts_round() {
                         return (
                             RoundStats {

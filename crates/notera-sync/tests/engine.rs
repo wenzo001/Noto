@@ -23,6 +23,9 @@ struct FakeRemote {
     manifest: Arc<Mutex<Option<Vec<u8>>>>,
     etag: Arc<Mutex<Option<String>>>,
     records: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    /// 注入用：让服务器**只对名单里那一条**回"这一份我收不下"（`Protocol` = 单条的确定性拒收）。
+    /// 毒丸那一族的现场必须能按 id 造 —— 只会"所有调用都失败"的那枚开关测的是停轮，不是隔离。
+    reject_ids: Arc<Mutex<Vec<String>>>,
     segments: Arc<Mutex<BTreeMap<String, Vec<EntryRef>>>>,
     cas_failures: Arc<AtomicU32>,
     corrupt_manifest: Arc<AtomicBool>,
@@ -86,6 +89,15 @@ impl RemotePort for FakeRemote {
         _if_match: Option<&str>,
     ) -> Result<Commit, RemoteError> {
         self.tick()?;
+        if self
+            .reject_ids
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r == &path(kind, id))
+        {
+            return Err(RemoteError::Protocol("夹具：这一条服务器不收".into()));
+        }
         self.records
             .lock()
             .unwrap()
@@ -196,6 +208,11 @@ struct FakeLocal {
     envelopes: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     #[allow(dead_code)]
     outbox_states: Arc<Mutex<Vec<(String, OutboxState)>>>,
+    /// 毒丸那两格的假账：`poison` = 每**一份内容**（键含 rev）连续被拒到第几次，
+    /// `quarantined` = 已被隔离的那些键。故意不复用 `outbox_states`：引擎每一轮会先
+    /// `outbox_settle(Failed)` 再记一次失败，两个数挤在同一张表里就会互相灌大。
+    poison: Arc<Mutex<BTreeMap<String, u64>>>,
+    quarantined: Arc<Mutex<Vec<String>>>,
     cached_manifest: Arc<Mutex<Option<Vec<u8>>>>,
     cached_etag: Arc<Mutex<Option<String>>>,
     /// §11.4：引擎贴完租约后有没有把状态记到本地
@@ -311,6 +328,29 @@ impl LocalPort for FakeLocal {
     fn outbox_take(&self, _limit: usize) -> Result<Vec<OutboxItem>, LocalError> {
         Ok(Vec::new())
     }
+    fn outbox_is_blocked(&self, kind: &str, id: &str, rev: u64) -> Result<bool, LocalError> {
+        let key = format!("{kind}:{id}:{rev}");
+        Ok(self.quarantined.lock().unwrap().iter().any(|k| k == &key))
+    }
+    fn outbox_note_failure(
+        &self,
+        kind: &str,
+        id: &str,
+        rev: u64,
+        _reason: &str,
+    ) -> Result<u64, LocalError> {
+        let key = format!("{kind}:{id}:{rev}");
+        let mut g = self.poison.lock().unwrap();
+        let n = g.entry(key).and_modify(|v| *v += 1).or_insert(1);
+        Ok(*n)
+    }
+    fn outbox_quarantine(&self, kind: &str, id: &str, rev: u64) -> Result<(), LocalError> {
+        self.quarantined
+            .lock()
+            .unwrap()
+            .push(format!("{kind}:{id}:{rev}"));
+        Ok(())
+    }
     fn outbox_settle(
         &self,
         kind: &str,
@@ -378,6 +418,140 @@ async fn run_with(
     cfg: EngineConfig,
 ) -> (RoundStats, Vec<SyncEvent>) {
     SyncEngine::new(l, r, cfg).run_round(etag).await
+}
+
+/// 毒丸隔离（采纳清单 §3 第 109 行 / SYNC-PROTOCOL §12 的"连续拒收 ⇒ 隔离"那一档）。
+///
+/// 这一族钉的是**发送那一侧真的停了**，不是"库里那一行改了状态"：计划器按 `dirty` 规划、
+/// 完全不看 outbox 表，所以"写了 `blocked` 却在循环里没跳过"这种实现会在这里红 ——
+/// 而它恰好是那种"设置页数字掉了、请求照旧每轮白烧"的坏法。
+/// `poison` 那本假账就是这把尺：它只在**一发 PUT 真被拒**时才 +1。
+#[tokio::test]
+async fn a_record_rejected_three_times_stops_being_pushed() {
+    let l = FakeLocal::default();
+    let r = FakeRemote::default();
+    r.seed(base_manifest());
+    r.reject_ids.lock().unwrap().push("n/p1".into());
+    dirty_local(&l, "p1", 3, "aaaa");
+
+    // 第 1 轮：这一发真出门了，也真被拒了。**这条断言是前置条件**：
+    // 如果夹具没让这一条进入 push（信封缺失、计划没选它），下面每一条都会"空对空绿"。
+    let (st1, _) = run(l.clone(), r.clone(), None).await;
+    assert_eq!(
+        st1.outcome,
+        RoundOutcome::Failed,
+        "Protocol 照旧要停轮，这一轮不许被折成成功"
+    );
+    assert_eq!(
+        l.poison.lock().unwrap().get("n:p1:3").copied(),
+        Some(1),
+        "第一轮必须真的发过那一发 PUT（没发过 = 下面全是没有靶子的判据）"
+    );
+    assert!(
+        l.quarantined.lock().unwrap().is_empty(),
+        "一发就隔离太急：抖动一次不该关掉一条改动"
+    );
+
+    run(l.clone(), r.clone(), None).await;
+    assert_eq!(l.poison.lock().unwrap().get("n:p1:3").copied(), Some(2));
+    assert!(
+        l.quarantined.lock().unwrap().is_empty(),
+        "两发就隔离仍然太早（闸门是 3）"
+    );
+
+    run(l.clone(), r.clone(), None).await;
+    assert_eq!(l.poison.lock().unwrap().get("n:p1:3").copied(), Some(3));
+    assert!(
+        l.quarantined.lock().unwrap().iter().any(|k| k == "n:p1:3"),
+        "连续第三发被拒 ⇒ 这一条必须被隔离（键是 kind:id:rev，按内容而非按实体）"
+    );
+
+    // 第 4 轮：决定性的一条 —— **没有再发**。发了就会被拒并被记成第 4 次，所以计数停在 3
+    // 就是"这一发根本没出门"的读数（打在调用边上，不是打在被调方的绿上）。
+    run(l.clone(), r.clone(), None).await;
+    assert_eq!(
+        l.poison.lock().unwrap().get("n:p1:3").copied(),
+        Some(3),
+        "隔离之后第四轮不许再对同一份内容发 PUT（计数还在长 = 每轮照旧白烧一发）"
+    );
+}
+
+/// 一颗毒丸拖住的是**整轮**：`Protocol` 落进 `halts_round()`，于是它后面那些正常的改动
+/// 一起推不出去。隔离生效之后，那些改动要照常走完 —— 这一条钉的就是"别人的活没被它带走"。
+#[tokio::test]
+async fn a_quarantined_record_stops_holding_up_the_rest_of_the_round() {
+    let l = FakeLocal::default();
+    let r = FakeRemote::default();
+    r.seed(base_manifest());
+    r.reject_ids.lock().unwrap().push("n/a-bad".into());
+    // 键按字典序：`a-bad` 排在 `b-good` 前面，所以前三轮 good 一直在被牵连的那一侧。
+    dirty_local(&l, "a-bad", 2, "cccc");
+    dirty_local(&l, "b-good", 5, "dddd");
+
+    for _ in 0..3 {
+        run(l.clone(), r.clone(), None).await;
+    }
+    // 先钉"被牵连"这一半：闸门到第三发才落下，而那一发自己仍要停轮（§12 的 `halts_round` 没改）。
+    // 少了这条，下面那条"第四轮就好了"可能一直是好的对照 —— 那就等于没有对照。
+    assert!(
+        !r.records.lock().unwrap().contains_key("n/b-good"),
+        "对照臂：毒丸还在的时候，同一轮里排在后面的那条**就该**被拖住（这条要是绿了，下面那条就是空判据）"
+    );
+    assert!(
+        l.quarantined
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|k| k == "n:a-bad:2"),
+        "靶子没立起来（bad 没被隔离）⇒ 这一条改的是没有靶子的判据"
+    );
+
+    // 第四轮：毒丸不再出门 ⇒ 同一轮里那些正常的改动要走完。这一条钉的就是台账上那句
+    // "一条永久被服务器拒的记录不该拖住整条队列"。
+    let (st4, _) = run(l.clone(), r.clone(), None).await;
+    assert!(
+        r.records.lock().unwrap().contains_key("n/b-good"),
+        "隔离生效之后，同轮的另一条必须真的落上服务器（还拖着 = 只改了库里的状态，没改发送那一侧）"
+    );
+    assert_ne!(
+        st4.outcome,
+        RoundOutcome::Failed,
+        "第四轮不该再被那一颗毒丸判成失败"
+    );
+    assert_eq!(
+        l.poison.lock().unwrap().get("n:a-bad:2").copied(),
+        Some(3),
+        "隔离之后连那一发的失败记录都不许再加（加了 = 又发了一次）"
+    );
+}
+
+/// 隔离的是"这一份内容推不出去"，不是"这篇笔记从此不许再同步"。
+/// 用户之后又改了一次（新的 `payload_rev`、出箱里是另一行）⇒ 那一行照旧要能上行。
+#[tokio::test]
+async fn a_newer_edit_after_a_quarantine_is_pushed_again() {
+    let l = FakeLocal::default();
+    let r = FakeRemote::default();
+    r.seed(base_manifest());
+    r.reject_ids.lock().unwrap().push("n/p1".into());
+    dirty_local(&l, "p1", 3, "aaaa");
+    for _ in 0..3 {
+        run(l.clone(), r.clone(), None).await;
+    }
+    assert!(l.quarantined.lock().unwrap().iter().any(|k| k == "n:p1:3"));
+
+    // 服务器开始收这一条了（用户改了内容 ⇒ 新的 rev）；按实体问的写法会在这里把新行也关掉。
+    r.reject_ids.lock().unwrap().clear();
+    dirty_local(&l, "p1", 4, "eeee");
+    run(l.clone(), r.clone(), None).await;
+    assert!(
+        r.records.lock().unwrap().contains_key("n/p1"),
+        "rev 4 那一版必须能上行：旧那一版被隔离不许把用户下一次编辑一起禁死"
+    );
+    assert_eq!(
+        l.poison.lock().unwrap().get("n:p1:4").copied(),
+        None,
+        "新那一行是干净的：它不许继承旧内容那 3 次失败"
+    );
 }
 
 /// 取消（任务 #4 第一件）。三条各钉一件事，缺一条就留一个洞：

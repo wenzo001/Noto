@@ -497,6 +497,179 @@ impl Store {
         Ok(stmt.query_row(binds.as_slice(), |r| r.get::<_, i64>(0))? as u32)
     }
 
+    /// 记一次"这一条上行被拒"：同一份内容（`payload_rev`）的连续失败次数要数得出来（毒丸隔离的尺）。
+    ///
+    /// 守卫为什么比 [`Self::outbox_settle`] **宽**（多带一格 `failed`）：那一处守的是
+    /// "失败的待办不许在这里被写成 done"（那是替用户宣布成功）；这一处只加计数、把 inflight 落成 failed，
+    /// 永远不写 done。少了 `failed` 这一档，第二、三轮的拒收就落在匹配不到的行上 ⇒ 计数永远到不了闸门，
+    /// 表现是"隔离从来不发生，而出箱每轮白跑一次"。
+    ///
+    /// 返回 `0` = 这一条根本不在出箱里（计划器按 `dirty` 规划，出箱行由写侧给）。
+    /// 调用方据此**不许隔离**：宁可多试几轮，也不许凭空关一条看不见的改动。
+    pub fn outbox_note_failure(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        id: &str,
+        rev: i64,
+        reason: &str,
+    ) -> Result<i64, StoreError> {
+        let account = account.to_string();
+        let id = id.to_string();
+        let reason = reason.to_string();
+        self.write_tx(|tx, now| {
+            tx.execute(
+                "UPDATE sync_operations
+                    SET attempts = attempts + 1,
+                        last_error = ?5,
+                        state = CASE WHEN state = 'inflight' THEN 'failed' ELSE state END,
+                        updated_at = ?6
+                  WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4
+                    AND state IN ('pending','inflight','failed')",
+                params![account, rows::kind_tag(kind), id, rev, reason, now],
+            )?;
+            match tx.query_row(
+                "SELECT attempts FROM sync_operations
+                  WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4",
+                params![account, rows::kind_tag(kind), id, rev],
+                |r| r.get::<_, i64>(0),
+            ) {
+                Ok(v) => Ok(v),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
+                Err(e) => Err(e.into()),
+            }
+        })
+    }
+
+    /// 隔离这一条（state→`blocked`）：它不再上行，直到用户放行或本机把它改掉。返回 false = 没有匹配的行。
+    ///
+    /// **为什么单独一处写，而不是放宽 [`Self::outbox_settle`] 的 WHERE**：那一处的窄守卫是
+    /// "failed 不许被结清成 done"的执行者，放宽它就把那条守卫一起拆了（本仓的规矩是加一条窄的写，
+    /// 不是给旧的写多开一格）。
+    pub fn outbox_quarantine(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        id: &str,
+        rev: i64,
+    ) -> Result<bool, StoreError> {
+        let account = account.to_string();
+        let id = id.to_string();
+        self.write_tx(|tx, now| {
+            let n = tx.execute(
+                "UPDATE sync_operations SET state = 'blocked', updated_at = ?5
+                  WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4
+                    AND state IN ('pending','inflight','failed')",
+                params![account, rows::kind_tag(kind), id, rev, now],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    /// 这一条此刻是不是被隔离着。引擎每一轮在真正 PUT 之前问一次。
+    ///
+    /// **按 rev 问，不按实体问**：隔离的是"这一份内容推不出去"，不是"这篇笔记从此不许再同步"。
+    /// 用户之后再改一次会写出一行新的 `payload_rev`（`rows::enqueue` 的 dedupe_key 带 rev），
+    /// 那一行必须是能上行的 —— 按实体问就是把用户下一次编辑也关了进去。
+    pub fn outbox_is_blocked(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        id: &str,
+        rev: i64,
+    ) -> Result<bool, StoreError> {
+        let conn = self.read()?;
+        let n = conn.query_row(
+            "SELECT COUNT(*) FROM sync_operations
+              WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4
+                AND state = 'blocked'",
+            params![account, rows::kind_tag(kind), id, rev],
+            |r| r.get::<_, i64>(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// 放行（用户点「重试」）：回到 pending，并把连续计数与退避清零。
+    /// 只动 `blocked`：这一颗按钮的权限边界就是"被隔离的那些"，不许顺手把 failed 复活成 pending。
+    pub fn outbox_release(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        id: &str,
+        rev: i64,
+    ) -> Result<bool, StoreError> {
+        let account = account.to_string();
+        let id = id.to_string();
+        self.write_tx(|tx, now| {
+            let n = tx.execute(
+                "UPDATE sync_operations
+                    SET state = 'pending', attempts = 0, next_retry_at = NULL, updated_at = ?5
+                  WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4
+                    AND state = 'blocked'",
+                params![account, rows::kind_tag(kind), id, rev, now],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    /// 放弃这一条上写动作（用户点「放弃」）：置 `superseded` —— 它是"这个动作没有意义了"的收口态，
+    /// 与"永久删除之后不许再传旧内容"同一族。**本机的内容一个字不动**，这一行只是不再上行。
+    pub fn outbox_discard(
+        &self,
+        account: &str,
+        kind: EntityKind,
+        id: &str,
+        rev: i64,
+    ) -> Result<bool, StoreError> {
+        let account = account.to_string();
+        let id = id.to_string();
+        self.write_tx(|tx, now| {
+            let n = tx.execute(
+                "UPDATE sync_operations SET state = 'superseded', updated_at = ?5
+                  WHERE account_id = ?1 AND entity_type = ?2 AND entity_id = ?3 AND payload_rev = ?4
+                    AND state = 'blocked'",
+                params![account, rows::kind_tag(kind), id, rev, now],
+            )?;
+            Ok(n > 0)
+        })
+    }
+
+    /// 隔离清单：`(实体种类, entity_id, payload_rev, 为什么)`，按最后一次动它的时间排。
+    /// 界面读这一份说"有几条、是哪几条、为什么"，权威在库里而不是在某一轮的内存里。
+    ///
+    /// 交出去的是 [`EntityKind`] 而不是 `entity_type` 那一列的字面量：库里写长标记（note/folder/attachment），
+    /// 而同步线上与界面飘的是短标记（n/f/a）。两处各抄一份字面量是本仓的词汇漂那一族
+    /// （[`Self::outbox_settle`] 的注释记过一次），所以这里在**同一层**换好再出去。
+    ///
+    /// `type_complexity` 这一处按 allow 收：clippy 要的 alias 得放模块层，而这个形状只有 host 一个消费方
+    /// （`SyncStatusDto.blockedItems` 那一格）。下一批若再加读侧，就在那一刻抽成具名结构体 ——
+    /// 而不是现在为假想的第三个消费方先铺一层。
+    #[allow(clippy::type_complexity)]
+    pub fn outbox_blocked(
+        &self,
+        account: &str,
+    ) -> Result<Vec<(EntityKind, String, Option<i64>, Option<String>)>, StoreError> {
+        let conn = self.read()?;
+        let mut stmt = conn.prepare(
+            "SELECT entity_type, entity_id, payload_rev, last_error FROM sync_operations
+              WHERE account_id = ?1 AND state = 'blocked' ORDER BY updated_at",
+        )?;
+        let rows = stmt.query_map(params![account], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<i64>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (tag, id, rev, reason) = row?;
+            out.push((rows::kind_from_tag(&tag)?, id, rev, reason));
+        }
+        Ok(out)
+    }
+
     // ------------------------------------------------- 远端游标 / 确认点 ---
 
     /// push 成功：`sync_rev ← rev ; sync_hash ← hash`（DATA-MODEL §4.2）。

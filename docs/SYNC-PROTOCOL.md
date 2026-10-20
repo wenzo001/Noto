@@ -565,7 +565,7 @@ GET records/note/<id>.json → 404
 | HTTP / 传输 | 分类 | 本轮动作 | 对用户 | 影响本地写入 |
 |---|---|---|---|---|
 | 连接失败 / DNS / 超时 | `Offline` | 停止本轮，退避 | `○ 离线` | **否** |
-| 401 / 407 | `AuthRequired` | 停轮，outbox 转 `blocked` | `! 需要重新登录 WebDAV` | 否 |
+| 401 / 407 | `AuthRequired` | 停轮 | `! 需要重新登录 WebDAV`（徽标那句 `sync.needsCredentials`） | 否 |
 | 403 | `Forbidden` | 停 push，允许 pull | `! 无写入权限` | 否 |
 | 404（预期外） | `NotFound` | §10 路径 | 不提示（内部自愈） | 否 |
 | 409 / 412 | `Precondition` | 重读清单重算 plan，≤3 次 | 无 | 否 |
@@ -575,10 +575,19 @@ GET records/note/<id>.json → 404
 | 5xx | `ServerUnavailable` | 指数退避 | `! 同步失败` | 否 |
 | 跨源重定向带凭据 | `RedirectCrossOrigin` | **拒绝跟随** | `! 服务器地址异常` | 否 |
 | checksum / 信封校验失败 | `Protocol` | 丢弃响应，不写库 | `! 服务器数据异常，已保护本地数据` | 否 |
+| **同一份内容连续 3 轮被单条拒收**（`Protocol` / 403 / 写入复验不过） | `PoisonQuarantined` | 该条 outbox 行转 **`blocked`**：不再对它发 PUT，其余条目照走（`halts_round` 那一判不改，见下面那段）；本机内容与 `dirty` 一字不动 | `设置 › 同步` 那一格列出"有几条、是哪几条、为什么"，给「重试这一条」与「不再上传这一条」两颗按钮 | **否**（内容仍在机身，只是不再上行） |
 | **本机 apply 拒收**（同 rev 不同内容、I2 回退、I6 哈希不符、purged 防复活） | `ApplyRejected` | 该条**不落库**，其余条目照做；本轮不许被折成"已同步"（ADR-0021 D3：拒绝必须有去处 —— 界面看 `sync.applyRejected`，日志带原因原文） | `! 服务器上有一版内容没能落进这台设备` | 否（本机一字不改） |
 | 取消（切后台/退出/新一轮） | `Cancelled` | 静默中止，不计失败 | 无 | 否 |
 
-退避：`delay = min(15min, 2s × 1.85^n) × (1 ± 0.2 jitter)`；`Retry-After` 存在则优先服从。连续失败只影响重试节奏，**永不**清空或降级 outbox。
+退避：`delay = min(15min, 2s × 1.85^n) × (1 ± 0.2 jitter)`；`Retry-After` 存在则优先服从。
+
+连续失败**永不**清空、也永不改写成本地"已同步" —— 但它现在有一条**例外，而且是公开的**：同一份内容
+（按 `payload_rev` 认定）连续 3 轮被单条拒收 ⇒ 那一行转 `blocked`。这不是"降级"而是"停下来等人"：
+本机内容与 `dirty` 都不动，出箱行留在账上（带着 `last_error` 原文），设置页看得见、有两个动作可点。
+`blocked` 的键是 **(实体, rev)** 而不是实体 —— 用户之后再改一次会写出新的一行，那一行照旧上行；
+按实体禁死等于把用户的下一次编辑一起关掉。写这一行的唯一入口是引擎那侧的连续计数
+（`notera-sync/src/lib.rs` 的 `poison_check`），`attempts` 落在库里而不是进程内存里：
+重启之后接着数，否则"每次开机都重烧三发注定被拒的 PUT"就是这一格原来的形状。
 
 ---
 

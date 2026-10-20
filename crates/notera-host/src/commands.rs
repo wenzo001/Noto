@@ -179,6 +179,31 @@ pub struct SyncStatusDto {
     /// 这一份是"说得出是谁的那几条" —— 批量那一族没有身份，`title` 就是 `null`，
     /// 界面必须照实说"说不出是哪几条"，不许拿一串 UUID 冒充名字。
     pub rejected_items: Vec<RejectedItemDto>,
+    /// 被隔离着、不再上行的那几条（§12 的"连续拒收 ⇒ 隔离"）。权威是**库里那张表**，
+    /// 不是"最近一轮恰好看见了几个" —— 重启之后这一格照样要说得出话。
+    pub blocked_ops: u32,
+    pub blocked_items: Vec<BlockedItemDto>,
+}
+
+/// 一条"这台服务器一直拒收，已停在这里"的待办。`rev` 带着走：
+/// 放行与放弃处置的都是**这一份内容**，不许把同一篇之后的编辑一起关掉。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedItemDto {
+    pub kind: String,
+    pub id: String,
+    pub title: Option<String>,
+    pub rev: u64,
+    pub reason: Option<String>,
+}
+
+/// 界面上对某一条出箱待办下手时给的身份（`retry_outbox_item` / `discard_outbox_item`）。
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboxItemCmd {
+    pub kind: String,
+    pub id: String,
+    pub rev: u64,
 }
 
 /// 一条拒收对用户说的那三件事：哪一类、是哪一条（说得出的话）、为什么。
@@ -744,7 +769,7 @@ fn id(s: &str) -> R<EntityId> {
 /// 这里**只列不经过 `Store::write_tx` 的那些**：改数据目录里的文件（附件字节、导入、
 /// 恢复、清除、备份）以及账户配置 —— 它们的 config.json 一半落了、库那一半才会失败，
 /// 所以不能留给库层闸门去拒。库写不用列：`write_tx` 是全库唯一写入口，闸门就在那一处。
-const READ_ONLY_REFUSED: [&str; 10] = [
+const READ_ONLY_REFUSED: [&str; 12] = [
     "attach_file",
     "import_data",
     "import_files",
@@ -756,6 +781,9 @@ const READ_ONLY_REFUSED: [&str; 10] = [
     "remove_account",
     // 确认一份可疑清单是一次**写动作**（放行之后就要应用远端），只读闸门下不放行。
     "accept_divergence",
+    // 这两发改的是出箱里那一行的状态 ⇒ 同样是写动作：库被挂成只读的时候不许放行、也不许放弃。
+    "retry_outbox_item",
+    "discard_outbox_item",
 ];
 
 pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json::Value> {
@@ -1040,6 +1068,21 @@ pub fn dispatch(app: &App, name: &str, args: serde_json::Value) -> R<serde_json:
         "accept_divergence" => {
             app.accept_divergence()?;
             j(serde_json::Value::Null)
+        }
+        // 放行/放弃一颗被隔离的待办。回执都带**具名字段** `found`（与 `sync_cancel` 那一族同一形）：
+        // `false` = 那一行此刻不在隔离区（被另一发点击处理过了、或本机又改了一次写出新行），
+        // 界面必须分得清"办成了"和"点了个空"，不许把后者说成前者。
+        "retry_outbox_item" => {
+            let c: OutboxItemCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let found = app.retry_outbox_item(&c.kind, &c.id, c.rev)?;
+            j(serde_json::json!({ "found": found }))
+        }
+        "discard_outbox_item" => {
+            let c: OutboxItemCmd =
+                serde_json::from_value(args).map_err(|_| CmdError::of("bad_args", false))?;
+            let found = app.discard_outbox_item(&c.kind, &c.id, c.rev)?;
+            j(serde_json::json!({ "found": found }))
         }
         "account" => j(app.current_account()?),
         "configure_account" => {

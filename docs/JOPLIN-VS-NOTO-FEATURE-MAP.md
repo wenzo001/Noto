@@ -106,7 +106,7 @@ Joplin 是 Electron（主进程 + 渲染进程 + GPU 进程各自一份 V8/Chrom
 | 每轮全量目录列举比对（`basicDelta` + mtime） | `file-api.ts:496`、`file-api-driver-webdav.js:92` | 清单两段式（基线分段 ⊕ 200 条窗口），实测 7.8 KiB vs 186 KiB | ✔ 我们更好，理由见 ADR-0019 |
 | 用墙上时钟 `updated_time` 判新旧 | `Synchronizer.ts:682-721` | Lamport `sync_rev` + 共同祖先，**禁止 mtime** | ✔ 我们更好（时钟偏移会静默选错边） |
 | **90% 大删除熔断** | `file-api.ts:660`（`sync.wipeOutFailSafe`） | 已有同类：清单不可信绝不"以空清单继续"（`notera-sync/src/lib.rs:579`）+ 发散闸门那条判据 `divergence_gate_blocks_mass_deletion_inference`（`:819`） | ✔ 已有等价物 |
-| **单项停同步 `sync_disabled` + 原因 + 通知横幅** | `BaseItem.ts:966`、`checkDisabledSyncItemsNotification.ts` | 附件有 quarantine 台账（`SettingsView.vue:838-910`），**但同步 outbox 没有"毒丸项隔离"** | 🔶 **值得采纳**：一条永久被服务器拒的记录不该拖住整条队列 |
+| **单项停同步 `sync_disabled` + 原因 + 通知横幅** | `BaseItem.ts:966`、`checkDisabledSyncItemsNotification.ts` | **已落（第一百五十八批，0.0.158）**：同一份内容连续 3 轮被单条拒收 ⇒ 那一行转 `blocked`（`SYNC-PROTOCOL.md` §12 那一档），引擎不再对它发 PUT、其余条目照走；设置页 `sync-blocked` 那一格说清"几条、哪几条、为什么"，给「重试这一条」与「不再上传这一条」两颗按钮。与附件那侧的 quarantine 台账同形但**不同账**：本机内容与 `dirty` 一字不动 | ✅ **已采纳**（P8 ③）；缺的证人：界面上这一格还没有整跑执行者（登记在 CHANGELOG 该批"没做、按实登记"） |
 | 同步进行中可**取消** | `gui/Sidebar/Sidebar.tsx:27-106`（`QuitSyncDialog`） | **已落**：徽标上那颗 `sync-cancel`（`components/SyncBadge.vue:82`）走 `sync_cancel`（`stores/sync.ts:304`），第一百五十二批之前那一批还把它做到了"停在**一件事**的粒度"（一轮中途结清当前项再停）；判据 `stores/syncCancel.spec.ts` | ✅ 已采纳并实现（这一行的"无取消，一轮跑完才停"是旧状态，2026-10-19 按实更正） |
 | 同步状态屏（逐项报告 + Retry / Retry All / Ignore） | `gui/StatusScreen`、Help ▸ Synchronisation Status | 只有徽标 + 统计行，**无逐项报告视图** | ✅ 采纳轻版（A 档，但要看并发数不炸内存） |
 | 打字即同步（15 s / 移动端 1 s） | `registry.ts:72-79` | 写完立即起一轮 + 25 s tick（`notera-host/src/lib.rs:3166-3263`） | ✔ 等价 |

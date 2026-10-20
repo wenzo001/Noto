@@ -297,6 +297,25 @@ impl LocalPort for Device {
     fn outbox_take(&self, _limit: usize) -> Result<Vec<OutboxItem>, LocalError> {
         Ok(Vec::new())
     }
+    /// 这一台跑的是**真 webdav 适配层**，夹具里没有"服务器只对某一条回确定性拒收"那种现场，
+    /// 所以三格都答保守值：没隔离 / 数不出 / 不隔离。毒丸那条路径的判据在
+    /// `notera-sync/tests/engine.rs`（那里能按 id 造拒收），不在这套测试里。
+    /// 答保守值而不是假装成功：这一套测试要是哪天引入了单条拒收，这里必须被显式改写。
+    fn outbox_is_blocked(&self, _kind: &str, _id: &str, _rev: u64) -> Result<bool, LocalError> {
+        Ok(false)
+    }
+    fn outbox_note_failure(
+        &self,
+        _kind: &str,
+        _id: &str,
+        _rev: u64,
+        _reason: &str,
+    ) -> Result<u64, LocalError> {
+        Ok(0)
+    }
+    fn outbox_quarantine(&self, _kind: &str, _id: &str, _rev: u64) -> Result<(), LocalError> {
+        Ok(())
+    }
     fn outbox_settle(
         &self,
         kind: &str,

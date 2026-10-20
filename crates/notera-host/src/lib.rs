@@ -3476,6 +3476,13 @@ impl App {
             .open_conflicts()
             .map(|v| v.len() as u32)
             .unwrap_or(0);
+        // 隔离区那几条读的是**库里那张表**，不是"最近一轮内存里恰好看见了几个"：
+        // 重启之后这一格照样要说得出话（§12 的"连续拒收 ⇒ 隔离"要的是一个能跨轮存在的去处）。
+        let blocked = cfg
+            .active_account
+            .as_deref()
+            .and_then(|a| self.inner.store.outbox_blocked(a).ok())
+            .unwrap_or_default();
         Ok(SyncStatusDto {
             phase: format!("{:?}", v.phase).to_lowercase(),
             badge: match v.badge {
@@ -3497,6 +3504,8 @@ impl App {
                 }
             }),
             rejected_items: self.rejected_items(),
+            blocked_ops: blocked.len() as u32,
+            blocked_items: self.blocked_rows(&blocked),
         })
     }
 
@@ -3537,6 +3546,65 @@ impl App {
                 reason: reason.clone(),
             })
             .collect()
+    }
+
+    /// 把库里那张隔离表换成界面能说的话。两件事照 `rejected_items` 的规矩走：
+    /// ① 交出去的是**短标记**（n/f/a）—— 界面把它原样点回来给 `retry_outbox_item`，
+    ///    两侧各抄一份字面量就是词汇漂那一族；② 说不出标题就 `null`，**绝不拿 UUID 冒充名字**。
+    fn blocked_rows(
+        &self,
+        rows: &[(
+            notera_store::EntityKind,
+            String,
+            Option<i64>,
+            Option<String>,
+        )],
+    ) -> Vec<commands::BlockedItemDto> {
+        rows.iter()
+            .map(|(ek, id, rev, reason)| {
+                let short = kind_tag(*ek);
+                commands::BlockedItemDto {
+                    kind: short.into(),
+                    id: id.clone(),
+                    title: rejected_title(&self.inner.store, short, id),
+                    rev: rev.unwrap_or(0).max(0) as u64,
+                    reason: reason.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// 用户点「重试这一条」：解除隔离、连续计数清零，并且**马上要走一轮** ——
+    /// 与 `accept_divergence` 同一个理由：用户刚点的是"现在"，让他再等一个 25 秒就是没听见。
+    ///
+    /// 没有账户时答 `false` 而不是报错：这一格的入口是隔离清单，没账户时清单本来是空的，
+    /// 点不出这一发；把它做成一句错误话，等于给一条走不到的路径编一个原因。
+    pub fn retry_outbox_item(&self, kind: &str, id: &str, rev: u64) -> Result<bool, CmdError> {
+        let Some(ek) = EntityKind::from_tag(kind) else {
+            return Ok(false);
+        };
+        let cfg = self.config();
+        let Some(acct) = cfg.active_account.as_deref() else {
+            return Ok(false);
+        };
+        let found = self.inner.store.outbox_release(acct, ek, id, rev as i64)?;
+        if found {
+            self.request_sync();
+        }
+        Ok(found)
+    }
+
+    /// 用户点「放弃这一条」：这一份内容不再上行（置 `superseded`）。
+    /// **本机的改动一个字不动** —— 这一格关掉的是"这条上写动作"，不是"这次编辑"。
+    pub fn discard_outbox_item(&self, kind: &str, id: &str, rev: u64) -> Result<bool, CmdError> {
+        let Some(ek) = EntityKind::from_tag(kind) else {
+            return Ok(false);
+        };
+        let cfg = self.config();
+        let Some(acct) = cfg.active_account.as_deref() else {
+            return Ok(false);
+        };
+        Ok(self.inner.store.outbox_discard(acct, ek, id, rev as i64)?)
     }
 
     /// §4.3 / G87：用户确认"这一版清单"。记下的是这一份的 etag，所以
@@ -4557,6 +4625,63 @@ impl LocalPort for HostLocalPort {
             .map_err(store_err)?;
         if !found {
             tracing::warn!(account = %acct.id, kind, id, rev, state = ?st, "待办结清没找到匹配行（outbox 里这一条的状态不会变）");
+        }
+        Ok(())
+    }
+    /// 毒丸隔离那三处：短标记认不出来 / 没配账户 ⇒ 一律答"没隔离、数不出"，**不猜词汇**
+    /// （与上面 `outbox_settle` 同一个处置：猜错就是把别人那条待办关了）。
+    fn outbox_is_blocked(&self, kind: &str, id: &str, rev: u64) -> Result<bool, LocalError> {
+        let Some(entity_kind) = EntityKind::from_tag(kind) else {
+            return Ok(false);
+        };
+        let Some(acct) = ConfigRepository::active(&self.0.config()).cloned() else {
+            return Ok(false);
+        };
+        self.0
+            .store()
+            .outbox_is_blocked(&acct.id, entity_kind, id, rev as i64)
+            .map_err(store_err)
+    }
+    fn outbox_note_failure(
+        &self,
+        kind: &str,
+        id: &str,
+        rev: u64,
+        reason: &str,
+    ) -> Result<u64, LocalError> {
+        let Some(entity_kind) = EntityKind::from_tag(kind) else {
+            tracing::warn!(
+                kind,
+                id,
+                rev,
+                "上行失败记账收到未知的 kind 标记，这一条不计数"
+            );
+            return Ok(0);
+        };
+        let Some(acct) = ConfigRepository::active(&self.0.config()).cloned() else {
+            return Ok(0);
+        };
+        let n = self
+            .0
+            .store()
+            .outbox_note_failure(&acct.id, entity_kind, id, rev as i64, reason)
+            .map_err(store_err)?;
+        Ok(n.max(0) as u64)
+    }
+    fn outbox_quarantine(&self, kind: &str, id: &str, rev: u64) -> Result<(), LocalError> {
+        let Some(entity_kind) = EntityKind::from_tag(kind) else {
+            return Ok(());
+        };
+        let Some(acct) = ConfigRepository::active(&self.0.config()).cloned() else {
+            return Ok(());
+        };
+        let found = self
+            .0
+            .store()
+            .outbox_quarantine(&acct.id, entity_kind, id, rev as i64)
+            .map_err(store_err)?;
+        if !found {
+            tracing::warn!(account = %acct.id, kind, id, rev, "隔离没找到匹配行（这一条会继续每轮上行）");
         }
         Ok(())
     }

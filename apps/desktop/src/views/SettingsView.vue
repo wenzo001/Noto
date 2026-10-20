@@ -610,6 +610,36 @@ function jumpTo(id: string): void {
                问不到、或对面是个没这两格的核心时**这一行不出现** —— 那一格的位置留给徽标：
                「本地服务连不上」本来就写在那儿，这里再补一句"没查到"只会把同一件事说两遍。 -->
           <p v-if="sync.backlogLine" class="text-sm text-muted" data-testid="sync-backlog">{{ sync.backlogLine }}</p>
+          <!-- 隔离区（SYNC-PROTOCOL §12「连续拒收 ⇒ 隔离」，采纳清单第 109 行）。
+               一条被这台服务器反复拒收的改动，过去每轮白烧一发还谁也看不见；现在它停在明处：
+               说清卡了几条、改动还在本机、并给两条**点得动**的路（重试 / 不再上传）。
+               份数与清单都读自核心那张表，不是"最近一轮内存里恰好看见的几个" ⇒ 重启之后这一格照旧说话。
+               老核心没有这两格 ⇒ 整块不出现（不许说成"没有被卡住的改动"）。 -->
+          <div v-if="sync.blockedLine" data-testid="sync-blocked">
+            <p class="text-sm text-muted" data-testid="sync-blocked-line">{{ sync.blockedLine }}</p>
+            <div
+              v-for="item in sync.blockedItems"
+              :key="`${item.kind}:${item.id}:${item.rev}`"
+              class="row"
+              role="group"
+              :aria-label="item.title ?? item.id"
+            >
+              <span class="text-sm" :data-testid="`blocked-name-${item.kind}-${item.id}`">{{ item.title ?? item.id }}</span>
+              <span v-if="item.reason" class="text-sm text-muted" :data-testid="`blocked-why-${item.kind}-${item.id}`">{{ item.reason }}</span>
+              <button
+                type="button"
+                class="btn btn--quiet"
+                :data-testid="`blocked-retry-${item.kind}-${item.id}`"
+                @click="sync.retryBlocked(item)"
+              >{{ t('sync.blockedRetry') }}</button>
+              <button
+                type="button"
+                class="btn btn--quiet"
+                :data-testid="`blocked-discard-${item.kind}-${item.id}`"
+                @click="sync.discardBlocked(item)"
+              >{{ t('sync.blockedDiscard') }}</button>
+            </div>
+          </div>
           <button type="button" class="btn" data-testid="sync-now" @click="syncNow()">{{ t('sync.syncNow') }}</button>
 
           <!-- 删账户与删库是两件事：核心一直有 `remove_account`，界面上却没有入口，

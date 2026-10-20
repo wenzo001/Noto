@@ -441,7 +441,7 @@ pub(crate) fn enqueue_key(
                 state, attempts, created_at, updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,'pending',0,?8,?8)
              ON CONFLICT(dedupe_key) DO UPDATE SET
-               state = 'pending', sha256 = excluded.sha256, updated_at = excluded.updated_at",
+               state = 'pending', sha256 = excluded.sha256, attempts = 0, updated_at = excluded.updated_at",
             params![
                 account,
                 key,
