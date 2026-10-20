@@ -342,6 +342,10 @@ export const useNoteStore = defineStore('notes', () => {
     let removed = 0;
     for (const id of doomed) {
       prov.forget(id);
+      // 它可能**已经被删掉了**（别的腿/用户自己删的）：那时再发一发 delete_note 就是必 400 的空枪，
+      // 而浏览器会把它记成一条 console error（整跑的"console error 为零"那一格当场红过一遍）。
+      // 判据就用我们自己手里的列表：不在列表里 = 没有可删的东西，只把账上的标记忘掉。
+      if (!rows.value.some((r) => r.id === id)) continue;
       try {
         await callCommand<null>(Commands.deleteNote, { id });
         removed += 1;
@@ -431,6 +435,8 @@ export const useNoteStore = defineStore('notes', () => {
   }
 
   async function moveToTrash(id: string): Promise<void> {
+    // 它已经被人删了：账上那枚"草稿"标记也要一起忘掉，否则下一次切走会再发一发必 400 的 delete_note。
+    useProvisionalStore().forget(id);
     try {
       // 移走之前先把**这一篇**在飞/排队的保存结清（缺口 G41）。不结清的两种坏法都量到过：
       // 那支自动保存随后打在"已经在回收站里"的它身上 ⇒ 核心按 `constraint` 拒（`retryable=false`），
@@ -474,6 +480,7 @@ export const useNoteStore = defineStore('notes', () => {
         const editorStore = useEditorStore();
         if (editorStore.noteId === id) await editorStore.flush();
         await callCommand<null>(Commands.deleteNote, { id });
+        useProvisionalStore().forget(id);
         done.push(id);
       } catch (error) {
         failed = error;
@@ -600,6 +607,7 @@ export const useNoteStore = defineStore('notes', () => {
   }
 
   async function purge(id: string): Promise<void> {
+    useProvisionalStore().forget(id);
     try {
       await callCommand<null>(Commands.purgeNote, { id });
       refreshCounts();
