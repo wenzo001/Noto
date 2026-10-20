@@ -2719,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "notera-cli"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "anyhow",
  "clap",
@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "notera-config"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "notera-core",
  "serde",
@@ -2749,7 +2749,7 @@ dependencies = [
 
 [[package]]
 name = "notera-core"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "chrono",
  "icu_normalizer",
@@ -2763,7 +2763,7 @@ dependencies = [
 
 [[package]]
 name = "notera-crypto"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "aes-gcm-siv",
  "argon2",
@@ -2780,7 +2780,7 @@ dependencies = [
 
 [[package]]
 name = "notera-desktop"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "notera-core",
  "notera-host",
@@ -2799,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "notera-host"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2825,7 +2825,7 @@ dependencies = [
 
 [[package]]
 name = "notera-importer"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "base64 0.22.1",
  "notera-core",
@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "notera-mobile"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "notera-core",
  "notera-host",
@@ -2859,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "notera-net"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2876,7 +2876,7 @@ dependencies = [
 
 [[package]]
 name = "notera-richtext"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "notera-core",
  "serde",
@@ -2887,7 +2887,7 @@ dependencies = [
 
 [[package]]
 name = "notera-shell"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "notera-core",
  "notera-host",
@@ -2899,7 +2899,7 @@ dependencies = [
 
 [[package]]
 name = "notera-store"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "chrono",
  "notera-core",
@@ -2915,7 +2915,7 @@ dependencies = [
 
 [[package]]
 name = "notera-sync"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "async-trait",
  "notera-core",
@@ -2929,7 +2929,7 @@ dependencies = [
 
 [[package]]
 name = "notera-test-webdav"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2949,7 +2949,7 @@ dependencies = [
 
 [[package]]
 name = "notera-webdav"
-version = "0.0.161"
+version = "0.0.162"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

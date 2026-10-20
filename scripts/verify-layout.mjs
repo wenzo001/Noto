@@ -10528,6 +10528,89 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
   notes.push(`     腿 86（三栏拖宽）：侧栏 ${before86.sidebar}→+120→${afterS.sidebar} · 列表 ${afterS.list}→−60→${afterL.list} · 键盘 +16→${afterKey.sidebar} · 重开 ${afterReload.sidebar}/${afterReload.list} · 新设备 ${fresh86.s}/${fresh86.l}`);
 }
 
+/**
+ * 87 草稿态新建（第一百六十二批，口径照抄 Joplin 的三处实现，见 `stores/provisional.ts` 顶部）。
+ * 1440 下量四件事：
+ *  · 点「新建」⇒ 新那一行**在场且淡化**（`row-item--provisional`，opacity < 1）；
+ *  · 没打字就切走 ⇒ 它从列表里消失，且**是软删**（`get_note.deletedAt` 非空，不是 purge）；
+ *  · 打了一个字再切走 ⇒ 它**留下**（Joplin：改过才永久保存）；
+ *  · 全程 console 干净。收尾把这两篇都 purge 掉。
+ */
+{
+  const c87 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p87 = await c87.newPage();
+  const errs87 = [];
+  p87.on('console', (m) => { if (m.type() === 'error') errs87.push(m.text()); });
+  await p87.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p87.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p87.waitForTimeout(600);
+
+  const ids87 = () => p87.evaluate(() =>
+    Array.from(document.querySelectorAll('[data-testid^="note-row-"]')).map((r) => (r.getAttribute('data-testid') ?? '').replace('note-row-', '')));
+  const before87 = await ids87();
+
+  await p87.click('[data-testid="new-note"]');
+  await p87.waitForTimeout(800);
+  const afterNew = await p87.evaluate(() => {
+    const sel = document.querySelector('.row-item--selected');
+    const cs = sel ? getComputedStyle(sel) : null;
+    return {
+      id: (sel?.getAttribute('data-testid') ?? '').replace('note-row-', '') || null,
+      provisional: sel?.classList.contains('row-item--provisional') === true,
+      opacity: cs ? Number(cs.opacity) : -1,
+    };
+  });
+  check('87 点「新建」⇒ 新那一行**当场**是选中态且被标成草稿（class + opacity < 1；不淡化等于没标）',
+    afterNew.id !== null && afterNew.provisional === true && afterNew.opacity < 1 && afterNew.opacity > 0,
+    JSON.stringify(afterNew));
+
+  // 没打字就切走：点一篇**原来就有**的行
+  const victim = before87[0];
+  await p87.click(`[data-testid="note-row-${victim}"]`);
+  await p87.waitForTimeout(1200);
+  const stillThere = (await ids87()).includes(afterNew.id);
+  const soft = afterNew.id ? await cmd('get_note', { id: afterNew.id }) : null;
+  check('87 没打字就切走 ⇒ 它从列表里消失，且是**软删**（回收站里躺着，不是被永久抹掉）',
+    stillThere === false && soft !== null && !!soft.deletedAt,
+    JSON.stringify({ stillThere, deletedAt: soft?.deletedAt ?? null }));
+
+  // 第二次：新建 → 打一个字 → 等它真存进核心 → 切走 ⇒ 必须留下
+  await p87.click('[data-testid="new-note"]');
+  await p87.waitForTimeout(800);
+  const typedId = await p87.evaluate(() =>
+    (document.querySelector('.row-item--selected')?.getAttribute('data-testid') ?? '').replace('note-row-', '') || null);
+  await p87.click('.nb-block .nb-content');
+  await p87.keyboard.type('改过');
+  let saved = null;
+  for (let i = 0; i < 12; i += 1) {
+    await p87.waitForTimeout(400);
+    saved = typedId ? await cmd('get_note', { id: typedId }) : null;
+    if (saved && String(saved.title || saved.plainText || '').includes('改过')) break;
+  }
+  check('87 前置：那一个字真的存进了核心（没存进去时下面那条是空判据）',
+    saved !== null && String(saved.title || saved.plainText || '').includes('改过'),
+    JSON.stringify({ title: saved?.title ?? null }));
+  await p87.click(`[data-testid="note-row-${victim}"]`);
+  await p87.waitForTimeout(1000);
+  const keptAlive = (await ids87()).includes(typedId);
+  check('87 改过一个字再切走 ⇒ 它**留下**（Joplin：只有改过才永久保存）',
+    keptAlive === true, JSON.stringify({ keptAlive, typedId }));
+
+  check('87 这一腿 console error 为零', errs87.length === 0, errs87.slice(0, 3).join(' | '));
+  await p87.screenshot({ path: `${OUT}/87-provisional-new-note-1440.png` });
+  await p87.close();
+  await c87.close();
+
+  // 收尾：软删的那篇 + 留下那篇都清掉（软删那篇走 purge，否则残骸会变成下一遍的现场）
+  if (afterNew.id) await cmd('purge_note', { id: afterNew.id });
+  if (typedId) await cmd('purge_note', { id: typedId });
+  const after87 = await cmd('list_notes', {});
+  const rows87 = Array.isArray(after87) ? after87 : [];
+  const left87 = rows87.filter((n) => n.id === afterNew.id || n.id === typedId);
+  check('87 自己造的两篇扫完要清干净（按 id 认）', left87.length === 0, JSON.stringify({ 剩: left87.length }));
+  notes.push(`     腿 87（草稿态新建）：新行 opacity ${afterNew.opacity} · 空着切走 ${stillThere ? '没删' : '软删'} · 打字后留下 ${keptAlive ? '是' : '否'}`);
+}
+
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
 
 /**

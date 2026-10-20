@@ -1,6 +1,7 @@
 /** 列表：文件夹/全部/最近删除三种视图 + 即时搜索 + 选中态。 */
 import { defineStore } from 'pinia';
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useProvisionalStore } from './provisional';
 import { callCommand } from '../api/bridge';
 import {
   Commands,
@@ -317,6 +318,7 @@ export const useNoteStore = defineStore('notes', () => {
       if (mode.value.kind === 'trash') await setMode({ kind: 'all' });
       else await load();
       selectedId.value = note.id;
+      useProvisionalStore().mark(note.id);
       titles.value = { ...titles.value, [note.id]: note.title };
       // 新建之后立刻打开编辑器：只"选中"不"打开"，用户看到的是一块空白面板，
       // 连字都打不进去（真浏览器实测踩过：列表里有了条目，中间却没有光标）。
@@ -327,6 +329,37 @@ export const useNoteStore = defineStore('notes', () => {
       return null;
     }
   }
+
+  /**
+   * 草稿态新建的收口（第一百六十二批，口径来自 Joplin 的 `reduxSharedMiddleware.ts:76-83`）：
+   * **选中项换了**的时候，把除目标以外的 provisional 笔记软删（进回收站，不是永久删）。
+   * 删不掉（库只读等）就把它留在这儿 —— 宁可多一篇空笔记，也不能把"没删成"说成"删了"。
+   */
+  async function disposeProvisional(next: string | null): Promise<void> {
+    const prov = useProvisionalStore();
+    const doomed = prov.pendingExcept(next);
+    if (doomed.length === 0) return;
+    let removed = 0;
+    for (const id of doomed) {
+      prov.forget(id);
+      try {
+        await callCommand<null>(Commands.deleteNote, { id });
+        removed += 1;
+      } catch {
+        // 留着（见注释最后一句）
+      }
+    }
+    if (removed > 0) {
+      refreshCounts();
+      await load();
+    }
+  }
+
+  watch(selectedId, (next) => {
+    void disposeProvisional(next);
+  });
+
+  const isProvisional = (id: string | null | undefined): boolean => useProvisionalStore().is(id);
 
   async function setPinned(id: string, pinned: boolean): Promise<void> {
     try {
@@ -584,6 +617,9 @@ export const useNoteStore = defineStore('notes', () => {
   }
 
   function applyNoteUpdate(note: Note | null | undefined): void {
+    // 用户**真的改过**它（编辑器保存成功 / 元数据写成功）⇒ 摘掉草稿标记（Joplin `Note.ts:915-917` 那条）。
+    // 放在这里而不是"任何 load 之后"：拉列表不是改动，把它当改动就等于草稿永远不会被丢。
+    useProvisionalStore().confirm(note?.id);
     if (!note || typeof note.id !== 'string') return;
     const existing = rows.value.find((row) => row.id === note.id);
     const row = rowFromNote(note);
@@ -660,6 +696,7 @@ export const useNoteStore = defineStore('notes', () => {
     batchMoveTo,
     batchAddTag,
     exportSelected,
+    isProvisional,
     restore,
     listKey,
     currentSort,

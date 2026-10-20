@@ -450,7 +450,7 @@ function createFrom(tpl: NoteTemplate): void {
           v-for="entry in visible"
           :key="entry.id"
           class="row-item"
-          :class="{ 'row-item--selected': entry.id === notes.selectedId }"
+          :class="{ 'row-item--selected': entry.id === notes.selectedId, 'row-item--provisional': notes.isProvisional(entry.id) }"
           :style="{ height: `${ROW_HEIGHT}px` }"
           role="listitem"
           tabindex="0"
