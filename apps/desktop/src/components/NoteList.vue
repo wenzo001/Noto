@@ -8,6 +8,7 @@ import AppPopover from './ui/AppPopover.vue';
 import AppIcon from './ui/AppIcon.vue';
 import { TEMPLATE_CHOICES, type NoteTemplate } from '../editor/templates';
 import { useNoteStore } from '../stores/notes';
+import { useSelectionStore } from '../stores/selection';
 import { useEditorStore } from '../stores/editor';
 import { useFolderStore } from '../stores/folders';
 import { useShellStore } from '../stores/shell';
@@ -83,6 +84,7 @@ const notes = useNoteStore();
 const editor = useEditorStore();
 const folders = useFolderStore();
 const shell = useShellStore();
+const sel = useSelectionStore();
 
 const viewport = ref<HTMLElement | null>(null);
 const scrollTop = ref(0);
@@ -184,6 +186,51 @@ async function open(entry: Entry): Promise<void> {
   if (shell.isCompact) shell.openEditor();
 }
 
+/**
+ * 多选与批量（第一百五十七批，A 档 P5）。
+ *
+ * **只做显式入口，不加新键位**：`Ctrl+A` 要进来先得重开 D21/A11 那张快捷键表（名额是满的，
+ * 2026-10-19 定的口径是"A 档新交互走显式按钮"），而 Shift 扩选是**同一枚点击的修饰**，
+ * 不占表上任何一格 —— 表⇄处理程序那条判据管的是全局键位，不是这里。
+ */
+const selecting = computed(() => sel.active && !notes.inTrash);
+/** 区间的顺序权威是**核心给的那份 `rows`**，不是屏幕上那一段（虚拟列表的 DOM 窗口只是子集）。 */
+const orderIds = computed<string[]>(() => notes.rows.map((r) => r.id));
+
+async function activateRow(entry: Entry, ev: { shiftKey?: boolean }): Promise<void> {
+  if (!selecting.value) {
+    await open(entry);
+    return;
+  }
+  if (ev.shiftKey) sel.extend(entry.id, orderIds.value);
+  else sel.toggle(entry.id);
+}
+
+async function selectAllRows(): Promise<void> {
+  sel.selectAll(orderIds.value);
+}
+
+function leaveSelection(): void {
+  sel.exit();
+}
+
+/** 批量删除：只把**真移走的那几篇**从选区摘掉；全做完了才退出多选（半途失败时剩下的还得看得见）。 */
+async function batchTrash(): Promise<void> {
+  const ids = [...sel.ids];
+  if (ids.length === 0) return;
+  const moved = await notes.batchMoveToTrash(ids);
+  sel.removeMany(ids.slice(0, moved));
+  if (sel.empty) leaveSelection();
+}
+
+async function batchMove(folderId: string, name: string): Promise<void> {
+  const ids = [...sel.ids];
+  if (ids.length === 0) return;
+  const moved = await notes.batchMoveTo(ids, folderId, name);
+  sel.removeMany(ids.slice(0, moved));
+  if (sel.empty) leaveSelection();
+}
+
 function focusSearch(): void {
   searchField.value?.focus();
 }
@@ -224,6 +271,8 @@ function createFrom(tpl: NoteTemplate): void {
       <!-- 全文进 `title`：这一栏定宽 ~315px，长文件夹名一定放得下折行也救不了（折行只救"一颗都塞不下"那一档），
            §5 要的是"被裁的那一段一字不差读得回来"，不是"看起来像省略号就行"。 -->
       <span class="pane-title" :title="listTitle">{{ listTitle }}</span>
+      <!-- 正常那一排：新建 / ▾ 模板 / 今天 / 排序 / 选择。多选模式一开，这五颗整排换成批量条（下面 `v-else`）。 -->
+      <template v-if="!selecting">
       <!-- 这里**不再**放侧栏把手。原本列表头这颗与标题栏那颗、主区左上那颗会同时出现，
            用户看到的就是「折起之后下面一层还有一个折起」；把手的唯一归属由
            `drawsTitleBar(caps)` 决定（见 WorkspaceView / SidebarPanel）。 -->
@@ -268,6 +317,42 @@ function createFrom(tpl: NoteTemplate): void {
           </button>
         </template>
       </AppPopover>
+      <!-- 进多选的入口（回收站里没有：那里的动作只有"恢复/彻底删除"，批量走的是行上那两颗）。
+           做成显式按钮而不是 `Ctrl+A`：快捷键那张表（D21/A11）名额是满的，加一枚要先重开那张表。 -->
+      <button v-if="!notes.inTrash" type="button" class="btn btn--quiet" data-testid="list-select" :aria-pressed="sel.active ? 'true' : 'false'" @click="sel.enter()">
+        {{ t('list.select') }}
+      </button>
+      </template>
+      <!-- 多选模式下的批量条。**整排放进表头而不是浮在列表底部**：底部那块会盖住最后一两行的动作 ——
+           第一百五十六批刚为"被滚动容器裁掉的控件"改过两把尺（腿 63 / 腿 67），再往滚动区上盖一块
+           就是亲手制造下一次"点了没反应"。表头在搜索框**上面**，它变高只把搜索框与行一起往下推，
+           腿 60 量的是"搜索框外框底 → 第一行行顶"那一对边的间距 ⇒ 一起动，量到的还是 10。 -->
+      <template v-else>
+        <span class="batch-count" role="status" data-testid="batch-count">{{ t('list.selectCount', { count: sel.count }) }}</span>
+        <button type="button" class="btn btn--quiet" data-testid="batch-select-all" @click="selectAllRows()">
+          {{ t('list.selectAll') }}
+        </button>
+        <AppPopover v-if="!sel.empty" testid="batch-move" :label="t('list.batchMove')">
+          <template #default="{ close }">
+            <button
+              v-for="f in folders.flat"
+              :key="f.node.id"
+              type="button"
+              class="btn btn--block"
+              :data-testid="`batch-move-${f.node.id}`"
+              @click="close(); batchMove(f.node.id, f.node.name)"
+            >
+              {{ f.path.join(' / ') }}
+            </button>
+          </template>
+        </AppPopover>
+        <button v-if="!sel.empty" type="button" class="btn btn--quiet" data-testid="batch-trash" @click="batchTrash()">
+          {{ t('list.batchTrash') }}
+        </button>
+        <button type="button" class="btn btn--quiet" data-testid="batch-exit" @click="leaveSelection()">
+          {{ t('list.cancelSelection') }}
+        </button>
+      </template>
     </div>
 
     <SearchField ref="searchField" />
@@ -323,9 +408,9 @@ function createFrom(tpl: NoteTemplate): void {
           tabindex="0"
           :aria-current="entry.id === notes.selectedId ? 'true' : undefined"
           :data-testid="`note-row-${entry.id}`"
-          @click="open(entry)"
-          @keydown.enter.prevent="open(entry)"
-          @keydown.space.prevent="open(entry)"
+          @click="activateRow(entry, $event)"
+          @keydown.enter.prevent="activateRow(entry, $event)"
+          @keydown.space.prevent="activateRow(entry, $event)"
         >
           <div class="row-item__main">
             <!-- 标题折两行：§5 那句"不许被静默裁掉"里，标题是**认身份**的那一格，不许硬截
@@ -367,7 +452,24 @@ function createFrom(tpl: NoteTemplate): void {
             >
               <AppIcon :name="entry.pinned ? 'pin-on' : 'pin-off'" :size="18" :testid="`pin-glyph-${entry.id}`" />
             </button>
-            <span class="row-item__actions">
+            <!-- 多选模式里，行右侧那簇动作**整簇换成一颗勾**（不是加一颗）：
+                 这一栏定宽 ~315px、行高是 JS 常量 `ROW_HEIGHT=124`（虚拟列表的偏移公式全按它算），
+                 加宽就是要么挤标题、要么让内容顶出行盒 —— 腿 ㊻ 那条"固定行高不许把行内容裁掉"抓的就是这一族。
+                 勾本身按 §5 走 44 的命中区，状态用 `aria-checked` 说给读屏，也用底色说给眼睛。 -->
+            <button
+              v-if="selecting"
+              type="button"
+              role="checkbox"
+              class="row-item__check"
+              :class="{ 'row-item__check--on': sel.has(entry.id) }"
+              :aria-checked="sel.has(entry.id) ? 'true' : 'false'"
+              :aria-label="t('list.selectedHint')"
+              :data-testid="`select-note-${entry.id}`"
+              @click.stop="activateRow(entry, $event)"
+            >
+              <AppIcon v-if="sel.has(entry.id)" name="check" :size="18" :testid="`check-glyph-${entry.id}`" />
+            </button>
+            <span v-if="!selecting" class="row-item__actions">
               <!-- §6「颜色」：笔记的标记色（当「标签」用）。入口与文件夹那颗同一形状：
                    面板走 AppPopover（一打开就把下面每一排顶走的色板等于让手指落到别的行为上），
                    触发字形用"当前色的点"（§2.4 那份图标清单里没有"调色板"这一枚，
@@ -543,6 +645,47 @@ function createFrom(tpl: NoteTemplate): void {
 
 .row-item__pin--on {
   color: var(--accent);
+}
+
+/**
+ * 多选那一颗勾（第一百五十七批）。它占的正是原来那簇动作的位置（模板里写了为什么是"换"不是"加"）。
+ * §5 的 44 是命中区；§4.9 的"按下要看得出"这条兜不住它 —— 全局那条 `.btn:active` 管的是 `.btn`，
+ * 这颗不是 `.btn`（它是 `role="checkbox"` 的方框，形状上也不该长得像按钮），所以五态在这里自己写齐。
+ */
+.row-item__check {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--touch);
+  height: var(--touch);
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-chip);
+  background: var(--canvas);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.row-item__check:hover {
+  border-color: var(--accent);
+}
+
+.row-item__check:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.row-item__check--on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.batch-count {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--mute);
+  white-space: nowrap;
 }
 
 .row-item__summary,

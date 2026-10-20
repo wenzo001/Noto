@@ -425,6 +425,74 @@ export const useNoteStore = defineStore('notes', () => {
     }
   }
 
+  /**
+   * 批量移到回收站（第一百五十七批，A 档 P5「多选 + 批量」）。两条口径是从单条那一路抄来的，不许各发明一套：
+   *  · **每一篇出门前各自结清在飞的保存**（缺口 G41 那一条：把 `moveToTrash` 的顺序理由原样搬过来）；
+   *  · **一条 toast 说清动了多少篇，并给一颗点得动的撤销**（§4.9 + 第一百五十二批那一族：带动作 ⇒ 不自动消失）。
+   *
+   * 中途失败就停在停的那一处，但**已经移走的那些必须可撤销** —— 所以 `done` 在 `return` 之前也要走到那条 toast，
+   * 而不是只把错误摆出来（那样用户看到的是"N-1 篇没了、没有一句话、也没有出口"）。返回值 = 真移走的篇数。
+   */
+  async function batchMoveToTrash(ids: string[]): Promise<number> {
+    const done: string[] = [];
+    let failed: unknown = null;
+    for (const id of ids) {
+      try {
+        const editorStore = useEditorStore();
+        if (editorStore.noteId === id) await editorStore.flush();
+        await callCommand<null>(Commands.deleteNote, { id });
+        done.push(id);
+      } catch (error) {
+        failed = error;
+        break;
+      }
+    }
+    if (done.length > 0) {
+      refreshCounts();
+      await load();
+      const moved = [...done];
+      useToastStore().pushText(t('state.movedManyToTrash', { count: moved.length }), 'info', {
+        label: t('state.undo'),
+        run: () => {
+          void batchRestore(moved);
+        },
+      });
+    }
+    if (failed) errorKey.value = asBridgeError(failed).messageKey;
+    return done.length;
+  }
+
+  /** 撤销那一颗的落点：逐篇走单条 `restore`（同一个去处、同一套 rev 交接，不写第二份恢复路径）。 */
+  async function batchRestore(ids: string[]): Promise<void> {
+    for (const id of ids) await restore(id);
+  }
+
+  /**
+   * 批量移动到某个文件夹。**这一条不给撤销**：移动不是破坏性的（再移回去就是反悔，且界面上一直有这条路），
+   * 而"撤销"那颗一旦给移动，用户会以为它像删除那样只在本次运行里有效 —— 那是对承诺的误解。
+   * 因此这条 toast 无动作位 ⇒ 按 §4.9 那一族自动消失。
+   */
+  async function batchMoveTo(ids: string[], folderId: string, folderName: string): Promise<number> {
+    let n = 0;
+    for (const id of ids) {
+      try {
+        const note = await callCommand<Note>(Commands.setNoteFolder, { id, folderId });
+        applyNoteUpdate(note);
+        handRevToEditor(note);
+        n += 1;
+      } catch (error) {
+        errorKey.value = asBridgeError(error).messageKey;
+        break;
+      }
+    }
+    if (n > 0) {
+      refreshCounts();
+      await load();
+      useToastStore().pushText(t('state.movedManyToFolder', { count: n, folder: folderName }), 'info');
+    }
+    return n;
+  }
+
   async function restore(id: string): Promise<void> {
     try {
       await callCommand<null>(Commands.restoreNote, { id });
@@ -530,6 +598,9 @@ export const useNoteStore = defineStore('notes', () => {
     searchTotal,
     moveTo,
     moveToTrash,
+    batchMoveToTrash,
+    batchRestore,
+    batchMoveTo,
     restore,
     listKey,
     currentSort,

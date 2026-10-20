@@ -45,6 +45,14 @@ const MESSAGES: Record<MessageKey, string> = {
   'list.noResultsHint': '换个词试试，中文两个字也能搜。',
   'list.empty': '这里还没有笔记',
   'list.emptyHint': '按 Ctrl+N 或在右侧开始写。',
+  /** 多选与批量（第一百五十七批，A 档 P5）。颗上写动词、条上写数量 —— §5 那句"每个动作要有看得见的名字"。 */
+  'list.select': '选择',
+  'list.selectedHint': '选中这一篇（多选）',
+  'list.selectCount': '已选 {count} 篇',
+  'list.selectAll': '全选',
+  'list.cancelSelection': '取消选择',
+  'list.batchTrash': '移到最近删除',
+  'list.batchMove': '移到文件夹',
   'list.newNote': '新建笔记',
   'list.newFromTemplate': '按模板新建',
   'template.blank': '空白',
@@ -463,6 +471,13 @@ const MESSAGES: Record<MessageKey, string> = {
   'link.timeout': '本地服务响应超时，可以再试一次。',
   'state.inTrash': '这条在"最近删除"里，恢复后才能继续编辑。',
   'state.movedToTrash': '已移到「最近删除」，30 天内可以恢复。',
+  /**
+   * 批量那一句（第一百五十七批）**故意不复述天数**：那一位的权威是核心 `TRASH_TTL_DAYS`，
+   * 界面上每多抄一次数字就多一本账（同一族毛病已经有一条门在管：`edge:trash-ttl-copy-matches-core`）。
+   * 这里说的是"可以撤销"——那一颗按钮在场，这句话就是事实陈述。
+   */
+  'state.movedManyToTrash': '已把 {count} 篇移到「最近删除」，可以撤销。',
+  'state.movedManyToFolder': '已把 {count} 篇移到「{folder}」。',
   // 那句"30 天"由 `edge:trash-ttl-copy-matches-core` 钉着与核心 `TRASH_TTL_DAYS` 同源，别手抄天数。
   // 「撤销」是那句话的**出口**（第一百五十二批）：光说"可以恢复"而不给一颗点得动的颗，
   // 用户要自己找到回收站、找到那一行、再点恢复 —— 那一句承诺的代价全在他身上。

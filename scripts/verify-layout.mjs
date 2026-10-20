@@ -282,6 +282,7 @@ const FIXTURE_MARKS = [
   '查找腿夹具',
   '撤销腿夹具',
   '排序腿夹具',
+  '批量腿夹具',
   // 第 49 刀那条字号腿的夹具。
   '字号夹具',
   // 第 50 批那条 toast 时限腿的夹具。
@@ -9904,6 +9905,200 @@ if (envNoisy.length > 0 && envNoisy.length <= 2) {
     .filter((x) => (x.title ?? '').includes(MARK81));
   check('81 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left81.length === 0, JSON.stringify({ 剩下: left81.length }));
   notes.push(`     腿 81（排序那一档）：正序窗口 ${asc.n} 行按核心递增、首行 ${String(asc.first).slice(-6)}；刷新后还在；反序首行 ${String(desc.first).slice(-6)} · edit_note ${edits81.length} 次`);
+}
+
+/**
+ * 82 · 多选与批量（第一百五十七批，A 档 P5：Joplin 的 `MultiNoteActions`）。
+ *
+ * 这一族为什么必须有浏览器证人：单元那两层（`stores/selection.spec.ts` + `batchSelection.spec.ts`）
+ * 量的是状态机与调用边，它们**看不见**三件用户实际撞到的事：
+ *  ① 勾那颗是不是 ≥44 且命中自己（§5 的命中区；行右侧那簇换成一颗之后，位置是 flex 算出来的）；
+ *  ② 进多选**不许把编辑器里那一篇换掉** —— 这条在 store 层是"没人写 selectedId"，
+ *    在界面上是"点行的那颗 `@click` 走的是切换"，只有真点一次才分得开（[[verify-the-call-edge-not-just-the-callees-tests]]）；
+ *  ③ 批量那两路真发多少支命令、撤销真把**刚才那几篇**捞回来。
+ * 另外钉一条反向：退出多选之后那簇动作要回来、勾要不见 —— "看不见却能点着"是 G65/G66 那一族。
+ */
+{
+  const MARK82 = '批量腿夹具';
+  const stamp82 = Date.now();
+  const para = (text) => ({ type: 'paragraph', content: [{ text }] });
+  const mk = (n) => cmd('create_note', {
+    folderId: null,
+    doc: { v: 1, content: [{ id: `b${String(stamp82).slice(-6)}${n}`, type: 'paragraph', content: [{ text: `${MARK82}${n} 需要被批量处理的一次` }] }] },
+  });
+  const made82 = [await mk(1), await mk(2), await mk(3)];
+
+  const errs82 = [];
+  const dels82 = [];
+  const restores82 = [];
+  const folders82 = [];
+  /**
+   * 用**鼠标端**现场，不用 `hasTouch`：触屏那一下是 tap，**不带修饰键** ⇒ ③ 那条 Shift 扩选
+   * 在触屏档恒红（彩排实测两次都是"勾上的:1"）。触屏要的是"点勾切换"，那部分 ①②⑤⑥ 已经量到；
+   * "整段一次选中"本来就是鼠标端的能力（手机上没有键盘）。
+   */
+  const c82 = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const p82 = await c82.newPage();
+  p82.on('console', (m) => { if (m.type() === 'error') errs82.push(m.text()); });
+  p82.on('request', (r) => {
+    const u = r.url();
+    if (u.includes('/cmd/delete_note')) dels82.push(u);
+    if (u.includes('/cmd/restore_note')) restores82.push(u);
+    if (u.includes('/cmd/set_note_folder')) folders82.push(u);
+  });
+  await p82.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await p82.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await p82.waitForTimeout(900);
+
+  const boxOf = (sel) => p82.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    const cx = Math.round(r.x + r.width / 2);
+    const cy = Math.round(r.y + r.height / 2);
+    const hit = document.elementFromPoint(cx, cy);
+    return { w: Math.round(r.width), h: Math.round(r.height), self: hit === el || (hit ? el.contains(hit) : false) };
+  }, sel);
+
+  await p82.click('[data-testid="list-select"]');
+  await p82.waitForTimeout(600);
+  const firstCheck = await boxOf('[data-testid^="select-note-"]');
+  const actionsGone = await p82.evaluate(() => ({
+    checks: document.querySelectorAll('[data-testid^="select-note-"]').length,
+    trashButtons: document.querySelectorAll('[data-testid^="trash-note-"]').length,
+    colorButtons: document.querySelectorAll('[data-testid^="note-color-toggle"]').length,
+  }));
+  check('82 ① 进多选：每行一颗勾（≥44、中心命中自己），行右侧那簇动作整簇退场（不留"看不见却能点"的靶）',
+    firstCheck !== null && firstCheck.w >= 44 && firstCheck.h >= 44 && firstCheck.self
+      && actionsGone.checks >= 3 && actionsGone.trashButtons === 0 && actionsGone.colorButtons === 0,
+    JSON.stringify({ 勾: firstCheck, ...actionsGone }));
+
+  const editorBefore = await p82.evaluate(() => document.querySelector('[data-testid="editor-doc"]')?.innerText.slice(0, 40) ?? 'none');
+  await p82.click('[data-testid^="note-row-"]');
+  await p82.waitForTimeout(500);
+  const editorAfter = await p82.evaluate(() => document.querySelector('[data-testid="editor-doc"]')?.innerText.slice(0, 40) ?? 'none');
+  const twoChecked = await p82.evaluate(() => document.querySelectorAll('[role="checkbox"][aria-checked="true"]').length);
+  check('82 ② 多选里点一行：勾上了，而编辑器里那一篇一字未动（点行是"切换"，不是"打开"）',
+    twoChecked === 1 && editorBefore === editorAfter, JSON.stringify({ 勾上的: twoChecked, 换页: editorBefore !== editorAfter }));
+
+  const order = await p82.evaluate(() => [...document.querySelectorAll('[data-testid^="select-note-"]')]
+    .map((el) => el.getAttribute('data-testid')));
+  await p82.click(`[data-testid="${order[2]}"]`);
+  await p82.waitForTimeout(400);
+  await p82.keyboard.down('Shift');
+  await p82.click(`[data-testid="${order[0]}"]`);
+  await p82.keyboard.up('Shift');
+  await p82.waitForTimeout(500);
+  const rangeCount = await p82.evaluate(() => document.querySelectorAll('[role="checkbox"][aria-checked="true"]').length);
+  const shownCount = await p82.evaluate(() => Number((document.querySelector('[data-testid="batch-count"]')?.textContent ?? '').replace(/\D/g, '')));
+  check('82 ③ Shift 扩选按核心那份顺序取区间（两头都含），而表头那句"已选 N 篇"读的是同一个数',
+    rangeCount === 3 && shownCount === 3, JSON.stringify({ 勾上的: rangeCount, 表头: shownCount, 顺序: order.slice(0, 4) }));
+
+  await p82.click('[data-testid="batch-select-all"]');
+  await p82.waitForTimeout(500);
+  const coreRows = ((await cmd('list_notes', { folderId: null, trash: false })) ?? []).length;
+  const allCount = await p82.evaluate(() => Number((document.querySelector('[data-testid="batch-count"]')?.textContent ?? '').replace(/\D/g, '')));
+  check('82 ④ 全选吃的是这一档已经读到的篇数（核心那份），不是屏幕上可见那一段（虚拟列表的 DOM 窗口是子集）',
+    allCount === coreRows && coreRows > 12, JSON.stringify({ 表头: allCount, 核心: coreRows, 屏上: order.length }));
+
+  /**
+   * ⑤ 之后只动**自己造的那三篇**。
+   * 这里原本写的是"全选之后批量删" —— 那等于把常驻库里那一百多篇一起移进回收站，
+   * 撤销之外没有任何东西把它恢复回来，而下一遍的所有基线（侧栏行数、搜索分档、虚拟列表条数）都被改动。
+   * 判据要量的是"勾几篇就发几支"，三篇与一百篇同一条判据成立，所以没必要拿别人的现场去换读数。
+   */
+  await p82.click('[data-testid="batch-exit"]');
+  await p82.waitForTimeout(500);
+  await p82.click('[data-testid="list-select"]');
+  await p82.waitForTimeout(500);
+  for (const n of made82) await p82.click(`[data-testid="select-note-${n.id}"]`);
+  await p82.waitForTimeout(400);
+  const beforeRows = ((await cmd('list_notes', { folderId: null, trash: false })) ?? []).length;
+  await p82.click('[data-testid="batch-trash"]');
+  await p82.waitForTimeout(1600);
+  const afterDelete = ((await cmd('list_notes', { folderId: null, trash: false })) ?? []).length;
+  const exitAfterTrash = await p82.evaluate(() => ({
+    trash: document.querySelectorAll('[data-testid^="trash-note-"]').length,
+    checks: document.querySelectorAll('[data-testid^="select-note-"]').length,
+  }));
+  check('82 ⑤ 批量删除：勾三篇就发三支 delete_note（不多不少），撤销那条真在场；做完退出多选',
+    dels82.length === 3 && afterDelete === beforeRows - 3 && exitAfterTrash.trash > 0 && exitAfterTrash.checks === 0,
+    JSON.stringify({ 发出: dels82.length, 之前: beforeRows, 之后: afterDelete, 界面: exitAfterTrash }));
+  const undo = await p82.locator('[data-testid="toast-action"]').textContent().catch(() => null);
+  await p82.click('[data-testid="toast-action"]');
+  await p82.waitForTimeout(2000);
+  const backRows = ((await cmd('list_notes', { folderId: null, trash: false })) ?? []).length;
+  check('82 ⑥ 撤销那一条把刚删的每篇都捞回来：restore_note 支数 = 删掉的支数，列表条数回到删之前',
+    String(undo ?? '').trim() === '撤销' && restores82.length === 3 && backRows === beforeRows,
+    JSON.stringify({ 那颗: undo, restore: restores82.length, delete: dels82.length, 回到: backRows, 之前: beforeRows }));
+
+  await p82.click('[data-testid="list-select"]');
+  await p82.waitForTimeout(500);
+  await p82.click(`[data-testid="select-note-${made82[0].id}"]`);
+  await p82.waitForTimeout(400);
+  await p82.click('[data-testid="batch-move"]');
+  await p82.waitForTimeout(600);
+  // 目标文件夹从面板自己那几颗里取（不另开一条路去读核心：面板能列出来的，就是用户点得着的）
+  const targetFolder = await p82.evaluate(() => (document.querySelector('[data-testid^="batch-move-"]')?.getAttribute('data-testid') ?? '').replace('batch-move-', '') || null);
+  let movedOk = false;
+  if (targetFolder) {
+    await p82.click(`[data-testid="batch-move-${targetFolder}"]`);
+    await p82.waitForTimeout(1600);
+    const moved = await cmd('get_note', { id: made82[0].id });
+    movedOk = folders82.length === 1 && String(moved?.folderId ?? '') === targetFolder;
+  }
+  check('82 ⑦ 批量移动到文件夹：一篇一支 set_note_folder、核心读回来 folderId 真的换了（界面说了要做到了）',
+    movedOk, JSON.stringify({ 发出: folders82.length, 目标: String(targetFolder).slice(0, 8), 成了: movedOk }));
+
+  await p82.click('[data-testid="batch-exit"]').catch(() => undefined);
+  await p82.waitForTimeout(600);
+  const backToNormal = await p82.evaluate(() => ({
+    checks: document.querySelectorAll('[data-testid^="select-note-"]').length,
+    trash: document.querySelectorAll('[data-testid^="trash-note-"]').length,
+    move: document.querySelectorAll('[data-testid="batch-move"]').length,
+  }));
+  check('82 ⑧ 退出多选：勾与批量条都不在场上，那簇动作回来（两种状态不许同时可见）',
+    backToNormal.checks === 0 && backToNormal.move === 0 && backToNormal.trash > 0, JSON.stringify(backToNormal));
+
+  /**
+   * 390 那一档再量一次表头：多选模式的批量条有六格内容（标题 / 已选 N 篇 / 全选 / 移动 / 删除 / 取消），
+   * 而这一栏只有 ~315px —— 第一百五十六批刚为"表头把字裁掉"红过两轮，这次是新加的一排在重演同一个风险。
+   * 判据与腿 ㊻ 同一把尺（自己带文字的那一格的 `scrollWidth - clientWidth`、矩形在不在窗口里），
+   * 但**必须在批量条在场时量**：㊻ 扫的是正常模式，看不见这一档。
+   */
+  const cN = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const pN = await cN.newPage();
+  await pN.goto(URL_BASE, { waitUntil: 'networkidle' });
+  await pN.waitForSelector('[data-testid="note-list"]', { timeout: 15000 });
+  await pN.waitForTimeout(900);
+  await pN.click('[data-testid="list-select"]');
+  await pN.waitForTimeout(400);
+  await pN.click('[data-testid^="note-row-"]').catch(() => undefined);
+  await pN.waitForTimeout(500);
+  const narrow = await pN.evaluate(() => [...document.querySelectorAll('.pane--list .pane-header > *')].map((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      cls: String(el.className ?? '').split(' ')[0],
+      over: el.scrollWidth - el.clientWidth,
+      inWindow: r.left >= 0 && r.right <= window.innerWidth,
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+    };
+  }));
+  const clipped = narrow.filter((x) => x.over > 1 || !x.inWindow);
+  const small = narrow.filter((x) => x.cls === 'btn' && (x.w < 44 || x.h < 44));
+  check('82 ⑨ 390 的批量条：没有一颗裁自己的字、没有一颗出窗口、按钮都 ≥44（新加的排在窄档重演同一风险）',
+    clipped.length === 0 && small.length === 0 && narrow.length >= 5, JSON.stringify({ clipped, small, 颗数: narrow.length }));
+  await pN.close();
+  await cN.close();
+
+  for (const n of made82) { await cmd('delete_note', { id: n.id }).catch(() => undefined); await cmd('purge_note', { id: n.id }).catch(() => undefined); }
+  const left82 = ((await cmd('list_notes', { folderId: null, trash: false })) ?? []).filter((x) => (x.title ?? '').includes(MARK82));
+  check('82 这一腿 console error 为零', errs82.length === 0, errs82.slice(0, 3).join(' | '));
+  check('82 自己造的夹具扫完要清干净（残骸会变成下一遍的现场）', left82.length === 0, JSON.stringify({ 剩下: left82.length }));
+  await p82.close();
+  await c82.close();
+  notes.push(`     腿 82（多选与批量）：勾 ${firstCheck?.w}×${firstCheck?.h} · 全选 ${allCount}/${coreRows} · 批量删 ${dels82.length} 支后撤销 ${restores82.length} 支 · 移动 ${folders82.length} 支`);
 }
 
 // 所有浏览器腿到此用完 —— 共享 browser 关在这里（不是腿 77 后面，见上面那条注释）。await browser.close();
