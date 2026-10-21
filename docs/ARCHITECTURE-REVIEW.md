@@ -1,5 +1,8 @@
 # Architecture Review
 
+> **历史文档（冻结）**：以下是 Phase 0 交付评审件（2026-09-25），**不再随代码更新**；当前架构与读数以
+> [ARCHITECTURE-MAP](./ARCHITECTURE-MAP.md) 与 [IMPLEMENTATION-STATUS](./IMPLEMENTATION-STATUS.md) 为准。
+
 Notera · Phase 0 交付评审件 · 2026-09-25
 评审人：待填 ｜ 结论：☐ 通过 ☐ 有条件通过 ☐ 驳回
 

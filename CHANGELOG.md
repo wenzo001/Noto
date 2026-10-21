@@ -2,9 +2,13 @@
 
 遵循 [SemVer](https://semver.org/lang/zh-CN/)。同步协议发生破坏性变更时，`SYNC_PROTOCOL_VERSION` 与版本号同步升级（见 CI-CD.md §版本与单一版本源）。
 
-## 0.0.0 — 未发布（开发线）
+## 开发线 0.0.0 → 1.0.0（逐批记录）
 
-> 版本策略（本轮按用户决定定下）：**从 0.0.0 起，改了产品的 commit 就升 patch**（`node scripts/bump-version.mjs patch`）。第一版未发布，**不承诺历史兼容** —— 迁移可以直接改表结构，不需要写兼容层。
+> **1.0.0 已于 2026-10-21 打出 tag `v1.0.0`**（Release 由 `.github/workflows/release.yml` 从 tag 构建，默认草稿）。
+> 本文件是**逐批记录**，不按 `## 1.2.3` 分段 —— Release 正文由 `release.yml` 里那段 awk 从
+> 「版本 … → X」那一条抽取（本地 `scripts/tag-release.mjs --check` 用同一个判据）。
+> 版本策略（本轮按用户决定定下）：**改了产品的 commit 就升 patch**（`node scripts/bump-version.mjs patch`），
+> 1.0.0 这次是显式指定的版本号。开发线期间**不承诺历史兼容** —— 迁移可以直接改表结构，不需要写兼容层。
 
 这张表是**历史账，不是"当前"读数**（抬头从前写"当前测试基线（2026-09-27 本机 GNU 工具链实测）"——
 那个"当前"到 2026-10-17 已经过期三周半，和第一百十五批从 CI 步骤名里摘掉的是**同一族毛病**：

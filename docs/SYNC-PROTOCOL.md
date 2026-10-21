@@ -670,7 +670,7 @@ download 队列
 | 开启 E2EE | `enc.alg: none→aes-256-gcm-siv` | 次版本（信封结构 v1 已预留，ADR-0002）；需全量重加密迁移 |
 | 目录布局变化 | `records/` 改名 | 破坏性：`layout` 字段 +1，双端协商 |
 
-版本号单一来源：`crates/notera-sync/src/protocol.rs` 的 `SYNC_PROTOCOL_VERSION`，CI 校验其与 `protocol.json` 写入值、`Cargo.toml` 版本策略一致（CI-CD.md §版本与单一版本源）。
+版本号单一来源：`crates/notera-sync/src/manifest.rs` 的 `PROTOCOL`（`notera-sync` 以 `SYNC_PROTOCOL_VERSION` 再导出），CI 校验其与 `protocol.json` 写入值、`Cargo.toml` 版本策略一致（CI-CD.md §版本与单一版本源）。
 
 ---
 

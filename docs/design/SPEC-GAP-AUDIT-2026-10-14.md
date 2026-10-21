@@ -1,5 +1,9 @@
 # 规范 → 执行者 审计（2026-10-14，静态只读一遍）
 
+> **历史文档（冻结）**：以下是当时的静态审计，**不再随代码更新**；当前执行者与读数以
+> [SPEC-EXECUTOR-MAP-2026-10-14.md](./SPEC-EXECUTOR-MAP-2026-10-14.md) 与
+> [IMPLEMENTATION-STATUS](../IMPLEMENTATION-STATUS.md) 为准。
+
 范围：`docs/design/Noto-界面设计规范.from-share.txt` §2–§8 逐句，对三条执行者通道
 （`scripts/verify-layout.mjs` 的 776 条读数、`apps/desktop/src/**/*.spec.ts`、`scripts/arch-check.mjs`），
 外加 `verify-app.mjs` / `verify-blackbox.mjs` / Rust `crates/**/tests`，免得把"只在别处有"的东西漏报或误报。

@@ -1,6 +1,7 @@
 # DATA-MODEL
 
-Notera 本地数据模型与富文本规格。Phase 0 产物，Phase 1 实现依据。
+Notera 本地数据模型与富文本规格。**规范 + 已落地**：结构以 `migrations/0001_init.sql` … `0010_tags.sql`
+为权威（共 10 份迁移），本文是字段语义、revision 模型与富文本 schema 的规范来源。
 
 关联：[SYNC-PROTOCOL.md](./SYNC-PROTOCOL.md) · [CONFLICT-RESOLUTION.md](./CONFLICT-RESOLUTION.md) · [ARCHITECTURE-MAP.md](./ARCHITECTURE-MAP.md) · ADR-0005 / 0006 / 0008 / 0012 / 0015
 
@@ -52,7 +53,8 @@ Notera 本地数据模型与富文本规格。Phase 0 产物，Phase 1 实现依
 * 禁止运行时隐式 `ALTER TABLE`（CI 以 grep 闸门强制，见 CI-CD.md §Migration 契约）。
 * 遇到 `user_version > 本版本支持值` → **进入只读模式并停止同步**，绝不降级写回。
 
-Phase 1 落地文件：`0001_init` `0002_sync` `0003_search` `0004_indexes` `0005_views`。
+已落地文件（`migrations/`）：`0001_init` `0002_sync` `0003_search` `0004_indexes` `0005_views`
+`0006_caps` `0007_remote_index_deleted_at` `0008_conflict_remote_wire` `0009_attachment_reclaims` `0010_tags`。
 
 ---
 
@@ -459,6 +461,21 @@ CREATE UNIQUE INDEX tags_canonical_live ON tags(canonical) WHERE deleted_at IS N
   坏 id 仍旧在命令层具名拒 400（`bad_id`），否则这一格会长成一把吞掉一切的伞。
   证人：`sync_surface.rs::reading_tags_of_a_note_that_is_not_there_answers_empty`
   （带"挂上了就必须读得回来"的对照，摘掉宽容只有它红）。
+
+### 5.5 `0004`–`0009`：索引、视图、能力位、远端视图时间戳、冲突卡片正文、附件回收账
+
+这六份迁移没有自己的字段语义章节（结构都长在 §5.1–§5.3 的表上），但**每一份都补掉了一个"表在、语义不在"的洞**：
+
+| 迁移 | 做什么 | 为什么 |
+|---|---|---|
+| `0004_indexes.sql` | 列表/检索/同步队列的索引（`idx_notes_list` 等） | 侧栏按（回收站标记、文件夹）过滤 + `updated_at` 倒序是主路径 |
+| `0005_views.sql` | `v_note_list` 等投影视图 | 列表查询**禁止 `SELECT doc`**，避免正文溢出页拖慢 |
+| `0006_caps.sql` | 补 `sync_accounts.cap_mask` | 0002 建表时漏了这一列，探测结果无处可存；`NULL` = 从未探测过（按 `Caps::conventional()` 猜高） |
+| `0007_remote_index_deleted_at.sql` | `sync_remote_index` 加删除时间戳 | 少了它还原不出 P8/P11 那类删除先后 |
+| `0008_conflict_remote_wire.sql` | `sync_conflicts` 存服务器那一版正文 | "看不见的选择不是选择"（CONFLICT-RESOLUTION §5.1.1） |
+| `0009_attachment_reclaims.sql` | 附件回收账（一行 = 一次销毁落账） | 与 `DELETE FROM attachments` 同一笔事务，崩在中间也不漂账 |
+
+`0010_tags.sql` 见 §5.4（标签成为第四种可同步实体）。
 
 ---
 

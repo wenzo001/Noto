@@ -1,5 +1,8 @@
 # 交付记录 · Noto 0.0.125（GitHub 三平台可装包）
 
+> **历史文档（冻结）**：以下是那一版交付时的记录，**不再随代码更新**；当前产物与读数以
+> [PRODUCTION-READINESS](./PRODUCTION-READINESS.md) 与 [IMPLEMENTATION-STATUS](./IMPLEMENTATION-STATUS.md) 为准。
+
 日期：2026-10-12 · 仓库：`D:\code\Notes` → `https://github.com/wenzo001/Noto.git`
 版本线：`0.0.125`（`Cargo.toml` 的 workspace 版本，单一版本源）
 

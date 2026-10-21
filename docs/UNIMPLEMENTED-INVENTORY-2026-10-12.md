@@ -1,5 +1,8 @@
 # Noto / Notera — Unimplemented & Incomplete Inventory (evidence-based)
 
+> **历史文档（冻结）**：以下是 2026-10-12 对当时那棵树（`0.0.125`）的只读盘点，**不再随代码更新**；
+> 当前状态与读数以 [IMPLEMENTATION-STATUS](./IMPLEMENTATION-STATUS.md) 与 [PRODUCTION-READINESS](./PRODUCTION-READINESS.md) 为准。
+
 **Method**: read-only analysis. Repo at `Cargo.toml:22 version = "0.0.125"`.
 **Rule applied**: every claim is tagged as either **[doc]** (a document says so) or **[code]** (verified by reading/grepping source, with `file:line`). Where they disagree, both are shown.
 

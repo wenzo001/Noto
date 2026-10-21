@@ -1,6 +1,7 @@
 # ARCHITECTURE
 
-Notera 系统架构。Phase 0 产物。规范性文档。
+Notera 系统架构。规范性文档。**1.0 已实现**：Rust 模块在 `crates/`，前端在 `apps/desktop/`；
+本文仍是边界与依赖方向的规范来源，代码与本文冲突即缺陷。
 
 配套：[ARCHITECTURE-MAP.md](./ARCHITECTURE-MAP.md)（长期架构记忆与改动路由）· [DATA-MODEL.md](./DATA-MODEL.md) · [SYNC-PROTOCOL.md](./SYNC-PROTOCOL.md) · [CONFLICT-RESOLUTION.md](./CONFLICT-RESOLUTION.md) · [PROXY.md](./PROXY.md) · [PLATFORM.md](./PLATFORM.md) · [TEST-PLAN.md](./TEST-PLAN.md) · [CI-CD.md](./CI-CD.md) · [ADR/](./ADR/) · [交互契约图](./diagram/architecture.html)
 

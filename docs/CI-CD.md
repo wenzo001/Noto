@@ -1,9 +1,13 @@
-# Notera CI/CD 设计（Phase 0 · 仅设计）
+# Notera CI/CD 设计与实施（1.0）
 
-> 本文是 **设计规格**，不是实施记录。Phase 1 据此落地 workflow 骨架，Phase 8 补全全量门禁。
-> 文中所有 YAML 均为「待落地蓝图」，仓库中 **尚不存在** `.github/workflows/` 任何文件。
-> 测试分层（L0—L6）的定义与用例设计见 `docs/TEST-PLAN.md`（并行编写中），本文只规定 **CI 如何门禁**，
-> 不重述测试内容。
+> **实现状态（2026-10-21）**：本文已从"仅设计"变成"设计与落地并存"。
+> 仓库里现在有三个真实运行的工作流：`.github/workflows/ci.yml`（`PR 门禁（G1 的第一层）`）、
+> `.github/workflows/audit.yml`（`依赖与密钥审计（audit 作业）`）、`.github/workflows/release.yml`
+> （`出包与发布（§4 / §5）`，由 tag 推送触发，产物默认进**草稿** Release）。**实际文件与步骤名才是现行权威**；
+> 下文里的 YAML 蓝图保留为设计出处，落地时按本机可验证性做过取舍（例如：契约图在 CI 里**不阻断**、
+> Android APK **未签名**、Rust 审计先跑判据自测再跑全量），每一处的理由都写在对应 workflow 的注释里。
+> 本文仍是 **CI 如何门禁** 的规范：测试分层（L0—L6）的内容见 `docs/TEST-PLAN.md`，当前读数见
+> `docs/IMPLEMENTATION-STATUS.md`。
 
 ## 0. 标记约定与证据基线
 
@@ -157,11 +161,11 @@ CI 的 runner 内存更大且没有这个约束，所以**不改 `ci.yml`**，�
 | 1 | `actions/checkout` + GNU 工具链 + pnpm/node 准备 + `pnpm install --frozen-lockfile` | — |
 | 2 | `pnpm build`（**必须排在所有 Rust 步骤之前**：桌面壳的 `build.rs` 要嵌前端产物） | 有产物 |
 | 3 | `node scripts/check-versions.mjs` | 一致 |
-| 4 | `node scripts/arch-check.mjs` | **32/32**（2026-10-09 已到 **34/34**，这一格是 09-30 那次快照） |
+| 4 | `node scripts/arch-check.mjs` | **52/52**（2026-10-21 实测；这一格早先是 32/32 的设计期快照） |
 | 5 | `cargo fmt --all --check` | 退出码 0 |
 | 6 | `cargo clippy --workspace --all-targets -- -D warnings` | 0 error / 0 warning |
-| 7 | `cargo test --workspace -- --test-threads=1`（串行是判据，不是习惯：墙钟类注入并发会假红） | **640 / 0 失败 / 6 ignored**（85 个 result 行） |
-| 8 | `pnpm test` + `pnpm typecheck` | 222 通过（23 文件）+ 0 错（2026-10-09 实测已到 **559 通过 / 67 文件**，`vue-tsc --noEmit` 与 `eslint . --max-warnings 0` 都干净） |
+| 7 | `cargo test --workspace -- --test-threads=1`（串行是判据，不是习惯：墙钟类注入并发会假红） | **771 / 0 失败 / 7 ignored**（2026-10-20 实测；这一格早先是 640 / 0 的快照） |
+| 8 | `pnpm test` + `pnpm typecheck` | **828 通过（95 文件）+ `vue-tsc` 0 错**（2026-10-21 实测；这一格早先是 222 通过 / 23 文件的设计期快照） |
 | 9 | `pnpm audit --audit-level=high --registry=https://registry.npmjs.org` | 0 条（275 个依赖）。**2026-10-09 这条第一次真的红**：`source-map-js >=1.0.0 <1.2.2` 一条 high（62 条路径全挂在 `vue → @vue/compiler-sfc →（postcss / @vue/compiler-core）` 那条链上），`pnpm update source-map-js` 把锁从 1.2.1 推到 1.2.2 之后 **0 条（锁里 278 个包）**；把锁退回 1.2.1 再跑同一条命令仍报 1 条 high、退出码 1 —— 判据有牙，两头都实测过 |
 | 10 | `node scripts/audit-rust-deps.mjs --self-test` | 6 个脏样本报 18 条、2 个净样本 0 条（**2026-09-30 补**：此前脚本注释写着"CI 里也是这条"而 CI 里从来没这一步，那条门只在本机跑过 —— 缺口 G36） |
 | 11 | `node scripts/audit-rust-deps.mjs` | **PASS · 624 个依赖 0 条未豁免**（外加 2063 条依赖边的覆盖对账（第 2063 条正是 0.0.47 新加的 `notera-net → rustls-native-certs` —— 对账当场把它认下来了）） |

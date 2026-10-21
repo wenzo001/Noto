@@ -1,5 +1,8 @@
 # Noto（工作代号 Notera）功能与目标交接说明
 
+> **历史文档（冻结于 0.0.64 / 2026-10-05）**：给设计师的交接件，**不再随代码更新**；界面现状以
+> `docs/design/Noto-界面设计规范.v2.md` 与 [IMPLEMENTATION-STATUS](./IMPLEMENTATION-STATUS.md) 为准。
+
 给 UI 设计师 · 版本线 0.0.64 · 2026-10-05
 所有内容对照真实代码核对过，不是规划稿。
 
