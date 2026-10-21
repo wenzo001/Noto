@@ -838,6 +838,11 @@ fn every_migration_file_on_disk_is_applied() {
 /// 这一条挡的正是"文档写着允许 `blocked`，真表的 CHECK 里却没有它"（那时代码写 `blocked` 会在运行期撞约束，
 /// 而毒丸隔离那组测试与迁移文件共享同一个来源，看不见这种漂移），以及**反向**——
 /// 有人往 CHECK 里偷偷加第七个值而文档不动。见 [[cross-table-link-belongs-in-production]]。
+/// 本判据自己的变异记录（两个方向都证过，且都下在**真正建表的那份** `migrations/0010_tags.sql` 上：
+/// 这张表被 0010 重建过，刀切在初版 `0002_sync.sql` 上会得到一次"判据没牙"的假读数 —— 9 条全绿）：
+///  · CHECK 里加第七个值 `'quarantined'` ⇒ 8 绿 / 1 红，红的就是这一条，并把七个状态原样打出来；
+///  · 把 `,'blocked'` 连逗号一起去掉 ⇒ 同样 8 绿 / 1 红，只有这一条（第一次那刀留了悬空逗号，
+///    把迁移语法整个弄坏、9 条全红，那种红不算单条判据的证据）。
 #[test]
 fn sync_operations_state_check_equals_the_documented_set() {
     const DOCUMENTED: [&str; 6] = [
