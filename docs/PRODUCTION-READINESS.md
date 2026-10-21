@@ -36,6 +36,17 @@
    绿了才：`node scripts/tag-release.mjs v0.0.162 --push`（它自己会校验版本单源 + CHANGELOG 那条 `- **` 行）。
 3. **远程两扇门**：`gh run list --limit 6` 里 `PR 门禁` 与 `依赖与密钥审计` 对**最新那次 push** 都是 success；
    `出包与发布` 对 tag 那次 success（草稿 Release 会带五件产物 + `SHA256SUMS.txt`）。
+   ⚠ **2026-10-21 04:00 实测这一格是红的，且不是被我绕开的那类噪声**：`依赖与密钥审计` 对 `4bf95fe` 与 `4ae267a` 两轮都
+   `failure`，红在 `pnpm audit --audit-level=high` —— 当天新出的一条 **high：vite 的 `launch-editor` 在 Windows 上
+   `fs.existsSync()` 存在性检查可被绕过**（GHSA-587h-7wmj-h5pm，另有 2 条 moderate 不阻断）。
+   **量过的两件事**：① 它只挂在 `devDependencies`（`vite@^8.3.1`、`vitest@^5.0.2`），随包的只有 `vue`/`@headlessui/vue` ⇒
+   **装到用户机器上的那份里没有这段代码**；② 修好的补丁版就在同一个范围内（`npm view vite dist-tags` → `latest: 8.3.4`），
+   所以这是"能升"不是"只能豁免"。**这一格欠的那一条**：
+   `cd apps/desktop && pnpm update vite`（然后前端整跑一遍、提交、推 —— 门自己会回绿）。
+   本机做不了这一步，原因记清楚免得下次再撞：`packageManager` 钉 **pnpm 12.5.1**，而
+   `D:\.pnpm-store\v11\links\@\pnpm\12.5.1\…\node_modules\pnpm\pnpm` 这个入口在盘上不存在（`pnpm --version` 直接报
+   "不是内部或外部命令"）；盘上另有一份 pnpm 11.16.0 能跑，但被那枚 pin 挡回。**没有绕的方式可以接受**：
+   改 `packageManager`、`--audit-level=critical`、手写 `pnpm-lock.yaml` 三样都是把门拆掉或把锁文件写脏，不是修法。
 4. **体积与字节完整性**：五档都在上界内（exe 8 / msi 11 / dmg 10 / app.zip 10 / apk 24 MiB；当前余量 32%～38%）。
    2026-10-20 对 `v0.0.161` 做过一次**下载 + 逐件校验**：`gh release download` 拉下五件产物，
    用包里的 `SHA256SUMS.txt` 跑 `sha256sum -c` —— **五件全 OK**（dmg / app.zip / setup.exe / msi / apk）。
