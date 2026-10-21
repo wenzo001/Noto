@@ -5,19 +5,18 @@
 > `VERIFIED` 一律带**可重放的证据出处**，没有证据就往下写。
 > `SKIP / TODO / 理论通过 / 应该没问题 / 本地没环境所以跳过` 在这份表里不算 PASS。
 >
-> 更新时间：2026-10-21（**1.0.0** 这批；`v1.0.0` 的 Release 已于 19:33 转公开）· 本轮口径：同步"装完是干净的"（缺口 G46–G57 一批，见
+> 更新时间：2026-10-21（**1.0.1** 这批：D19 拍 A + D27 拍 C；`v1.0.0` 的 Release 已于 19:33 转公开）· 本轮口径：同步"装完是干净的"（缺口 G46–G57 一批，见
 > `docs/PRODUCTION-READINESS.md`）· 本机工具链 `stable-x86_64-pc-windows-gnu`
 > ⚠ 这张表下面那些"今天实测"的数字**是按批次冻结的读数**，不是当前值：
 > 最近一次全量实测（2026-10-20，0.0.159 这棵树上）是
 > `cargo test --workspace` **771 通过 / 0 失败 / 7 ignored**（102 个 result 行）、
 > `cargo clippy --workspace --all-targets -- -D warnings` —— 本机今天被 `only metadata stub found for rlib dependency core`
 > 这个**工件**挡过（不是代码红；清 `notera-core` 之后四个相关 crate 的 targeted clippy 是 0/0，远程 CI 的 Clippy 步骤是绿的）、
-> 前端 **828 通过（jsdom 建了 95 份 ⇒ 95 个文件）** + `vue-tsc` 0 错（node 直跑 —— 这台机器的 pnpm 坏了）、`arch-check` **52/52**、
-> 布局整跑 **898 PASS / 0 FAIL**（最新一遍 2026-10-21 19:02 跑在 `ee7d174`（= 1.0.0 这一批的头，
-> 那两格 commit 只动版本号与腿 ㉞ 的界，没动产品代码），`.logs/lane-100c.log`：派生界 1386 站、实走 603 站；
-> 同批第一遍 `lane-100a.log` 是 **896 / 1**，红在腿 ㉞ 那条写死 600 的常数界被现场撞穿（判据没坏、产品没坏），
-> 第二遍 `lane-100b.log` 崩在腿 ㉞ 之后那张证据图（`page.screenshot` 30 s 超时，崩前 543 / 0）—— **两遍都不算证人**，
-> 按实记在这儿；再往前三遍同 898/0 分别跑在 `094e9f2` / `028c7dd` / `5b89c93`，`.logs/lane-163b.log`、
+> 前端 **836 通过（jsdom 建了 96 份 ⇒ 96 个文件）** + `vue-tsc` 0 错（node 直跑 —— 这台机器的 pnpm 坏了）、`arch-check` **52/52**、
+> 布局整跑 **897 PASS / 0 FAIL**（最新一遍 2026-10-21 21:26 跑在 `7739193`（1.0.1：D19 + D27），`.logs/lane-102.log`：
+> 比 898 少的那一条是**既有环境噪声名单放行**的 1 条传输层错误 `net::ERR_NO_BUFFER_SPACE → cmd/note_tags`
+> （同遍 requestfailed 另记 `cmd/account ← net::ERR_CONNECTION_TIMED_OUT`；>2 条照样红），腿 ㉞ 的 `landed` 从 594 → **39**）；
+> 同批第一遍同 898/0 跑在 `382cc71`（`.logs/lane-101.log`，腿 ㉞ `landed 39`）；再往前三遍同 898/0 分别跑在 `094e9f2` / `028c7dd` / `5b89c93`，`.logs/lane-163b.log`、
 > `.logs/lane-163.log`、`.logs/lane-162k.log`；含腿 83/84/85/86/87，
 > 以及第一百六十二批连红三遍的那条"宽 1440 console error 为零" —— 根因在桥上，见第一百六十三批）。
 > 下面还写着 612/236、672/285 的那些行是各自那一批的出处，留着是为了可回放，
