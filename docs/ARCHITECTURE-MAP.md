@@ -139,6 +139,7 @@ L0 UI/平台  →  L1 host/cli  →  L2 领域服务  →  L3 基础设施  → 
 | 让清单成为正确性来源（如"清单没有就当用户删了"） | 违反 R1/C2/C3 | 协议测试用例 |
 | 命令面直接把 store/core 的类型序列化给界面 | 存储层字段名会漏到 wire 上，而界面按契约名取值 → 静默 `undefined`（曾让设置页三行统计恒为 `—`） | `edge:command-wire-is-camelCase`（出参类型必须显式声明 camelCase）+ `edge:stats-dto-covers-ui-reads`（界面读的每个键都要发得出）+ 真 `invoke` 的键集合断言 |
 | 命令臂把**还没传播的 `Result`** 交给 `j()` 序列化（`j(app.to_dto(x))`，少一个 `?`） | serde 对 `Result` 用外部标签 ⇒ 成功载荷变成 `{"Ok":{…}}` 而不是裸 DTO。这一条边**每一头都看起来是好的**：HTTP 200、库里真写进去了、前端 `unwrap()` 原样返回那个封套，而 `applyNoteUpdate` 在 `note.id` 不是字符串那行静默 return —— 用户看到的是"点下去屏幕上没有任何反应"（缺口 **G32**：`set_note_pinned` / `set_note_folder` / `move_folder` 三条臂，四条界面判据全绿着进了 0.0.41~0.0.44 四个发布版本）。上一条 camelCase 门禁对它是**盲的**：`Result` 在它的噪声词表里被跳过 | `edge:command-wire-propagates-result`（静态：返回 `Result` 的调用作 `j()` 唯一实参时必须以 `?` 结尾，并按**命令名**点名是哪一臂）+ `notera-host/tests/dto_envelope.rs`（真 `dispatch` 的 JSON 里不许有顶层 `Ok`/`Err`，三条臂连值钉）+ `verify-app`「列表那一行的动作按钮…点了真 repaint」步（判效果：`aria-label` 与置顶标记必须一起翻面）；变异 M109/M110/M111/M113/M114 |
+| 桥上按"首字符是不是 `{`/`[`"决定要不要 JSON.parse（`parseJsonOrKeep`） | 核心对缺席回的是**裸 `null`**（实测 4 字节）⇒ 不解析就长成字符串 `"null"`，一个**真值**：界面四处 `if (!note)` 一起被骗（编辑器两开、草稿收口、设置页读账户）。草稿收口那处最贵——它以为笔记还在，删下去必 400，被整跑"console error 为零"当场抓到。`Boolean("false")` 是 true，裸标量这一族不只 `null` | `bridge.spec.ts`「HTTP 通道的裸标量正文」五条：两条正的（裸 null / 裸 false+0）+ 三条对照（对象拆包、非 JSON 原文留着、4xx 仍折 BridgeError）；刀下在旧写法上**只红那两条** |
 | 跨 host↔store 边界传 `kind` 用裸字符串 | 同一实体有两套词汇（线上短标记 `n/f/a` ↔ 库里长标记 `note/…`），传错词汇编译能过、UPDATE 匹配 0 行、待办静默停在 inflight | 参数类型是 `EntityKind`（词汇翻译只能在适配器一处发生） |
 
 ---

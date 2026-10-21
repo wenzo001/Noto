@@ -103,12 +103,22 @@ function normalizeError(raw: unknown, httpStatus?: number): BridgeError {
   });
 }
 
+/**
+ * 桥上的正文一律由 `serde_json` 写出，所以该问的只有"这段文本能不能 JSON.parse"。
+ *
+ * 以前这里先看首字符是不是 `{` / `[`，于是核心对"没有这一篇 / 没配账户"回的那 4 字节
+ * `null` 被原样当成字符串 `"null"` 交给调用方 —— **一个真值**。读侧每一句 `if (!note)`
+ * 都被它骗过去（整跑里那发多余的 `delete_note` 就是这么来的：守卫读到"笔记还在"，
+ * 真删下去必 400，而浏览器把那一发记成 console error）。裸标量的坑同样作用于
+ * `true` / `false` / 数字：`Boolean("false")` 是 true。
+ */
 function parseJsonOrKeep(text: string): unknown {
   const trimmed = text.trim();
-  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return text;
+  if (trimmed.length === 0) return text;
   try {
     return JSON.parse(trimmed) as unknown;
   } catch {
+    // 只有真解析不动的才留原文：壳里的对话框返回过裸路径，那不是 JSON。
     return text;
   }
 }

@@ -5,7 +5,7 @@
  * （`notera_command(name, args)` → `commands::dispatch`），两边靠字面量对齐。
  * 字面量漂了不会编译错、也不会有类型错，只会在真窗口里表现为"每个按钮都没反应"。
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BridgeError, callCommand, currentTransport, inTauri, onUiEvent, pickOpenPath, pickSavePath } from './bridge';
 
 const invoke = vi.fn();
@@ -93,6 +93,61 @@ describe('Tauri 通道契约', () => {
     asBrowser();
     expect(inTauri()).toBe(false);
     expect(currentTransport()).toBe('http');
+  });
+});
+
+describe('HTTP 通道的裸标量正文', () => {
+  function reply(body: string, status = 200) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: status >= 200 && status < 300,
+      status,
+      text: () => Promise.resolve(body),
+    }));
+  }
+
+  beforeEach(() => {
+    asBrowser();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * 这一族的证人：核心对"这一篇不存在""没配账户"回的是**裸 `null`**（4 字节，实测 `curl` 打出来的）。
+   * 桥以前只看首字符是不是 `{`/`[`，那 4 字节于是长成字符串 `"null"` 交到调用方手里 —— 真值。
+   * 界面上四处在 `if (!note)`（编辑器两开、草稿收口、设置页读账户），每一个都会被它骗成"东西在"。
+   * 用 `toBe` 而不是 `toBeFalsy`：假值里就含着 `"null"` 这种形状，宽松的比较正好抓不到这次的真缺陷。
+   */
+  it('裸 null 的正文 ⇒ 解析成 null，不是字符串 "null"', async () => {
+    reply('null');
+    const note = await callCommand<{ id: string } | null>('get_note', { id: '01a15900-0000-7000-8000-000000000000' });
+    expect(note).toBe(null);
+    expect(typeof note).toBe('object');
+  });
+
+  it('裸 false 与裸数字也照 JSON 解（`Boolean("false")` 是 true，这一族不能只修 null）', async () => {
+    reply('false');
+    expect(await callCommand<boolean>('some_flag', {})).toBe(false);
+    reply('0');
+    expect(await callCommand<number>('some_count', {})).toBe(0);
+  });
+
+  it('对照臂一：对象正文照旧拆包（这条修复不许把正常载荷弄坏）', async () => {
+    reply('{"id":"x","title":"甲"}');
+    expect(await callCommand<{ id: string }>('get_note', { id: 'x' })).toEqual({ id: 'x', title: '甲' });
+    reply('{"ok":true,"payload":{"id":"y"}}');
+    expect(await callCommand<{ id: string }>('get_note', { id: 'y' })).toEqual({ id: 'y' });
+  });
+
+  it('对照臂二：解析不动的原文留着（壳内对话框给的是裸路径，不是 JSON）', async () => {
+    reply('D:/x/备份.zip');
+    expect(await callCommand<string>('pick_thing', {})).toBe('D:/x/备份.zip');
+  });
+
+  it('对照臂三：4xx 的拒绝载荷仍折成 BridgeError（错误那一支不经过这次的改动也不能变）', async () => {
+    reply('{"code":"not_found","messageKey":"cmd.not_found","retryable":false}', 400);
+    await expect(callCommand('delete_note', { id: 'x' })).rejects.toBeInstanceOf(BridgeError);
   });
 });
 
