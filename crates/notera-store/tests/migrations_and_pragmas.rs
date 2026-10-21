@@ -831,3 +831,72 @@ fn every_migration_file_on_disk_is_applied() {
         "支持版本不等于盘上最大的迁移号"
     );
 }
+
+/// `sync_operations.state` 的 CHECK 集合与 `docs/DATA-MODEL.md` 那张表**必须等价**（双向差集）。
+///
+/// 期望值写死在这六个字符串上，**不许**从 `OpState::as_str()` 或迁移文件算出来：
+/// 这一条挡的正是"文档写着允许 `blocked`，真表的 CHECK 里却没有它"（那时代码写 `blocked` 会在运行期撞约束，
+/// 而毒丸隔离那组测试与迁移文件共享同一个来源，看不见这种漂移），以及**反向**——
+/// 有人往 CHECK 里偷偷加第七个值而文档不动。见 [[cross-table-link-belongs-in-production]]。
+#[test]
+fn sync_operations_state_check_equals_the_documented_set() {
+    const DOCUMENTED: [&str; 6] = [
+        "pending",
+        "inflight",
+        "done",
+        "failed",
+        "superseded",
+        "blocked",
+    ];
+    let fx = Fix::new();
+    let _store = fx.open();
+    let conn = rusqlite::Connection::open(fx.db_file()).unwrap();
+    let ddl: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='sync_operations'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("迁移完之后 sqlite_master 里必须有 sync_operations");
+    // 迁移文件里这一格是跨行写的（`CHECK (state IN\n  ('pending',…))`），先把空白压平再取括号里那份名单。
+    let flat: String = ddl.split_whitespace().collect::<Vec<_>>().join(" ");
+    let at = flat
+        .find("state IN (")
+        .unwrap_or_else(|| panic!("sync_operations 上没有 `state IN (...)` 这段 CHECK：{flat}"));
+    let inner = &flat[at + "state IN (".len()..];
+    let close = inner
+        .find(')')
+        .unwrap_or_else(|| panic!("`state IN (` 后面找不到右括号：{flat}"));
+    let parsed: Vec<String> = inner[..close]
+        .split(',')
+        .map(|s| s.trim().trim_matches('\'').to_string())
+        .collect();
+
+    // 下界挡"空集合也算过"：六条都要有名字，扫到 0 项不是检查过。
+    assert_eq!(
+        parsed.len(),
+        DOCUMENTED.len(),
+        "CHECK 里的状态数与文档那六个不一致：{parsed:?}"
+    );
+    let missing: Vec<&str> = DOCUMENTED
+        .into_iter()
+        .filter(|w| !parsed.iter().any(|p| p.as_str() == *w))
+        .collect();
+    let extra: Vec<&str> = parsed
+        .iter()
+        .map(|s| s.as_str())
+        .filter(|p| !DOCUMENTED.into_iter().any(|w| w == *p))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "DATA-MODEL 写着允许而真表 CHECK 里没有：{missing:?}（DDL: {flat}）"
+    );
+    assert!(
+        extra.is_empty(),
+        "真表 CHECK 里有第七个值，文档没写：{extra:?}（DDL: {flat}）"
+    );
+
+    // "blocked 真写得进去"这一半不在这里重做：它由 `tests/outbox_quarantine.rs` 走生产 API
+    // 在真 SQLite 上证过（那里有 `sync_accounts` 的账户行，这条 INSERT 会被 FK 拦，写不出可信读数）。
+    // 本判据只守两件事：文档那六个与真表 CHECK **不多不少**。
+}
