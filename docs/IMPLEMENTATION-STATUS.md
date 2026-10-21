@@ -13,7 +13,8 @@
 > `cargo clippy --workspace --all-targets -- -D warnings` —— 本机今天被 `only metadata stub found for rlib dependency core`
 > 这个**工件**挡过（不是代码红；清 `notera-core` 之后四个相关 crate 的 targeted clippy 是 0/0，远程 CI 的 Clippy 步骤是绿的）、
 > 前端 **828 通过（jsdom 建了 95 份 ⇒ 95 个文件）** + `vue-tsc` 0 错（node 直跑 —— 这台机器的 pnpm 坏了）、`arch-check` **52/52**、
-> 布局整跑 **898 PASS / 0 FAIL**（最新一遍 2026-10-21 12:48 跑在 `028c7dd`（第一百六十四批），`.logs/lane-163.log`；
+> 布局整跑 **898 PASS / 0 FAIL**（最新一遍 2026-10-21 16:04 跑在 `094e9f2`（升完三条安全通告之后的头），
+> `.logs/lane-163b.log`；其上三遍同 898/0 分别跑在 `028c7dd` / `5b89c93`，`.logs/lane-163.log`、`.logs/lane-162k.log`；
 > 前一遍同 898/0 跑在 `5b89c93`，`.logs/lane-162k.log`；含腿 83/84/85/86/87，
 > 以及第一百六十二批连红三遍的那条"宽 1440 console error 为零" —— 根因在桥上，见第一百六十三批）。
 > 下面还写着 612/236、672/285 的那些行是各自那一批的出处，留着是为了可回放，
