@@ -56,6 +56,19 @@
    `D:\.pnpm-store\v11\links\@\pnpm\12.5.1\…\node_modules\pnpm\pnpm` 这个入口在盘上不存在（`pnpm --version` 直接报
    "不是内部或外部命令"）；盘上另有一份 pnpm 11.16.0 能跑，但被那枚 pin 挡回。**没有绕的方式可以接受**：
    改 `packageManager`、`--audit-level=critical`、手写 `pnpm-lock.yaml` 三样都是把门拆掉或把锁文件写脏，不是修法。
+   ✅ **2026-10-21 05:47 这一格回绿**（`依赖与密钥审计` 对 `e5aaebb` = success），且上面那句"本机做不了"**已被推翻**：
+   正解是走 **corepack**（`corepack pnpm@12.5.1 …`，按 `packageManager` 那枚 pin 取二进制、只写 corepack 自己的缓存，
+   不动全局工具链）。两件事：
+   ① `corepack pnpm@12.5.1 update vite --lockfile-only` ⇒ vite 8.3.1 → **8.3.4**（`package.json` 的范围随之写 `^8.3.4`，
+      锁文件 diff 179 行只动 vite 那几条；随后 `install --frozen-lockfile` 要在 **`apps/desktop` 里**跑 —— 在仓库根跑
+      pnpm 会在根目录顺手长出 `package.json` + `pnpm-lock.yaml` 两个不属于本项目的文件，已删）；本机 `--audit-level=high`
+      当场 `No known vulnerabilities found`，前端 95 文件 / 828 条在新 vite 下全绿。
+   ② 门回绿过程中又冒出一条**不同作业**的红：`Rust 依赖漏洞审计 · 全量（OSV 路径，阻断）` 报
+      `rustls-webpki@0.103.15 → RUSTSEC-2026-0382` 与 `webpki-root-certs@1.0.9 → RUSTSEC-2026-0383`（当天新出）。
+      这两条与 vite 那条**性质不同：它们随包**（rustls 验链走这两个 crate）⇒ 只能升，不该走豁免；
+      `cargo update -p rustls-webpki -p webpki-root-certs` 各升一个补丁版（0.103.16 / 1.0.10），本地 OSV 审计
+      当场 **PASS**（625 个依赖、未豁免命中 0、6 条既有豁免逐条有理由），`cargo check --workspace --all-targets` 通过。
+      没动一行 Rust 源码 ⇒ 不需要 `cargo fmt`。
 4. **体积与字节完整性**：五档都在上界内（exe 8 / msi 11 / dmg 10 / app.zip 10 / apk 24 MiB；当前余量 32%～38%）。
    2026-10-20 对 `v0.0.161`、**2026-10-21 对 `v0.0.162`（run `39541125162`）**各做过一次**下载 + 逐件校验**：
    `gh release download` 拉下五件产物（落在仓库外的临时目录，不进版本库），
