@@ -56,6 +56,18 @@ function i18nPairs(): Array<{ key: string; value: string }> {
   return [...text.matchAll(/'([a-zA-Z][\w.]*?)'\s*:\s*'([^']*)'/g)].map((m) => ({ key: m[1], value: m[2] }));
 }
 
+/** 两个壳的包元数据长描述（D19 拍 A 之后纳入 §0.2 的面）。读 JSON 而不是 grep：字段缺失要能被自检看见。 */
+function packageMetadata(): Array<{ key: string; value: string }> {
+  const confs: Array<[string, string]> = [
+    ['pkg.desktop.longDescription', '../src-tauri/tauri.conf.json'],
+    ['pkg.mobile.longDescription', '../../mobile/src-tauri/tauri.conf.json'],
+  ];
+  return confs.map(([key, rel]) => {
+    const parsed = JSON.parse(read(rel)) as { bundle?: { longDescription?: string } };
+    return { key, value: parsed.bundle?.longDescription ?? '' };
+  });
+}
+
 /** 全仓的 `data-testid` 值（去注释后扫；模板串那种 `` `x-${id}` `` 不匹配，落不进名单也不该落进）。
  *  §3.3 与 §6 标签那一格都用这一份名单 —— 两处各写一遍抽取器迟早会长成两套口径。 */
 function allTestIds(): string[] {
@@ -290,6 +302,8 @@ describe('§4.5 冲突面板的动作恰好是"逐条"那三颗（批量动作�
  *
  * 面为什么只取 i18n 的**值**：`arch-check` 的 `hygiene:rust-message-keys-registered` 已经钉住
  * "文案键唯一登记处 = `i18n.ts`"，所以扫这一份就是扫用户可见文案（模板里另写一句的说法本身就被那条门拦住）。
+ * **D19（2026-10-21 拍 A）**：包元数据（两个壳 `tauri.conf.json` 的 `bundle.longDescription`：商店条目 /
+ * 安装器详情 / 关于窗都可能显示它）也算"用户可见文案" ⇒ 同一把尺子扫到 `*.conf.json` 那两格。
  *
  * 「清单」为什么不能一刀切：它在界面上有三种**正当**用法（待办清单 / 编辑器的勾选块 / 备份清单），
  * 整词禁掉会红三处合法现场 —— 扫到一片红同样不等于抓对了。于是它只在"被用来称呼 manifest 那个内部对象"
@@ -337,6 +351,16 @@ describe('§0.2 界面不许说协议话（九个词不许出现在用户可见�
 
   it('今天没有任何一句用户可见文案在说协议话', () => {
     expect(hits(i18nPairs()), '这些句子把内部对象说给了用户听').toEqual([]);
+  });
+
+  it('包元数据也在面内（D19 拍 A）：两个壳的 longDescription 过同一把尺子', () => {
+    const meta = packageMetadata();
+    // 仪器自检：两格都必须真读到非空值 —— 读成空串时下面那条断言恒真。
+    for (const m of meta) {
+      expect(m.value.length, `${m.key} 必须真读到`).toBeGreaterThan(10);
+      expect(m.value.includes('Noto'), `${m.key} 必须还是那句产品描述`).toBe(true);
+    }
+    expect(hits(meta), '包元数据在说协议话').toEqual([]);
   });
 });
 

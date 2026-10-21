@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 列表栏：虚拟滚动的笔记行 + 搜索态 + 回收站动作。 */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import SearchField from './SearchField.vue';
 import EmptyState from './EmptyState.vue';
 import SkeletonRows from './SkeletonRows.vue';
@@ -19,6 +19,7 @@ import { formatWhen } from '../util/format';
 import { plainText } from '../util/plainText';
 import { MARK_SWATCHES, MARK_DOT_SHAPE as DOT_SHAPE, dotStyle } from '../util/markColors';
 import { NOTE_SORTS, type NoteSortKey } from '../stores/settings';
+import { rovingTargetIndex, tabStopId, type RovingKey } from './noteListRoving';
 
 /**
  * 排序那一族（第一百五十三批）。**名单是从事实派生的**：项与序都来自 `NOTE_SORTS`，
@@ -205,6 +206,36 @@ async function activateRow(entry: Entry, ev: { shiftKey?: boolean }): Promise<vo
   }
   if (ev.shiftKey) sel.extend(entry.id, orderIds.value);
   else sel.toggle(entry.id);
+}
+
+/**
+ * 方向键移动（D27 拍 C）：整个列表只占 1 个 Tab 位，行间靠 ↑/↓/Home/End 走。
+ *
+ * 三件事一起做：① 非多选态下把选中同步过去（桌面档编辑器跟着换，窄屏**不**切面板 ——
+ * 窄屏切走会让方向键变成"按一下就离开列表"）；② 目标行不在虚拟窗口里就先滚过去；
+ * ③ 等它挂上再聚焦（`preventScroll`，滚哪由我们说了算）。
+ */
+const rovingId = computed(() => tabStopId(orderIds.value, notes.selectedId));
+
+async function moveRowFocus(entry: Entry, key: RovingKey): Promise<void> {
+  const index = entries.value.findIndex((e) => e.id === entry.id);
+  const next = rovingTargetIndex(index, key, entries.value.length);
+  if (next < 0 || next === index) return;
+  const target = entries.value[next];
+  if (!selecting.value) {
+    notes.selectedId = target.id;
+    void editor.open(target.id);
+  }
+  const el = viewport.value;
+  if (el) {
+    const top = next * ROW_HEIGHT;
+    const height = el.clientHeight || viewportHeight.value;
+    if (top < el.scrollTop) el.scrollTop = top;
+    else if (top + ROW_HEIGHT > el.scrollTop + height) el.scrollTop = top + ROW_HEIGHT - height;
+    scrollTop.value = el.scrollTop;
+  }
+  await nextTick();
+  viewport.value?.querySelector<HTMLElement>(`[data-testid="note-row-${target.id}"]`)?.focus({ preventScroll: true });
 }
 
 async function selectAllRows(): Promise<void> {
@@ -453,12 +484,16 @@ function createFrom(tpl: NoteTemplate): void {
           :class="{ 'row-item--selected': entry.id === notes.selectedId, 'row-item--provisional': notes.isProvisional(entry.id) }"
           :style="{ height: `${ROW_HEIGHT}px` }"
           role="listitem"
-          tabindex="0"
+          :tabindex="entry.id === rovingId ? 0 : -1"
           :aria-current="entry.id === notes.selectedId ? 'true' : undefined"
           :data-testid="`note-row-${entry.id}`"
           @click="activateRow(entry, $event)"
           @keydown.enter.prevent="activateRow(entry, $event)"
           @keydown.space.prevent="activateRow(entry, $event)"
+          @keydown.down.prevent="moveRowFocus(entry, 'ArrowDown')"
+          @keydown.up.prevent="moveRowFocus(entry, 'ArrowUp')"
+          @keydown.home.prevent="moveRowFocus(entry, 'Home')"
+          @keydown.end.prevent="moveRowFocus(entry, 'End')"
         >
           <div class="row-item__main">
             <!-- 标题折两行：§5 那句"不许被静默裁掉"里，标题是**认身份**的那一格，不许硬截

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Noto",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "identifier": "app.notera",
   "build": {
     "beforeDevCommand": "pnpm --dir ../../desktop dev",
@@ -41,7 +41,7 @@
       "icons/128x128@2x.png"
     ],
     "shortDescription": "Local-first 笔记",
-    "longDescription": "Noto —— 数据在你自己的 WebDAV 上，离线可用，自动同步。",
+    "longDescription": "Noto —— 数据就在你自己的网盘里，离线可用，自动同步。",
     "category": "Productivity",
     "android": {
       "minSdkVersion": 24

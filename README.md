@@ -191,8 +191,8 @@ apps/
 - **macOS 与 Android 没有真机读数**：只有 CI 产物与结构校验（包名 / 版本 / native 库 / 可启动入口）。
 - **Android APK 未签名**：CI 没有 keystore，装机前必须自行签名。
 - **第三方 WebDAV 服务器矩阵**未做完：内置测试服务器 + 真 HTTP 已覆盖协议语义，供应商差异仍标 BLOCKED。
-- **键盘**：列表每行目前占 3～4 个 Tab 位，从侧栏走到编辑器需要较多次 Tab（`.skip-link` 可跳过）；
-  列表的 roving tabindex 方案登记在 [`docs/NEEDS-OTHER-MACHINE-TESTING.md`](docs/NEEDS-OTHER-MACHINE-TESTING.md) 的 D27。
+- **键盘**：列表整栏只占 **1 个 Tab 位**（↑/↓/Home/End 在行间移动，行内动作按 Tab 进入），从侧栏到编辑器
+  不再需要按几百次 Tab；`.skip-link` 仍在最前面。
 - **品牌与包元数据**：名称（Noto / Notera）尚未最终定案；`Cargo.toml` 的 `repository` 已对齐实际远端
   （`https://github.com/wenzo001/Noto`）。
 
