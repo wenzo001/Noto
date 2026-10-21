@@ -70,7 +70,7 @@ Noto 是一款**本地优先**的跨平台个人笔记应用：数据默认只�
 
 ## 安装
 
-1. 从 [Releases](https://github.com/wenzo001/Noto/releases) 下载对应平台的产物（`v1.0.0` 的 Release 目前是**草稿**，转公开由维护者按下）。
+1. 从 [Releases](https://github.com/wenzo001/Noto/releases) 下载对应平台的产物（`v1.0.0` 已公开发布）。
 2. **Windows**：直接安装（产物没有代码签名，SmartScreen 可能提示"未知发布者"）。
 3. **macOS**：`.dmg` 未签名未公证，首次打开需在「系统设置 → 隐私与安全性」里手动允许。
 4. **Android**：CI 产物未签名，需用你自己的 keystore 签名后再安装：

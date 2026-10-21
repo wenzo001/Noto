@@ -504,6 +504,9 @@ jobs:
             awk -v v="$v" '
               BEGIN { hit = 0 }
               /^- \*\*/ { if (hit) exit; if (index($0, "→ " v) > 0) hit = 1 }
+              # 1.0.0 那次发出来的正文尾巴上挂着一截空的「### 界面（…）」——这条 bullet 之后紧跟的是
+              # 下一批的小标题，而老的规则只在「下一个 - **」停。标题级一律收口（2026-10-21）。
+              /^#+ / { if (hit) exit }
               hit { print }
             ' CHANGELOG.md > /tmp/section.md
             if [ -s /tmp/section.md ]; then
