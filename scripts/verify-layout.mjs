@@ -3925,11 +3925,34 @@ function contrastRatio(fg, bg) {
   // （= 这一圈绕完还没到编辑器，那是顺序/栏内焦点位变了，由下面那条自检去红，不是这里静默降级）。
   // 以前这里写死 140 站，实测"走到编辑器"要 117 站 —— 上限迟早被开发库的行数撞穿（假红）。
   // 也不能改成"先数一遍 DOM 里的可聚焦元素"：实测数出来 90 < 117，因为列表是滚到哪才挂哪一行，
-  // 静态数一遍会**低估**，比写死更糟。真上界是 Tab 序的周期，而这个只有走一遍才知道。
-  // 只留一个纯防跑飞的大数（正常远到不了：走到编辑器就 break）。
+  // 静态数一遍**行数**会低估，比写死更糟。真上界是 Tab 序的周期，而这个只有走一遍才知道。
+  /**
+   * 防跑飞的界必须**跟着库里有多少条**走，不能是常数（2026-10-21 学到，代价是一遍 13 分钟）。
+   *
+   * 常数 600 那一档的实测史：`landed` 一路是 **583（`lane-162k`）→ 587（`lane-163`）→ 591（`lane-163b`）
+   * → 594（`lane-100a`，撞穿 600 而假红）** —— 判据一个字没变，只是现场越来越满。探针
+   * （`.logs/probe-tabwalk.mjs` → `probe-tabwalk.json`）把原因打死了：**每一行笔记暴露 4 颗可聚焦**
+   * （行本身 + `note-pin-toggle` + `note-color-toggle` + `trash-note-<id>`，123 条 ⇒ 列表那一栏 498 站，
+   * 加侧栏 28 站与栏外的把手，123 条的库要走 **533** 次才到编辑器）。
+   * 所以界 = 条数 × 每行颗数 × 2 + 侧栏/把手的余量：产品哪天给一行多加一颗，界自己跟着长；
+   * 产品哪天真的走不到编辑器，这条照样红（**判据没动，动的只是"跑飞了怎么办"**）。
+   * ⚠ 反面教训留给后面改这一腿的人：**"正常远到不了"这种话必须带数**——它这次只差 6 站就"到得了"了。
+   */
+  const listRows = await p34.evaluate(() => {
+    const rows = [...document.querySelectorAll('.pane--list .row-item')];
+    const perRow = rows.map((r) => 1 + r.querySelectorAll('button, [tabindex="0"], a[href], input').length);
+    return { rowCount: rows.length, perRowMax: perRow.length ? Math.max(...perRow) : 0 };
+  });
+  const notesNow = Number((await cmd('stats', {})).notes) || 0;
+  const WALK_GUARD = Math.max(600, notesNow * Math.max(listRows.perRowMax, 1) * 2 + 250);
+  console.log(`     腿 ㉞ 的界：库里 ${notesNow} 条 × 每行 ${listRows.perRowMax} 颗（挂载 ${listRows.rowCount} 行）× 2 + 250 ⇒ ${WALK_GUARD} 站`);
+  // 派生不出来就是**仪器自己坏了**，必须喊出来 —— 否则它安静退回 600 那一档，红的是界不是产品。
+  if (listRows.rowCount === 0 || listRows.perRowMax === 0 || notesNow === 0) {
+    console.log('     ⚠ 上面那三个数有一个是 0 ⇒ `.row-item` 那颗选择器或 `stats.notes` 读不到，界只能退回地板 600。这一遍的红要按"仪器坏了"读。');
+  }
   const stops = [];
   let wrapped = false;
-  for (let i = 0; i < 600; i += 1) {
+  for (let i = 0; i < WALK_GUARD; i += 1) {
     await p34.keyboard.press('Tab');
     await p34.waitForTimeout(80);
     const stop = await probeStop();
@@ -3940,7 +3963,7 @@ function contrastRatio(fg, bg) {
   const landed = stops.filter((s) => s.tag !== 'BODY' && s.zone !== 9);
   check('㉞ 仪器自检：Tab 真的从侧栏一路走到编辑器（走不到就是次数或栏内焦点位变了，这条不许静默降级）',
     new Set(landed.map((s) => s.zone)).size >= 3 && landed.some((s) => s.zone === 2),
-    JSON.stringify({ landed: landed.length, wrapped, zones: [...new Set(landed.map((s) => s.zone))] }));
+    JSON.stringify({ landed: landed.length, wrapped, zones: [...new Set(landed.map((s) => s.zone))], guard: WALK_GUARD }));
   // 样本量守卫：底下四条用的都是 `every`，空数组会让它们**全绿**。
   // 变异 I 实测正是这个形状：走不到编辑器时 landed=0，那四条一条都没红，只有这条红 ——
   // 所以"这一腿到底量到了几站"必须是一条独立的、看得见的判据，不能靠下游顺带发现。
