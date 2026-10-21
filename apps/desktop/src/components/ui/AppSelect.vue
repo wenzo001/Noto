@@ -150,7 +150,7 @@ onBeforeUnmount(() => {
 }
 
 .app-select:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: default;
 }
 

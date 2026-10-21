@@ -3,12 +3,14 @@
  *
  * 现场（探针 `.logs/disabled-opacity-probe.mjs`，真渲染读数）：回收站视图里三颗禁用控件同时上屏，
  * 两颗 `.btn` 是 `opacity: 0.45`，而自绘下拉那颗是 **0.5** ⇒ 设计稿 §4.9 那句「禁用 45%」与
- * 本项目反复立的「同屏必须同一档」有一句没做到。这一条**等用户拍**（台账 D22 / 任务 #115），
- * 所以这里不统一、不放宽，只把现状钉成账：
+ * 本项目反复立的「同屏必须同一档」有一句没做到。当时登记成 D22 等拍；
+ * **2026-10-21 按原文销账**：规范 §状态表写的就是 `禁用 | opacity: 0.45 | 同左`，盘上没有任何一句
+ * 给浮层控件另立一档 ⇒ "等拍的两条路"里那条"承认浮层走另一档"从来没有依据，剩下的只有"没落"。
+ * 于是把 0.5 对齐成 0.45（AppSelect 一条 + AppCheckbox 两条），并把这本账换成**正向要求**：
  *
- * ① 除名单里那一条，任何带 `disabled` 的规则都不许引入**别的**禁用透明度 ⇒ 第三值出现当场红（防扩散）；
- * ② 名单里那一条**必须仍然违规且值相等** ⇒ 哪天真把 0.5 对齐成 0.45，这一条会红，
- *    逼着改的人回来把豁免撤掉（见 [[register-debt-as-falsifiable-ledger]]：修掉不撤账就红）。
+ * ① 任何带 `disabled` 的规则都不许写第二种禁用透明度（豁免名单已清零，防扩散）；
+ * ② 销过账的那两族必须真的存在且每条都写着标准值 ⇒ 改回 0.5 就红，
+ *    而"名单空了所以通过"这一族空转由 `mine.length > 0` 那一臂挡住（见 register-debt-as-falsifiable-ledger 那条纪律）。
  *
  * 跑法：`pnpm --dir apps/desktop exec vitest run src/disabledOpacityLedger.spec.ts`
  */
@@ -21,15 +23,12 @@ import { describe, expect, it } from 'vitest';
 declare const __dirname: string;
 const SRC = join(__dirname);
 /**
- * 已经登记待拍的豁免：文件 + 它现在那个值。拍板之后要么删这一条，要么整族消失。
- * ⚠ 这两条**不是手抄的名单**，是这条判据自己扫出来的事实（基线那一遍红的就是这两处）：
- *   探针只看到回收站那三颗同屏的（下拉 0.5 vs 按钮 0.45），而扫完全族之后**勾选框也是 0.5** ⇒
- *   D22 的问题比第一次报的那一颗宽，台账与任务 #115 都按这个口径读。
+ * 已经销账的两族：**销账不等于放下要求** —— 它们从"豁免"变成"必须写标准值"，改回去就红（见 ②）。
+ * 销账的依据是原文，不是我拍的：`docs/design/Noto-界面设计规范.v2.md` §状态表写着
+ * `禁用 | opacity: 0.45 | 同左`，而盘上**没有**任何一句给浮层控件另立一档的原文 ⇒
+ * D22 那格从前写"等拍的两条路"，第二条（承认浮层走另一档）从来没有规范依据。
  */
-const EXEMPT: Array<{ file: string; value: string; why: string }> = [
-  { file: 'components/ui/AppSelect.vue', value: '0.5', why: 'D22 / 任务 #115：同屏禁用态两值等设计侧拍' },
-  { file: 'components/ui/AppCheckbox.vue', value: '0.5', why: 'D22 / 任务 #115：同上（`.app-check__box:disabled` 与它那条 + 兄弟选择器两条都是 0.5）' },
-];
+const RETIRED: readonly string[] = ['components/ui/AppSelect.vue', 'components/ui/AppCheckbox.vue'];
 const STANDARD = '0.45';
 
 type Rule = { file: string; selector: string; value: string };
@@ -70,20 +69,22 @@ describe('禁用态透明度那本账（D22）', () => {
     expect(rules.some((r) => r.value === STANDARD)).toBe(true);
   });
 
-  it('① 名单之外不许有第二种禁用透明度（防扩散）', () => {
-    const offenders = rules.filter(
-      (r) => r.value !== STANDARD && !EXEMPT.some((e) => e.file === r.file && e.value === r.value),
-    );
-    expect(offenders, `新出现的第二值：${JSON.stringify(offenders)}`).toEqual([]);
+  it('① 任何带 disabled 的规则都不许写第二种禁用透明度（豁免名单已清零）', () => {
+    const offenders = rules.filter((r) => r.value !== STANDARD);
+    expect(offenders, `非 ${STANDARD} 的禁用透明度：${JSON.stringify(offenders)}`).toEqual([]);
   });
 
-  it('② 豁免名单里那一条必须**仍然**违规 —— 修好了就回来把账销掉', () => {
-    for (const e of EXEMPT) {
-      const hits = rules.filter((r) => r.file === e.file && r.value === e.value && /disabled/.test(r.selector));
-      expect(
-        hits.length,
-        `${e.file} 里那条 ${e.value} 已经不在了 ⇒ ${e.why}：这件事要么已修，要么换了形状，请把豁免一起处置`,
-      ).toBeGreaterThan(0);
+  /**
+   * ② 从前这条的作用是"豁免还在违规 ⇒ 别偷偷销账"。账销完之后它换成**正向要求**：
+   *    这两族必须真的在扫得到的名单里、且每条都写着标准值 —— 空名单不算通过（`RETIRED` 里
+   *    任何一条扫不到规则就当场红，防的是文件改名/规则消失后这条臂静默空转）。
+   */
+  it('② 销过账的那两族必须写着标准值（改回 0.5 就红，不是"名单空了所以通过"）', () => {
+    for (const file of RETIRED) {
+      const mine = rules.filter((r) => r.file === file);
+      expect(mine.length, `${file} 一条带 disabled 的 opacity 都没扫到 ⇒ 这条臂在空转（文件改名了？规则没了？）`).toBeGreaterThan(0);
+      const bad = mine.filter((r) => r.value !== STANDARD);
+      expect(bad, `${file} 又长出非 ${STANDARD} 的禁用透明度：${JSON.stringify(bad)}`).toEqual([]);
     }
   });
 });

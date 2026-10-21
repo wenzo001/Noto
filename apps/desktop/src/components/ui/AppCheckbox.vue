@@ -104,7 +104,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 }
 
 .app-check__box:disabled + .app-check__art {
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .app-check__box:focus-visible {
@@ -114,7 +114,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 .app-check__box:disabled {
   cursor: default;
-  opacity: 0.5;
+  opacity: 0.45;
 }
 
 .app-check__text {
