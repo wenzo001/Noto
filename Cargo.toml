@@ -24,7 +24,7 @@ version = "1.0.0"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT"
-repository = "https://github.com/notera/notera"
+repository = "https://github.com/wenzo001/Noto"
 
 [workspace.dependencies]
 notera-core = { path = "crates/notera-core" }

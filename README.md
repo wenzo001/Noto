@@ -193,7 +193,8 @@ apps/
 - **第三方 WebDAV 服务器矩阵**未做完：内置测试服务器 + 真 HTTP 已覆盖协议语义，供应商差异仍标 BLOCKED。
 - **键盘**：列表每行目前占 3～4 个 Tab 位，从侧栏走到编辑器需要较多次 Tab（`.skip-link` 可跳过）；
   列表的 roving tabindex 方案登记在 [`docs/NEEDS-OTHER-MACHINE-TESTING.md`](docs/NEEDS-OTHER-MACHINE-TESTING.md) 的 D27。
-- **品牌与包元数据**：名称（Noto / Notera）与 `Cargo.toml` 的 `repository` 字段尚未最终对齐。
+- **品牌与包元数据**：名称（Noto / Notera）尚未最终定案；`Cargo.toml` 的 `repository` 已对齐实际远端
+  （`https://github.com/wenzo001/Noto`）。
 
 ---
 
