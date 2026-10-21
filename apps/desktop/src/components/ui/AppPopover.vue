@@ -27,6 +27,8 @@ const props = withDefaults(
     testid: string;
     align?: 'start' | 'end';
     disabled?: boolean;
+    /** 触发按钮的 tabindex（列表的 roving 用：只有当前那一行的控件留在 Tab 序里）。 */
+    triggerTabindex?: number;
   }>(),
   { align: 'end', disabled: false },
 );
@@ -89,6 +91,7 @@ function mountPanel(raw: unknown): void {
         :title="props.label"
         :aria-expanded="open ? 'true' : 'false'"
         :disabled="props.disabled"
+        :tabindex="props.triggerTabindex"
       >
         <slot name="glyph">
           <AppIcon v-if="props.icon" :size="18" :name="props.icon" />

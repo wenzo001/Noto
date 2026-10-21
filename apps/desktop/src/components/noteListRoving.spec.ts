@@ -55,9 +55,26 @@ describe('noteListRoving：界面真的接上了（调用边）', () => {
     expect(NOTE_LIST.includes('function moveRowFocus')).toBe(true);
   });
 
-  it('每个行只在自己是 tabStop 时占 0，其余是 -1', () => {
+  it('每个行只在自己是 tabStop 时占 0，其余是 -1；行内控件也一起收口', () => {
     expect(NOTE_LIST.includes(':tabindex="entry.id === rovingId ? 0 : -1"')).toBe(true);
-    expect(NOTE_LIST.includes('const rovingId = computed(() => tabStopId(orderIds.value, notes.selectedId))')).toBe(true);
+    expect(
+      NOTE_LIST.includes(
+        'const rovingId = computed(() => tabStopId(visible.value.map((e) => e.id), notes.selectedId))',
+      ),
+      'roving 的落点要按"屏幕上挂着的那一段"算，否则选中行滚出窗口时列表会没有 Tab 位',
+    ).toBe(true);
+    // 逐个控件点名：只数总次数的话，删掉任意一颗仍可能过线（每行 4 颗、一共 6 处）。
+    const lines = NOTE_LIST.split(/\r?\n/);
+    const hasBindingNear = (needle: string): boolean => {
+      const at = lines.findIndex((l) => l.includes(needle));
+      if (at < 0) return false;
+      return lines.slice(at, at + 9).some((l) => l.includes(':tabindex="entry.id === rovingId ? 0 : -1"'));
+    };
+    for (const control of ['role="listitem"', 'data-testid="note-pin-toggle"', ':data-testid="`select-note-${entry.id}`"',
+      ':data-testid="`trash-note-${entry.id}`"', 'data-testid="restore-note"', 'data-testid="purge-note"']) {
+      expect(hasBindingNear(control), `${control} 没有 roving 的 tabindex —— 它仍然每行都在 Tab 序里`).toBe(true);
+    }
+    expect(NOTE_LIST.includes(':trigger-tabindex="entry.id === rovingId ? 0 : -1"')).toBe(true);
     // 旧的"每一行都是 0"不许回来
     expect(NOTE_LIST.includes('tabindex="0"')).toBe(false);
   });

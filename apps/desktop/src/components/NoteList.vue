@@ -215,7 +215,7 @@ async function activateRow(entry: Entry, ev: { shiftKey?: boolean }): Promise<vo
  * 窄屏切走会让方向键变成"按一下就离开列表"）；② 目标行不在虚拟窗口里就先滚过去；
  * ③ 等它挂上再聚焦（`preventScroll`，滚哪由我们说了算）。
  */
-const rovingId = computed(() => tabStopId(orderIds.value, notes.selectedId));
+const rovingId = computed(() => tabStopId(visible.value.map((e) => e.id), notes.selectedId));
 
 async function moveRowFocus(entry: Entry, key: RovingKey): Promise<void> {
   const index = entries.value.findIndex((e) => e.id === entry.id);
@@ -528,6 +528,7 @@ function createFrom(tpl: NoteTemplate): void {
               class="row-item__pin"
               :class="{ 'row-item__pin--on': entry.pinned }"
               data-testid="note-pin-toggle"
+              :tabindex="entry.id === rovingId ? 0 : -1"
               :aria-pressed="entry.pinned ? 'true' : 'false'"
               :aria-label="entry.pinned ? t('list.unpin') : t('list.pin')"
               :title="entry.pinned ? t('list.unpin') : t('list.pin')"
@@ -548,6 +549,7 @@ function createFrom(tpl: NoteTemplate): void {
               :aria-checked="sel.has(entry.id) ? 'true' : 'false'"
               :aria-label="t('list.selectedHint')"
               :data-testid="`select-note-${entry.id}`"
+              :tabindex="entry.id === rovingId ? 0 : -1"
               @click.stop="activateRow(entry, $event)"
             >
               <AppIcon v-if="sel.has(entry.id)" name="check" :size="18" :testid="`check-glyph-${entry.id}`" />
@@ -562,6 +564,7 @@ function createFrom(tpl: NoteTemplate): void {
                 testid="note-color-toggle"
                 align="end"
                 :label="t('sidebar.colorTitle')"
+                :trigger-tabindex="entry.id === rovingId ? 0 : -1"
               >
                 <template #glyph>
                   <span class="row-item__dot" :style="{ ...DOT_SHAPE, ...dotStyle(entry.color) }" />
@@ -600,11 +603,12 @@ function createFrom(tpl: NoteTemplate): void {
                 :aria-label="t('list.moveToTrash')"
                 :title="t('list.moveToTrash')"
                 :data-testid="`trash-note-${entry.id}`"
+                :tabindex="entry.id === rovingId ? 0 : -1"
                 @click.stop="notes.moveToTrash(entry.id)"
               >
                 <AppIcon :size="18" name="trash" />
               </button>
-              <button v-if="notes.inTrash" type="button" class="btn btn--quiet" :aria-label="t('list.restore')" data-testid="restore-note" @click.stop="notes.restore(entry.id)">
+              <button v-if="notes.inTrash" type="button" class="btn btn--quiet" :aria-label="t('list.restore')" data-testid="restore-note" :tabindex="entry.id === rovingId ? 0 : -1" @click.stop="notes.restore(entry.id)">
                 {{ t('list.restore') }}
               </button>
               <button
@@ -613,6 +617,7 @@ function createFrom(tpl: NoteTemplate): void {
                 class="btn btn--quiet btn--danger"
                 :aria-label="t('list.purge')"
                 data-testid="purge-note"
+                :tabindex="entry.id === rovingId ? 0 : -1"
                 @click.stop="confirmingPurge = confirmingPurge === entry.id ? null : entry.id"
               >
                 {{ t('list.purge') }}
