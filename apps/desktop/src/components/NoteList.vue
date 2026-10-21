@@ -224,7 +224,9 @@ async function moveRowFocus(entry: Entry, key: RovingKey): Promise<void> {
   const target = entries.value[next];
   if (!selecting.value) {
     notes.selectedId = target.id;
-    void editor.open(target.id);
+    // 要 await：`WorkspaceView` 的 watch 与这里都会把这一篇打开，而 hydrate 完再把焦点交回这一行 ——
+    // 不 await 的话编辑器会在后面把焦点抢走，方向键第二下就没反应了（2026-10-21 真界面探针量到）。
+    await editor.open(target.id);
   }
   const el = viewport.value;
   if (el) {
