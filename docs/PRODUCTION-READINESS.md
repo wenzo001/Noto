@@ -69,6 +69,11 @@
       `cargo update -p rustls-webpki -p webpki-root-certs` 各升一个补丁版（0.103.16 / 1.0.10），本地 OSV 审计
       当场 **PASS**（625 个依赖、未豁免命中 0、6 条既有豁免逐条有理由），`cargo check --workspace --all-targets` 通过。
       没动一行 Rust 源码 ⇒ 不需要 `cargo fmt`。
+   ✅ **两扇门现在都是 success**（06:13 实测，都读在同一个头 `e5aaebb` 上）：`依赖与密钥审计` = success，
+   `PR 门禁（G1 的第一层）` = `completed/success`（那个作业里 cargo 全量、前端 95 文件 / 828、`arch-check`、
+   `vue-tsc`、格式检查、npm 与 Rust 两条审计步全过）。⇒ **检查单第 3 格整格绿**。
+   ⚠ 每次 push 会取消在飞那条 run，所以这条读数只属于 `e5aaebb`；之后若有新 push，以新 head 的 run 为准
+   （`gh run list --limit 4 --json workflowName,status,conclusion,headSha`）。
 4. **体积与字节完整性**：五档都在上界内（exe 8 / msi 11 / dmg 10 / app.zip 10 / apk 24 MiB；当前余量 32%～38%）。
    2026-10-20 对 `v0.0.161`、**2026-10-21 对 `v0.0.162`（run `39541125162`）**各做过一次**下载 + 逐件校验**：
    `gh release download` 拉下五件产物（落在仓库外的临时目录，不进版本库），
